@@ -1,0 +1,53 @@
+server:
+  port: 8080 # 서버 포트 번호
+
+jwt:
+  secret: dW1jLW5hZGFtc3BhY2UtcHJvamVjdC1zcHJpbmctYm9vdC1qd3Qtc2VjcmV0LWtleS1mb3ItZGlhcnktYXBwbGljYXRpb24K
+
+logging:
+  level:
+    org.springdoc: DEBUG
+    org.springframework.web: DEBUG
+
+spring:
+  datasource:
+     driver-class-name: com.mysql.cj.jdbc.Driver
+     url: jdbc:mysql://localhost:3306/uou-capstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8
+     username: root
+     password: 1234
+
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: 275b2717e98d58ac245a1ba255f57d03
+            client-authentication-method: client_secret_post
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope:
+              - profile_nickname
+              - account_email
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+
+
+  jpa:
+    hibernate:
+      # ddl-auto 옵션:
+      # create: 서버 시작 시 기존 테이블 삭제 후 새로 생성
+      # update: 변경된 스키마만 찾아서 반영
+      # validate: Entity와 테이블이 정상 매핑되었는지 검증만 함
+      # none: 사용 안 함 (운영 환경에서 권장)
+      ddl-auto: create
+    properties:
+      hibernate:
+        format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
+    show-sql: true # 실행되는 SQL 쿼리를 로그에 출력
+
+
