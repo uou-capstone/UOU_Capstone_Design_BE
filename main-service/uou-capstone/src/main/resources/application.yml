@@ -3,18 +3,27 @@ server:
 
 jwt:
   secret: dW1jLW5hZGFtc3BhY2UtcHJvamVjdC1zcHJpbmctYm9vdC1qd3Qtc2VjcmV0LWtleS1mb3ItZGlhcnktYXBwbGljYXRpb24K
+  # Access Token 유효 시간 (30분)
+  access-token-expiration-time: 1800000
+  # Refresh Token 유효 시간 (2주)
+  refresh-token-expiration-time: 1209600000
+
 
 logging:
   level:
     org.springdoc: DEBUG
     org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
 
 spring:
   datasource:
      driver-class-name: com.mysql.cj.jdbc.Driver
-     url: jdbc:mysql://localhost:3306/uou-capstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8
+     url: jdbc:mysql://localhost:3306/uoucapstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8
      username: root
      password: 1234
+
+
+#테스트 : https://kauth.kakao.com/oauth/authorize?client_id=275b2717e98d58ac245a1ba255f57d03&redirect_uri=http://localhost:8080/login/oauth2/code/kakao&response_type=code
 
   security:
     oauth2:
@@ -22,12 +31,14 @@ spring:
         registration:
           kakao:
             client-id: 275b2717e98d58ac245a1ba255f57d03
+            client-secret: JChF9Fptvsdkky2Lhp18vEcouYFuOuBv
             client-authentication-method: client_secret_post
             authorization-grant-type: authorization_code
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            redirect-uri: "http://localhost:8080/login/oauth2/code/kakao"
             scope:
               - profile_nickname
               - account_email
+
         provider:
           kakao:
             authorization-uri: https://kauth.kakao.com/oauth/authorize
@@ -44,7 +55,7 @@ spring:
       # update: 변경된 스키마만 찾아서 반영
       # validate: Entity와 테이블이 정상 매핑되었는지 검증만 함
       # none: 사용 안 함 (운영 환경에서 권장)
-      ddl-auto: create
+      ddl-auto: update
     properties:
       hibernate:
         format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
