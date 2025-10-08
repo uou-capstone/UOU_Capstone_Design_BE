@@ -47,4 +47,9 @@ public class User {
         this.phoneNum = phoneNum;
         this.role = role;
     }
+
+    public User update(String fullName) {
+        this.fullName = fullName;
+        return this;
+    }
 }
