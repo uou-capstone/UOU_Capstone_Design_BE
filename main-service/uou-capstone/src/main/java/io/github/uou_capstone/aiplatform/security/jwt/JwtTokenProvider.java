@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.security.jwt;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -71,9 +72,9 @@ public class JwtTokenProvider {
 
 
     //토큰에서 인증 정보 조회
-    public Authentication getAuthentication(String token) {
+    public Authentication getAuthentication(String accessToken) {
         // 토큰 복호화
-        Claims claims = parseClaims(token);
+        Claims claims = parseClaims(accessToken);
 
         if (claims.get("role") == null) {
             throw new RuntimeException("권한 정보가 없는 토큰입니다.");
@@ -81,7 +82,7 @@ public class JwtTokenProvider {
 
         // 클레임에서 권한 정보 가져오기
         Collection<? extends GrantedAuthority> authorities =
-                Arrays.stream(claims.get("auth").toString().split(","))
+                Arrays.stream(claims.get("role").toString().split(","))
                         .map(SimpleGrantedAuthority::new)
                         .collect(Collectors.toList());
 
@@ -119,4 +120,5 @@ public class JwtTokenProvider {
             return e.getClaims();
         }
     }
+
 }
