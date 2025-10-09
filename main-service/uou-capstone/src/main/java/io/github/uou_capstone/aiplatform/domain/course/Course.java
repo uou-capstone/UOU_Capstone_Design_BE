@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course;
 
+import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
 import io.github.uou_capstone.aiplatform.domain.user.Teacher;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -7,11 +8,14 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(name = "courses")
-public class Course {
+public class Course extends BaseTimeEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -28,6 +32,9 @@ public class Course {
     @Lob
     @Column
     private String description;
+
+    @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Lecture> lectures = new ArrayList<>();
 
     @Builder
     public Course(Teacher teacher, String title, String description) {
