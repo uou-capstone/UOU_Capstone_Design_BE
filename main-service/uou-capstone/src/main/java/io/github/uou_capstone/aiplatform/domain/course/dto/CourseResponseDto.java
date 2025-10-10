@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.dto;
 
 import io.github.uou_capstone.aiplatform.domain.course.Course;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
 import lombok.Getter;
 
 import java.util.List;
