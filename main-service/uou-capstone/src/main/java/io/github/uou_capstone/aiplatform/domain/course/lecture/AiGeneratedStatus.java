@@ -1,4 +1,4 @@
-package io.github.uou_capstone.aiplatform.domain.course;
+package io.github.uou_capstone.aiplatform.domain.course.lecture;
 
 public enum AiGeneratedStatus {
     PENDING, // 생성 대기 중
