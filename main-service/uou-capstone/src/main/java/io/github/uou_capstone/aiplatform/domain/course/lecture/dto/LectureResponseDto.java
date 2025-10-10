@@ -1,8 +1,8 @@
-package io.github.uou_capstone.aiplatform.domain.course.dto;
+package io.github.uou_capstone.aiplatform.domain.course.lecture.dto;
 
 
-import io.github.uou_capstone.aiplatform.domain.course.AiGeneratedStatus;
-import io.github.uou_capstone.aiplatform.domain.course.Lecture;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.AiGeneratedStatus;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.Lecture;
 import lombok.Getter;
 
 @Getter

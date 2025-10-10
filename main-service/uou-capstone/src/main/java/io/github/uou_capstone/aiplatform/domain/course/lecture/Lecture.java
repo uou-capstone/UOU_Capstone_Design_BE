@@ -1,7 +1,8 @@
-package io.github.uou_capstone.aiplatform.domain.course;
+package io.github.uou_capstone.aiplatform.domain.course.lecture;
 
 
 import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
+import io.github.uou_capstone.aiplatform.domain.course.Course;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
