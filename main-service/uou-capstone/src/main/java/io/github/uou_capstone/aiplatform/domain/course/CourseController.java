@@ -17,6 +17,7 @@ import java.util.List;
 public class CourseController {
 
     private final CourseService courseService;
+    private final EnrollmentService enrollmentService;
 
     @Operation(summary = "과목생성", description = "선생님이 과목을 생성합니다.")
     @PostMapping
@@ -44,5 +45,14 @@ public class CourseController {
     public ResponseEntity<CourseResponseDto> getCourseById(@PathVariable Long courseId) {
         Course course = courseService.getCourseById(courseId);
         return ResponseEntity.ok(new CourseResponseDto(course));
+    }
+
+
+    @Operation(summary = "수강 신청", description = "학생이 특정 과목에 수강 신청을 합니다.")
+    @PostMapping("/{courseId}/enroll")
+    @PreAuthorize("hasAuthority('STUDENT')") // 학생만 호출 가능
+    public ResponseEntity<String> enrollCourse(@PathVariable Long courseId) {
+        enrollmentService.enrollCourse(courseId);
+        return ResponseEntity.status(HttpStatus.CREATED).body("수강 신청이 완료되었습니다.");
     }
 }

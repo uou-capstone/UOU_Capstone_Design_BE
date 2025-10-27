@@ -27,6 +27,7 @@ public class Course extends BaseTimeEntity {
     @JoinColumn(name = "teacher_id", nullable = false)
     private Teacher teacher;
 
+
     @Column(nullable = false)
     private String title;
 
