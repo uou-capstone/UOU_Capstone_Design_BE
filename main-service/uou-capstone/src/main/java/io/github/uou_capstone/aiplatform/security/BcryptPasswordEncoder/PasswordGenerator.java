@@ -7,7 +7,7 @@ public class PasswordGenerator {
         BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
         // 1. 원하는 비밀번호를 입력합니다.
-        String rawPassword = "password1234";
+        String rawPassword = "student1234";
 
         // 2. 비밀번호를 암호화합니다.
         String encodedPassword = passwordEncoder.encode(rawPassword);
