@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.submission;
 
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionRequestDto;
+import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -11,14 +12,14 @@ import org.springframework.web.bind.annotation.*;
 
 @Tag(name = "답안 제출 API", description = "학생의 평가 답안 제출 관련 API")
 @RestController
-@RequestMapping("/api/assessments/{assessmentId}/submissions")
+@RequestMapping("/api")
 @RequiredArgsConstructor
 public class SubmissionController {
 
     private final SubmissionService submissionService;
 
     @Operation(summary = "답안 제출", description = "학생이 특정 평가에 대한 답안을 제출합니다.")
-    @PostMapping
+    @PostMapping("/assessments/{assessmentId}/submissions")
     @PreAuthorize("hasAuthority('STUDENT')")
     public ResponseEntity<String> createSubmission(
             @PathVariable Long assessmentId,
@@ -26,5 +27,13 @@ public class SubmissionController {
 
         submissionService.createSubmission(assessmentId, requestDto);
         return ResponseEntity.status(HttpStatus.CREATED).body("답안이 성공적으로 제출되었습니다.");
+    }
+
+    @Operation(summary = "제출 결과 상세 조회", description = "학생이 자신이 제출한 답안의 상세 내용을 조회합니다.")
+    @GetMapping("/submissions/{submissionId}")
+    @PreAuthorize("hasAuthority('STUDENT')")
+    public ResponseEntity<SubmissionResponseDto> getSubmissionResult(@PathVariable Long submissionId) {
+        SubmissionResponseDto result = submissionService.getSubmissionResult(submissionId);
+        return ResponseEntity.ok(result);
     }
 }
