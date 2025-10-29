@@ -6,10 +6,7 @@ import io.github.uou_capstone.aiplatform.domain.submission.Dto.StudentAnswerRequ
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionResponseDto;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionStatusDto;
-import io.github.uou_capstone.aiplatform.domain.user.Student;
-import io.github.uou_capstone.aiplatform.domain.user.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.User;
-import io.github.uou_capstone.aiplatform.domain.user.UserRepository;
+import io.github.uou_capstone.aiplatform.domain.user.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -31,6 +28,7 @@ public class SubmissionService {
     private final ChoiceOptionRepository choiceOptionRepository; // ChoiceOptionRepository 사용
     private final EnrollmentRepository enrollmentRepository;
     private final UserRepository userRepository; // UserRepository 주입 확인
+    private final TeacherRepository teacherRepository;
 
     @Transactional
     public Long createSubmission(Long assessmentId, SubmissionRequestDto requestDto) {
@@ -113,16 +111,16 @@ public class SubmissionService {
         Assessment assessment = assessmentRepository.findById(assessmentId)
                 .orElseThrow(() -> new IllegalArgumentException("평가를 찾을 수 없습니다."));
 
-        // 2. 권한 확인: 현재 로그인한 사용자가 이 평가를 만든 선생님인지 확인
-        // String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        // User currentUser = userRepository.findByEmail(userEmail)...
-        // Teacher teacher = teacherRepository.findByUser_Id(currentUser.getId())...
-        // if (!assessment.getCourse().getTeacher().getId().equals(teacher.getId())) {
-        //     throw new AccessDeniedException("해당 평가의 제출 현황을 조회할 권한이 없습니다.");
-        // }
-        // 기능 테스트 후 구현
-
-
+        // 2. 선생님 권한 인증
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId()) // User ID로 Teacher 조회
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다.")); // 선생님 정보 없으면 접근 거부
+            // 평가를 만든 선생님 ID와 현재 로그인한 선생님 ID 비교
+        if (!assessment.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 평가의 제출 현황을 조회할 권한이 없습니다.");
+        }
         // 3. 해당 평가에 대한 모든 제출 기록 조회
         List<Submission> submissions = submissionRepository.findByAssessmentId(assessmentId);
 

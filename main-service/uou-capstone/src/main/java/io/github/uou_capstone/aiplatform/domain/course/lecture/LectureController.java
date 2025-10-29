@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.lecture;
 
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureCreateRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureDetailResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -27,5 +28,13 @@ public class LectureController {
 
         Lecture newLecture = lectureService.createLecture(courseId, requestDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(new LectureResponseDto(newLecture));
+    }
+
+    @Operation(summary = "강의 상세 조회", description = "특정 강의의 상세 정보와 AI 생성 콘텐츠 목록을 조회합니다.")
+    @GetMapping("/lectures/{lectureId}")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<LectureDetailResponseDto> getLectureDetail(@PathVariable Long lectureId) {
+        LectureDetailResponseDto lectureDetail = lectureService.getLectureDetail(lectureId);
+        return ResponseEntity.ok(lectureDetail);
     }
 }

@@ -47,7 +47,7 @@ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
             // API 경로별 접근 권한 설정
             .authorizeHttpRequests(auth -> auth
                     // 아래 경로들은 인증 없이 누구나 접근 가능
-                    .requestMatchers("/swagger-ui.html","/api/auth/**", "/login/**", "/oauth2/**", "/swagger-ui/**", "/api-docs/**").permitAll()
+                    .requestMatchers("/swagger-ui.html","/api/auth/**", "/login/**", "/oauth2/**", "/swagger-ui/**", "/api-docs/**", "/api/lectures/").permitAll()
                     // 그 외 모든 경로는 인증된 사용자만 접근 가능
                     .anyRequest().authenticated()
             )
