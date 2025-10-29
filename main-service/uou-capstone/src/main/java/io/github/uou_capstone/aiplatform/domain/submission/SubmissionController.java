@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.submission;
 
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionResponseDto;
+import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionStatusDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @Tag(name = "답안 제출 API", description = "학생의 평가 답안 제출 관련 API")
 @RestController
@@ -35,5 +38,13 @@ public class SubmissionController {
     public ResponseEntity<SubmissionResponseDto> getSubmissionResult(@PathVariable Long submissionId) {
         SubmissionResponseDto result = submissionService.getSubmissionResult(submissionId);
         return ResponseEntity.ok(result);
+    }
+
+    @Operation(summary = "평가 제출 현황 조회 (선생님)", description = "선생님이 특정 평가에 대한 학생들의 제출 현황 목록을 조회합니다.")
+    @GetMapping("/assessments/{assessmentId}/submissions") // GET 메서드로 경로 추가
+    @PreAuthorize("hasAuthority('TEACHER')") // 선생님만 호출 가능
+    public ResponseEntity<List<SubmissionStatusDto>> getSubmissionsForAssessment(@PathVariable Long assessmentId) {
+        List<SubmissionStatusDto> submissionStatuses = submissionService.getSubmissionsForAssessment(assessmentId);
+        return ResponseEntity.ok(submissionStatuses);
     }
 }

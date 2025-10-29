@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.course.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.StudentAnswerRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionResponseDto;
+import io.github.uou_capstone.aiplatform.domain.submission.Dto.SubmissionStatusDto;
 import io.github.uou_capstone.aiplatform.domain.user.Student;
 import io.github.uou_capstone.aiplatform.domain.user.StudentRepository;
 import io.github.uou_capstone.aiplatform.domain.user.User;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -102,5 +104,31 @@ public class SubmissionService {
 
         // 5. 업데이트된 DTO 생성자를 사용하여 DTO로 변환 (여기 코드 변경 필요 없음)
         return new SubmissionResponseDto(submission, studentAnswers);
+    }
+
+
+    @Transactional(readOnly = true)
+    public List<SubmissionStatusDto> getSubmissionsForAssessment(Long assessmentId) {
+        // 1. 평가 정보 조회 (권한 확인을 위해 필요)
+        Assessment assessment = assessmentRepository.findById(assessmentId)
+                .orElseThrow(() -> new IllegalArgumentException("평가를 찾을 수 없습니다."));
+
+        // 2. 권한 확인: 현재 로그인한 사용자가 이 평가를 만든 선생님인지 확인
+        // String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        // User currentUser = userRepository.findByEmail(userEmail)...
+        // Teacher teacher = teacherRepository.findByUser_Id(currentUser.getId())...
+        // if (!assessment.getCourse().getTeacher().getId().equals(teacher.getId())) {
+        //     throw new AccessDeniedException("해당 평가의 제출 현황을 조회할 권한이 없습니다.");
+        // }
+        // 기능 테스트 후 구현
+
+
+        // 3. 해당 평가에 대한 모든 제출 기록 조회
+        List<Submission> submissions = submissionRepository.findByAssessmentId(assessmentId);
+
+        // 4. DTO 리스트로 변환하여 반환
+        return submissions.stream()
+                .map(SubmissionStatusDto::new)
+                .collect(Collectors.toList());
     }
 }
