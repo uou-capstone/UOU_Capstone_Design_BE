@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.course.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureDetailResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureUpdateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
@@ -88,5 +89,51 @@ public class LectureService {
 
         // 4. DTO로 변환하여 반환
         return new LectureDetailResponseDto(lecture, contents);
+    }
+
+    @Transactional
+    public Lecture updateLecture(Long lectureId, LectureUpdateRequestDto requestDto) {
+        // 1. 강의 정보 조회
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        // 2. 권한 확인: 현재 로그인한 사용자가 이 강의가 속한 과목의 선생님인지 확인
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 강의를 수정할 권한이 없습니다.");
+        }
+
+        // 3. Entity 업데이트
+        lecture.update(requestDto.getTitle(), requestDto.getWeekNumber(), requestDto.getDescription());
+
+        return lecture; // 변경 감지로 인해 save() 호출 불필요
+    }
+
+    @Transactional
+    public void deleteLecture(Long lectureId) {
+        // 1. 강의 정보 조회
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        // 2. 권한 확인: 현재 로그인한 사용자가 이 강의가 속한 과목의 선생님인지 확인
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 강의를 삭제할 권한이 없습니다.");
+        }
+
+        // 3. 강의 삭제
+        // (참고: Lecture에 속한 GeneratedContent 등 자식 엔티티가 있다면
+        //  Lecture 엔티티의 @OneToMany에 cascade = CascadeType.ALL 설정을 추가해야 합니다.)
+        lectureRepository.delete(lecture);
     }
 }

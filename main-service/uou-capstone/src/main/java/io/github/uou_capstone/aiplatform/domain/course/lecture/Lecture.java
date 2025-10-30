@@ -9,6 +9,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -33,6 +36,10 @@ public class Lecture extends BaseTimeEntity {
     @Lob
     private String description;
 
+    @OneToMany(mappedBy = "lecture", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<GeneratedContent> generatedContents = new ArrayList<>();
+
+
     @Enumerated(EnumType.STRING)
     @Column(name = "ai_generated_status", nullable = false)
     private AiGeneratedStatus aiGeneratedStatus;
@@ -44,5 +51,17 @@ public class Lecture extends BaseTimeEntity {
         this.weekNumber = weekNumber;
         this.description = description;
         this.aiGeneratedStatus = AiGeneratedStatus.PENDING; // 생성 시 기본 상태는 PENDING
+    }
+
+    public void update(String title, Integer weekNumber, String description) {
+        if (title != null && !title.isBlank()) {
+            this.title = title;
+        }
+        if (weekNumber != null) {
+            this.weekNumber = weekNumber;
+        }
+        if (description != null) {
+            this.description = description;
+        }
     }
 }

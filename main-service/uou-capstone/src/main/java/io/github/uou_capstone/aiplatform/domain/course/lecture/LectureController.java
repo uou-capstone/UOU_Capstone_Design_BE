@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureDetailResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureUpdateRequestDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -36,5 +37,26 @@ public class LectureController {
     public ResponseEntity<LectureDetailResponseDto> getLectureDetail(@PathVariable Long lectureId) {
         LectureDetailResponseDto lectureDetail = lectureService.getLectureDetail(lectureId);
         return ResponseEntity.ok(lectureDetail);
+    }
+
+    @Operation(summary = "강의 정보 수정", description = "선생님이 특정 강의의 정보를 수정합니다.")
+    @PutMapping("/lectures/{lectureId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<LectureResponseDto> updateLecture(
+            @PathVariable Long lectureId,
+            @RequestBody LectureUpdateRequestDto requestDto) {
+
+        Lecture updatedLecture = lectureService.updateLecture(lectureId, requestDto);
+        return ResponseEntity.ok(new LectureResponseDto(updatedLecture));
+    }
+
+    @Operation(summary = "강의 삭제", description = "선생님이 특정 강의를 삭제합니다.")
+    @DeleteMapping("/lectures/{lectureId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteLecture(@PathVariable Long lectureId) {
+        lectureService.deleteLecture(lectureId);
+
+        // 삭제 성공 시 204 No Content 응답 반환
+        return ResponseEntity.noContent().build();
     }
 }
