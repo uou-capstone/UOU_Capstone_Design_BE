@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course;
 
 import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
+import io.github.uou_capstone.aiplatform.domain.assessment.Assessment;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.Lecture;
 import io.github.uou_capstone.aiplatform.domain.user.Teacher;
 import jakarta.persistence.*;
@@ -38,10 +39,25 @@ public class Course extends BaseTimeEntity {
     @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Lecture> lectures = new ArrayList<>();
 
+    @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Assessment> assessments = new ArrayList<>();
+
+    @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Enrollment> enrollments = new ArrayList<>();
+
     @Builder
     public Course(Teacher teacher, String title, String description) {
         this.teacher = teacher;
         this.title = title;
         this.description = description;
+    }
+
+    public void update(String title, String description) {
+        if (title != null && !title.isBlank()) { // 제목이 null이 아니고 비어있지 않으면 수정
+            this.title = title;
+        }
+        if (description != null) { // 설명은 null이 아니면 수정 (빈 문자열도 허용 가능)
+            this.description = description;
+        }
     }
 }

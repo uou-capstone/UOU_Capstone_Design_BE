@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.course;
 
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
+    import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -54,5 +55,26 @@ public class CourseController {
     public ResponseEntity<String> enrollCourse(@PathVariable Long courseId) {
         enrollmentService.enrollCourse(courseId);
         return ResponseEntity.status(HttpStatus.CREATED).body("수강 신청이 완료되었습니다.");
+    }
+
+    @Operation(summary = "과목 정보 수정", description = "선생님이 자신이 개설한 과목의 제목 또는 설명을 수정합니다.")
+    @PutMapping("/{courseId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<CourseResponseDto> updateCourse(
+            @PathVariable Long courseId,
+            @RequestBody CourseUpdateRequestDto requestDto) {
+
+        Course updatedCourse = courseService.updateCourse(courseId, requestDto);
+        return ResponseEntity.ok(new CourseResponseDto(updatedCourse));
+    }
+
+    @Operation(summary = "과목 삭제", description = "선생님이 자신이 개설한 과목을 삭제합니다.")
+    @DeleteMapping("/{courseId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteCourse(@PathVariable Long courseId) {
+        courseService.deleteCourse(courseId);
+
+        // 삭제 성공 시 204 No Content 응답 반환
+        return ResponseEntity.noContent().build();
     }
 }

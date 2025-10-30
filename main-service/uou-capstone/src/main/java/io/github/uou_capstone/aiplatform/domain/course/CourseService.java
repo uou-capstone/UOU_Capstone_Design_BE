@@ -2,11 +2,13 @@ package io.github.uou_capstone.aiplatform.domain.course;
 
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.TeacherRepository;
 import io.github.uou_capstone.aiplatform.domain.user.User;
 import io.github.uou_capstone.aiplatform.domain.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,5 +62,49 @@ public class CourseService {
     public Course getCourseById(Long courseId) { //과목 id 상세 조회
         return courseRepository.findById(courseId)
                 .orElseThrow(() -> new IllegalArgumentException("해당 ID의 과목이 없습니다."));
+    }
+
+    @Transactional
+    public Course updateCourse(Long courseId, CourseUpdateRequestDto requestDto) {
+        // 1. 수정할 과목 조회
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 과목이 없습니다."));
+
+        // 2. 권한 확인: 현재 로그인한 사용자가 이 과목의 선생님인지 확인
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 과목을 수정할 권한이 없습니다.");
+        }
+
+        // 3. Entity 업데이트 DTO에 값이 있을 경우에만 수정
+        course.update(requestDto.getTitle(), requestDto.getDescription());
+
+        return course; // 업데이트된 Course 객체 반환
+    }
+
+    @Transactional
+    public void deleteCourse(Long courseId) {
+        // 1. 삭제할 과목 조회
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 과목이 없습니다."));
+
+        // 2. 권한 확인: 현재 로그인한 사용자가 이 과목의 선생님인지 확인
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 과목을 삭제할 권한이 없습니다.");
+        }
+
+        // 3. 과목 삭제
+        courseRepository.delete(course);
     }
 }
