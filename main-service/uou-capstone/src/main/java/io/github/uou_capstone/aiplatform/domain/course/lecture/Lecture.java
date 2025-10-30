@@ -64,4 +64,8 @@ public class Lecture extends BaseTimeEntity {
             this.description = description;
         }
     }
+
+    public void updateAiGeneratedStatus(AiGeneratedStatus status) {
+        this.aiGeneratedStatus = status;
+    }
 }

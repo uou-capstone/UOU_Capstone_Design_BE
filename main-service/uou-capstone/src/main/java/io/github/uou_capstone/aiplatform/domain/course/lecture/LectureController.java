@@ -12,7 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "강의 API", description = "강의 생성 등 강의 관련 API")
+@Tag(name = "강의 API", description = "강의 생성, AI 콘텐츠 생성 등 강의 관련 API")
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -58,5 +58,13 @@ public class LectureController {
 
         // 삭제 성공 시 204 No Content 응답 반환
         return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "AI 강의 콘텐츠 생성", description = "특정 강의의 PDF를 기반으로 AI 콘텐츠(대본, 요약 등) 생성을 요청합니다.")
+    @PostMapping("/lectures/{lectureId}/generate-content")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<String> generateAiContent(@PathVariable Long lectureId) {
+        lectureService.generateAiContent(lectureId);
+        return ResponseEntity.ok("AI 콘텐츠 생성 작업이 시작되었습니다.");
     }
 }
