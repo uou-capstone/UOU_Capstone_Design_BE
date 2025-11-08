@@ -1,90 +1,255 @@
-# [UOU_Capstone_Design_BE]
+# 스테이지 반드시 추가해야함!!
 
-[LMS서비스]
+# Capstone_BE
 
----
+학습/강의 보조용 AI 에이전트 백엔드 모노레포입니다.
 
-## ## 1. 프로젝트 아키텍처
-
-이 프로젝트는 MSA(마이크로서비스 아키텍처) 구조를 따릅니다.
-
-- **`main-service` (Spring Boot)**: 메인 API 서버로, 사용자 인증 및 핵심 비즈니스 로직을 담당합니다.
-- **`ai-service` (FastAPI)**: AI 모델을 서빙하는 전문 API 서버입니다.
-
-
-
-두 서비스는 독립적으로 실행되며, `main-service`가 `ai-service`를 HTTP로 호출하여 통신합니다.
+- `main-service` (Spring Boot): 메인 API 서버(추후 연동)
+- `ai-service` (FastAPI): AI 에이전트 API 서버
 
 ---
 
-## ## 2. 기술 스택
+## 1) 아키텍처 개요
 
-**`main-service`**
-- Java 17
-- Spring Boot
-- Gradle
-- [기타 라이브러리...]
-
-**`ai-service`**
-- Python 3.9+
-- FastAPI
-- Uvicorn
-- [AI 모델 관련 라이브러리...]
+- Coordinator: `ai-service/app/main.py` (FastAPI 엔트리포인트, 라우터 포함)
+- Delegator: `ai-service/ai_agent/Lecture_Agent/integration.py` (단계별 호출/상태 관리, `main(pdf_path)`) 
+- PDF Analysis Agent: `ai-service/ai_agent/Lecture_Agent/component/PdfAnalyisis.py`
+- Main Lecture Agent: `ai-service/ai_agent/Lecture_Agent/component/MainLectureAgent.py`
+- Main Q&A Agent: `ai-service/ai_agent/Lecture_Agent/component/MainQandAAgent.py`
 
 ---
 
-## ## 3. 로컬 환경 설정 및 실행 방법
+## 2) 기술 스택
 
-### ### `ai-service` (FastAPI) 실행
-
-1.  **가상환경 생성 및 활성화**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate
-    ```
-
-2.  **의존성 설치**
-    ```bash
-    cd ai-service
-    pip install -r requirements.txt
-    ```
-
-3.  **서버 실행**
-    ```bash
-    uvicorn main:app --reload
-    ```
-    - 서버는 `http://localhost:8000` 에서 실행됩니다.
-
-### ### `main-service` (Spring Boot) 실행
-
-1.  **프로젝트 빌드**
-    ```bash
-    cd main-service
-    ./gradlew build
-    ```
-
-2.  **서버 실행**
-    ```bash
-    java -jar build/libs/[생성된 jar 파일 이름].jar
-    ```
-    - 서버는 `http://localhost:8080` 에서 실행됩니다.
+- Python 3.13
+- FastAPI, Uvicorn, Pydantic
+- google-genai, langgraph
+- PyPDF2 / pypdf
 
 ---
 
-## ## 4. API 명세 (API Specification)
+## 3) 로컬 실행 가이드 (ai-service)
 
-서비스 간 통신에 사용되는 API 명세는 아래 링크에서 확인할 수 있습니다.
+1. 의존성 설치
+   ```powershell
+   cd Capstone_BE/ai-service
+   python -m pip install -r requirements.txt
+   ```
 
-- **[Notion, Swagger, Postman 등 API 문서 링크]**
+2. 환경 변수(.env)
+   - 위치: `Capstone_BE/ai-service/.env`
+   - 내용:
+     ```
+     GEMINI_API_KEY=YOUR_API_KEY
+     ```
+
+3. 업로드 디렉토리 준비(테스트용 PDF 위치)
+   ```powershell
+   mkdir .\uploads
+   # 예시 파일: .\uploads\sample.pdf
+   ```
+
+4. 서버 실행
+   ```powershell
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+   - 헬스 체크: `http://127.0.0.1:8000/health`
+   - Swagger: `http://127.0.0.1:8000/docs`
 
 ---
 
-## ## 5. Git 서브모듈 (Submodule)
+## 4) 제공 API
 
-이 프로젝트는 `ai-service`의 AI 모델 코드를 Git 서브모듈로 관리합니다.
+- POST `/api/pdf/analyze` — PDF 챕터 구조 분석 및 분할
+  - Body(JSON):
+    ```json
+    { "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\sample.pdf" }
+    ```
+  - Response(JSON): `{ "items": [{ "chapter_title": string, "pdf_path": string }, ...] }`
 
-- **서브모듈 초기화 및 업데이트**
-  ```bash
-  git submodule init
-  git submodule update
+- POST `/api/lecture/generate` — 챕터 강의 설명 생성
+  - Body(JSON):
+    ```json
+    {
+      "chapter_title": "DQN 핵심 개념",
+      "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\sample.pdf"
+    }
+    ```
+  - Response(JSON): `{ "chapter_title": string, "content": string }`
+
+- POST `/api/qa/evaluate` — 질문/사용자 답변 평가 후 보충설명 생성
+  - Body(JSON):
+    ```json
+    {
+      "original_q": "DQN의 핵심 아이디어는?",
+      "user_answer": "경험 재플레이와 타깃 네트워크를 사용해 안정화합니다.",
+      "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\sample.pdf"
+    }
+    ```
+  - Response(JSON): `{ "supplementary_explanation": string }`
+  - 주의: BAD 경로 분기 시 콘솔 입력을 요구하는 로직이 있어 서버 환경에서는 블로킹될 수 있습니다.
+
+- POST `/api/files/upload` — PDF 업로드 (멀티파트)
+  - Body(form-data): `file` 필드에 PDF 첨부
+  - Response(JSON): `{ "filename": string, "path": string }` (절대 경로 반환)
+
+- POST `/api/delegator/dispatch` — 통합 파이프라인 실행
+  - Body(JSON): 업로드 응답의 `path`를 `payload.pdf_path`로 전달
+    ```json
+    {
+      "stage": "run_all",
+      "payload": {
+        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
+      }
+    }
+    ```
+  - Response(JSON): `{ "status": "ok", "result": null }` (현재 `integration.main`이 값을 반환하지 않음)
+
+---
+
+## 5) Spring Boot 연동 가이드
+
+### 5.1) 기본 정보
+- **FastAPI 서버 URL**: `http://127.0.0.1:8000` (기본값, 환경에 따라 변경)
+- **API 문서**: `http://127.0.0.1:8000/docs` (Swagger UI)
+- **CORS**: 모든 origin 허용 (프로덕션에서는 제한 권장)
+
+### 5.2) 주요 연동 API
+
+#### 1) 파일 업로드
+- **엔드포인트**: `POST /api/files/upload`
+- **Content-Type**: `multipart/form-data`
+- **요청 형식**:
+  ```
+  file: [PDF 파일]
+  ```
+- **응답 형식**:
+  ```json
+  {
+    "filename": "ch6_DQN.pdf",
+    "path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
+  }
+  ```
+- **Spring Boot 예시** (RestTemplate):
+  ```java
+  MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+  body.add("file", new ByteArrayResource(file.getBytes()) {
+      @Override
+      public String getFilename() {
+          return file.getOriginalFilename();
+      }
+  });
+  
+  HttpHeaders headers = new HttpHeaders();
+  headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+  
+  HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
+  ResponseEntity<Map> response = restTemplate.postForEntity(
+      "http://127.0.0.1:8000/api/files/upload", 
+      request, 
+      Map.class
+  );
+  ```
+
+#### 2) 파이프라인 실행
+- **엔드포인트**: `POST /api/delegator/dispatch`
+- **Content-Type**: `application/json`
+- **요청 형식**:
+  ```json
+  {
+    "stage": "run_all",
+    "payload": {
+      "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
+    }
+  }
+  ```
+- **응답 형식**:
+  ```json
+  {
+    "status": "ok",
+    "result": null
+  }
+  ```
+- **Spring Boot 예시** (RestTemplate):
+  ```java
+  Map<String, Object> requestBody = Map.of(
+      "stage", "run_all",
+      "payload", Map.of("pdf_path", pdfPath)
+  );
+  
+  HttpHeaders headers = new HttpHeaders();
+  headers.setContentType(MediaType.APPLICATION_JSON);
+  
+  HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
+  ResponseEntity<Map> response = restTemplate.postForEntity(
+      "http://127.0.0.1:8000/api/delegator/dispatch", 
+      request, 
+      Map.class
+  );
+  ```
+
+### 5.3) 연동 플로우
+
+**방법 1: 2단계 (업로드 → 실행)**
+1. Spring Boot에서 클라이언트로부터 파일 수신
+2. FastAPI `/api/files/upload` 호출 → `path` 획득
+3. FastAPI `/api/delegator/dispatch` 호출 → `path` 전달
+
+**방법 2: 1단계 (Spring Boot에서 직접 처리)**
+- Spring Boot에서 파일을 받아 FastAPI로 전달만 수행
+
+### 5.4) 주의사항
+- **타임아웃**: AI 처리 시간이 길 수 있으므로 `RestTemplate`의 `readTimeout`을 충분히 설정 (최소 30초 권장)
+- **에러 처리**: FastAPI 서버가 응답하지 않을 경우를 대비한 예외 처리 필요
+- **파일 경로**: Windows 경로는 `\\` 이스케이프 필요
+- **서버 실행**: Spring Boot 서버 실행 전에 FastAPI 서버가 실행 중이어야 함
+
+### 5.5) 설정 예시 (application.yml)
+```yaml
+ai-service:
+  base-url: http://127.0.0.1:8000  # FastAPI 서버 URL
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+```
+
+---
+
+## 6) 의존성(요약)
+
+`ai-service/requirements.txt` 참고:
+
+```
+fastapi==0.121.0
+uvicorn[standard]==0.38.0
+pydantic==2.11.9
+python-dotenv==1.0.1
+google-genai==1.37.0
+google-api-core==2.25.1
+google-auth==2.40.3
+langgraph==1.0.2
+langgraph-checkpoint==3.0.0
+langgraph-prebuilt==1.0.2
+pypdf==5.9.0
+PyPDF2==3.0.1
+```
+
+설치:
+```powershell
+cd Capstone_BE/ai-service
+python -m pip install -r requirements.txt
+```
+
+---
+
+## 7) 트러블슈팅
+
+- `ModuleNotFoundError: No module named 'google'` → `python -m pip install -r requirements.txt` 재실행
+- Windows Swagger 입력 시 경로는 `\\` 로 이스케이프 필요(예: `C:\\path\\to\\file.pdf`)
+- PowerShell 한글 깨짐 → 출력 인코딩 설정
+  ```powershell
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
   ```
