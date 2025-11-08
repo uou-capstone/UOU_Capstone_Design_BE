@@ -59,6 +59,7 @@ spring:
     properties:
       hibernate:
         format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
+        default_batch_fetch_size: 100
     show-sql: true # 실행되는 SQL 쿼리를 로그에 출력
 
 

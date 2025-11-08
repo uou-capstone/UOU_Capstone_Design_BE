@@ -165,28 +165,28 @@ public class LectureService {
 
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
-        // 4. AI 서비스(FastAPI) 호출
-        /// 테스트 위해 잠시 주석///
-//        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+//         4. AI 서비스(FastAPI) 호출
+
+        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+
+        Flux<AiResponseDto> aiResponseFlux = aiServiceWebClient.post()
+                .uri("/generate-content")
+                .bodyValue(aiRequest)
+                .retrieve()
+                .bodyToFlux(AiResponseDto.class);
+
+//        ///임시 테스트 코드 ///
+//        // ✅ 4-1. [임시 테스트용 코드] AI의 응답을 흉내내는 가짜 DTO 리스트 생성
+//        // (AiResponseDto에 @AllArgsConstructor 어노테이션이 있어야 합니다)
+//        List<AiResponseDto> fakeAiResults = List.of(
+//                new AiResponseDto("SCRIPT", "이것은 AI가 생성한 [가짜] 강의 대본입니다.", "{\"page\": 1}"),
+//                new AiResponseDto("SUMMARY", "이것은 AI가 생성한 [가짜] 요약입니다.", "{\"page\": \"1-5\"}")
+//        );
 //
-//        Flux<AiResponseDto> aiResponseFlux = aiServiceWebClient.post()
-//                .uri("/generate-content")
-//                .bodyValue(aiRequest)
-//                .retrieve()
-//                .bodyToFlux(AiResponseDto.class);
-
-        ///임시 테스트 코드 ///
-        // ✅ 4-1. [임시 테스트용 코드] AI의 응답을 흉내내는 가짜 DTO 리스트 생성
-        // (AiResponseDto에 @AllArgsConstructor 어노테이션이 있어야 합니다)
-        List<AiResponseDto> fakeAiResults = List.of(
-                new AiResponseDto("SCRIPT", "이것은 AI가 생성한 [가짜] 강의 대본입니다.", "{\"page\": 1}"),
-                new AiResponseDto("SUMMARY", "이것은 AI가 생성한 [가짜] 요약입니다.", "{\"page\": \"1-5\"}")
-        );
-
-        // ✅ 4-2. [임시 테스트용 코드] 가짜 DTO 리스트를 Flux로 변환 (기존 코드 구조와 동일하게 맞춤)
-        Flux<AiResponseDto> aiResponseFlux = Flux.fromIterable(fakeAiResults);
-
-        /// 여기까지 ///
+//        // ✅ 4-2. [임시 테스트용 코드] 가짜 DTO 리스트를 Flux로 변환 (기존 코드 구조와 동일하게 맞춤)
+//        Flux<AiResponseDto> aiResponseFlux = Flux.fromIterable(fakeAiResults);
+//
+//        /// 여기까지 ///
 
         // 5. AI 응답 결과를 DB에 저장
         List<GeneratedContent> contentsToSave = aiResponseFlux
