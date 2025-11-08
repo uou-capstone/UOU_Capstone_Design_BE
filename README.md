@@ -41,6 +41,7 @@
    - 내용:
      ```
      GEMINI_API_KEY=YOUR_API_KEY
+     SPRING_BOOT_BASE_URL=http://127.0.0.1:8080  # Spring Boot 서버 URL (선택)
      ```
 
 3. 업로드 디렉토리 준비(테스트용 PDF 위치)
@@ -104,6 +105,30 @@
     }
     ```
   - Response(JSON): `{ "status": "ok", "result": null }` (현재 `integration.main`이 값을 반환하지 않음)
+
+- POST `/api/delegator/generated-content` — 통합 파이프라인 실행 + Spring Boot 연동
+  - Body(JSON): `lecture_id`와 `pdf_path` 필요
+    ```json
+    {
+      "stage": "run_all",
+      "payload": {
+        "lecture_id": "123",
+        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
+      }
+    }
+    ```
+  - 동작:
+    1. FastAPI에서 파이프라인 실행
+    2. 결과를 Spring Boot의 `/lectures/{lecture_id}/generated-content`로 POST 요청
+  - Response(JSON): 
+    ```json
+    {
+      "status": "ok",
+      "result": null,
+      "spring_boot_response": {...}
+    }
+    ```
+  - 환경변수: `SPRING_BOOT_BASE_URL` (기본값: `http://127.0.0.1:8080`)
 
 ---
 
