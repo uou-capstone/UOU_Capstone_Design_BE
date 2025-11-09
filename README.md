@@ -41,6 +41,7 @@
    - 내용:
      ```
      GEMINI_API_KEY=YOUR_API_KEY
+     SPRING_BOOT_BASE_URL=http://127.0.0.1:8080  # Spring Boot 서버 URL (선택)
      ```
 
 3. 업로드 디렉토리 준비(테스트용 PDF 위치)
@@ -107,26 +108,44 @@
     ```
   - **즉시 Response(JSON)**: `{ "status": "processing", "message": "AI content generation started." }`
   - **웹훅 호출 (완료 시)**:
-    - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}` (자동 생성)
+    - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
     - Method: `POST`
-    - Body (성공): 
+    - Body (성공): `List<AiResponseDto>` 형식
       ```json
-      {
-        "lectureId": 123,
-        "status": "completed",
-        "result": {...},
-        "pdf_path": "..."
-      }
+      [
+        {
+          "contentType": "SCRIPT",
+          "contentData": "강의 설명 내용...",
+          "materialReferences": "C:\\...\\ai-service\\uploads\\파일명.pdf"
+        },
+        ...
+      ]
       ```
-    - Body (실패):
-      ```json
-      {
-        "lectureId": 123,
-        "status": "failed",
-        "error": "에러 메시지",
-        "pdf_path": "..."
+    - Body (실패): 빈 리스트 `[]` (Spring Boot가 에러를 감지)
+
+- POST `/api/delegator/generated-content` — 통합 파이프라인 실행 + Spring Boot 연동
+  - Body(JSON): `lecture_id`와 `pdf_path` 필요
+    ```json
+    {
+      "stage": "run_all",
+      "payload": {
+        "lecture_id": "123",
+        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
       }
-      ```
+    }
+    ```
+  - 동작:
+    1. FastAPI에서 파이프라인 실행
+    2. 결과를 Spring Boot의 `/lectures/{lecture_id}/generated-content`로 POST 요청
+  - Response(JSON): 
+    ```json
+    {
+      "status": "ok",
+      "result": null,
+      "spring_boot_response": {...}
+    }
+    ```
+  - 환경변수: `SPRING_BOOT_BASE_URL` (기본값: `http://127.0.0.1:8080`)
 
 ---
 
@@ -235,12 +254,12 @@
      }
      ```
    - 즉시 Response: `{ "status": "processing", "message": "AI content generation started." }`
-   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}`
+   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}`
 4. **Spring Boot는 사용자에게 즉시 응답** → "작업이 시작되었습니다"
 5. **FastAPI가 백그라운드에서 작업 실행** (1분~수분 소요)
 6. **작업 완료 시 FastAPI가 Spring Boot 웹훅 호출**
-   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}` (자동 생성)
-   - Body: `{ "lectureId": 123, "status": "completed", "result": {...} }`
+   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
+   - Body: `List<AiResponseDto>` 형식 (각 챕터별 강의 설명)
 7. **Spring Boot가 웹훅에서 결과 수신** → DB 저장 및 상태 업데이트
 
 **Spring Boot 예시 코드:**
@@ -308,29 +327,21 @@ public class LectureService {
     }
     
     // 웹훅 엔드포인트 (FastAPI가 호출)
-    @PostMapping("/api/ai/callback/{lectureId}")
+    // 실제 Spring Boot 엔드포인트: POST /api/ai/callback/lectures/{lectureId}
+    @PostMapping("/api/ai/callback/lectures/{lectureId}")
     public ResponseEntity<?> handleWebhook(
-        @PathVariable Integer lectureId,
-        @RequestBody Map<String, Object> webhookPayload
+        @PathVariable Long lectureId,
+        @RequestBody List<AiResponseDto> aiResults  // FastAPI가 List<AiResponseDto>를 전송
     ) {
-        String status = (String) webhookPayload.get("status");
-        Integer receivedLectureId = (Integer) webhookPayload.get("lectureId");
-        
-        if ("completed".equals(status)) {
-            // 성공: 결과를 DB에 저장
-            Object result = webhookPayload.get("result");
-            // DB 저장 로직...
-            // lectureId로 강의를 찾아서 상태를 COMPLETED로 업데이트
-            return ResponseEntity.ok().build();
-        } else if ("failed".equals(status)) {
-            // 실패: 에러 처리
-            String error = (String) webhookPayload.get("error");
-            // 에러 처리 로직...
-            // lectureId로 강의를 찾아서 상태를 FAILED로 업데이트
+        if (aiResults == null || aiResults.isEmpty()) {
+            // 빈 리스트는 실패를 의미
+            lectureService.saveAiContentCallback(lectureId, java.util.Collections.emptyList());
             return ResponseEntity.ok().build();
         }
         
-        return ResponseEntity.badRequest().build();
+        // 성공: 결과를 DB에 저장
+        lectureService.saveAiContentCallback(lectureId, aiResults);
+        return ResponseEntity.ok("Callback received successfully.");
     }
 }
 ```
@@ -341,9 +352,37 @@ public class LectureService {
 - [ ] 업로드 응답의 `path`를 받았나요?
 - [ ] `/api/delegator/dispatch`에 `lectureId` (int), `pdf_path`를 전달했나요?
 - [ ] `webhook_url`은 전달하지 않아도 됩니다 (자동 생성됨)
-- [ ] 웹훅 엔드포인트(`POST /api/ai/callback/{lectureId}`)를 구현했나요?
+- [ ] 웹훅 엔드포인트(`POST /api/ai/callback/lectures/{lectureId}`)를 구현했나요?
 - [ ] 웹훅에서 결과를 받아서 DB에 저장하는 로직이 있나요?
 - [ ] ❌ Spring Boot 서버의 경로(`C:\dev\...`)를 직접 전달하지 않았나요?
+
+**⚠️ Spring Boot 수정 필요 사항:**
+
+1. **`AiRequestDto.java` 수정** - `lectureId` 추가:
+```java
+@Getter
+public class AiRequestDto {
+    private final String stage;
+    private final Map<String, Object> payload; // String -> Object로 변경
+
+    public AiRequestDto(Long lectureId, String pdfPath) {
+        this.stage = "run_all";
+        this.payload = Map.of(
+            "lectureId", lectureId,  // int 타입
+            "pdf_path", pdfPath
+        );
+    }
+}
+```
+
+2. **`LectureService.java` 수정** - `generateAiContent` 메서드:
+```java
+// 기존: AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+// 수정:
+AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
+```
+
+3. **웹훅 URL 확인** - FastAPI는 `/api/ai/callback/lectures/{lectureId}`로 호출합니다.
 
 **주의:** 이 방법을 사용하면 파일이 FastAPI 서버의 `uploads` 디렉토리에 저장되므로, FastAPI 서버가 해당 경로에 접근할 수 있습니다.
 
