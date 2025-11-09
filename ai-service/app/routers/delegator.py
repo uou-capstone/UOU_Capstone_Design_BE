@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import traceback
 import logging
 import asyncio
+import httpx
+import os
 from pathlib import Path
 from ai_agent.Lecture_Agent.integration import main as run_full_pipeline
 
@@ -14,15 +16,82 @@ class DelegatorDispatchRequest(BaseModel):
 
 router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 
+
+async def run_pipeline_background(
+    pdf_path: str,
+    lecture_id: str,
+    webhook_url: str
+):
+    """백그라운드에서 파이프라인을 실행하고 완료 후 웹훅 호출"""
+    try:
+        print(f"[background] 파이프라인 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
+        
+        # 파이프라인 실행
+        result = await asyncio.to_thread(run_full_pipeline, pdf_path)
+        
+        print(f"[background] 파이프라인 완료: lecture_id={lecture_id}")
+        
+        # 웹훅 호출 (성공)
+        webhook_payload = {
+            "lecture_id": lecture_id,
+            "status": "completed",
+            "result": result,
+            "pdf_path": pdf_path
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                webhook_url,
+                json=webhook_payload,
+                headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            print(f"[background] 웹훅 호출 성공: lecture_id={lecture_id}, status={response.status_code}")
+            
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"[background] 파이프라인 실행 실패: lecture_id={lecture_id}")
+        print(f"에러: {type(e).__name__}: {str(e)}")
+        print(error_trace)
+        logger.error(f"파이프라인 실행 실패: lecture_id={lecture_id}\n{error_trace}")
+        
+        # 웹훅 호출 (실패)
+        try:
+            webhook_payload = {
+                "lecture_id": lecture_id,
+                "status": "failed",
+                "error": f"{type(e).__name__}: {str(e)}",
+                "pdf_path": pdf_path
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    webhook_url,
+                    json=webhook_payload,
+                    headers={"Content-Type": "application/json"}
+                )
+                print(f"[background] 웹훅 호출 (에러): lecture_id={lecture_id}, status={response.status_code}")
+        except Exception as webhook_error:
+            print(f"[background] 웹훅 호출 실패: {str(webhook_error)}")
+            logger.error(f"웹훅 호출 실패: {str(webhook_error)}")
+
+
 @router.post("/dispatch")
-async def dispatch(req: DelegatorDispatchRequest):
+async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTasks):
     # 유효성 검사
     if not isinstance(req.payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a dictionary")
 
     pdf_path = req.payload.get("pdf_path")
+    lecture_id = req.payload.get("lecture_id")
+    webhook_url = req.payload.get("webhook_url")
+    
     if not pdf_path:
         raise HTTPException(status_code=400, detail="payload.pdf_path is required")
+    if not lecture_id:
+        raise HTTPException(status_code=400, detail="payload.lecture_id is required")
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="payload.webhook_url is required")
 
     # 파일 경로 검증
     file_path = Path(pdf_path)
@@ -41,32 +110,19 @@ async def dispatch(req: DelegatorDispatchRequest):
         print(f"[ERROR] {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
 
-    # ✅ 현재는 pdf_path만 사용 stage는 사용하지 않음
-    try:
-        print(f"[delegator] 파이프라인 시작: pdf_path={pdf_path}")
-        print(f"[delegator] 파일 존재 확인: {file_path.exists()}")
-        # 동기 함수를 스레드 풀에서 실행하여 블로킹 방지
-        result = await asyncio.to_thread(run_full_pipeline, str(pdf_path))
-        print(f"[delegator] 파이프라인 완료")
-        return {"status": "ok", "result": result}
-    except FileNotFoundError as e:
-        error_trace = traceback.format_exc()
-        print(f"[ERROR] 파일을 찾을 수 없습니다: {pdf_path}")
-        print(error_trace)
-        logger.error(f"파일을 찾을 수 없습니다: {pdf_path}\n{error_trace}")
-        raise HTTPException(status_code=404, detail=f"PDF 파일을 찾을 수 없습니다: {str(e)}")
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        print(f"[ERROR] 파이프라인 실행 중 에러 발생:")
-        print(f"에러 타입: {type(e).__name__}")
-        print(f"에러 메시지: {str(e)}")
-        print(f"전체 traceback:\n{error_trace}")
-        logger.error(f"파이프라인 실행 중 에러 발생:\n{error_trace}")
-        # 에러 메시지가 너무 길면 잘라서 전송
-        error_detail = f"{type(e).__name__}: {str(e)}"
-        if len(error_trace) > 1000:
-            error_detail += f"\n\n(전체 traceback은 서버 로그를 확인하세요)"
-        raise HTTPException(
-            status_code=500, 
-            detail=error_detail
-        )
+    # 백그라운드 작업 추가
+    background_tasks.add_task(
+        run_pipeline_background,
+        str(pdf_path),
+        str(lecture_id),
+        str(webhook_url)
+    )
+    
+    print(f"[delegator] 작업 시작: lecture_id={lecture_id}, webhook_url={webhook_url}")
+    
+    # 즉시 응답 반환
+    return {
+        "status": "accepted",
+        "message": "작업이 시작되었습니다",
+        "lecture_id": lecture_id
+    }
