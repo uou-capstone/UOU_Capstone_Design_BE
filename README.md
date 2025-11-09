@@ -100,20 +100,19 @@
     {
       "stage": "run_all",
       "payload": {
-        "lecture_id": "123",
-        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf",
-        "webhook_url": "https://michal-unvulnerable-benita.ngrok-free.dev/api/ai/callback/123"
+        "lectureId": 123,
+        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
       }
     }
     ```
-  - **즉시 Response(JSON)**: `{ "status": "accepted", "message": "작업이 시작되었습니다", "lecture_id": "123" }`
+  - **즉시 Response(JSON)**: `{ "status": "processing", "message": "AI content generation started." }`
   - **웹훅 호출 (완료 시)**:
-    - URL: `webhook_url` (Spring Boot에서 제공)
+    - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}` (자동 생성)
     - Method: `POST`
     - Body (성공): 
       ```json
       {
-        "lecture_id": "123",
+        "lectureId": 123,
         "status": "completed",
         "result": {...},
         "pdf_path": "..."
@@ -122,7 +121,7 @@
     - Body (실패):
       ```json
       {
-        "lecture_id": "123",
+        "lectureId": 123,
         "status": "failed",
         "error": "에러 메시지",
         "pdf_path": "..."
@@ -230,18 +229,18 @@
      {
        "stage": "run_all",
        "payload": {
-         "lecture_id": "123",
-         "pdf_path": "업로드된_경로",
-         "webhook_url": "https://michal-unvulnerable-benita.ngrok-free.dev/api/ai/callback/123"
+         "lectureId": 123,
+         "pdf_path": "업로드된_경로"
        }
      }
      ```
-   - 즉시 Response: `{ "status": "accepted", "message": "작업이 시작되었습니다", "lecture_id": "123" }`
+   - 즉시 Response: `{ "status": "processing", "message": "AI content generation started." }`
+   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}`
 4. **Spring Boot는 사용자에게 즉시 응답** → "작업이 시작되었습니다"
 5. **FastAPI가 백그라운드에서 작업 실행** (1분~수분 소요)
 6. **작업 완료 시 FastAPI가 Spring Boot 웹훅 호출**
-   - URL: `webhook_url` (예: `POST /api/ai/callback/{lectureId}`)
-   - Body: `{ "lecture_id": "123", "status": "completed", "result": {...} }`
+   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/{lectureId}` (자동 생성)
+   - Body: `{ "lectureId": 123, "status": "completed", "result": {...} }`
 7. **Spring Boot가 웹훅에서 결과 수신** → DB 저장 및 상태 업데이트
 
 **Spring Boot 예시 코드:**
@@ -284,15 +283,11 @@ public class LectureService {
         // 2. 업로드된 파일 경로 획득
         String pdfPath = (String) uploadResponse.getBody().get("path");
         
-        // 3. 웹훅 URL 생성
-        String webhookUrl = springBootBaseUrl + "/api/ai/callback/" + lectureId;
-        
-        // 4. 파이프라인 실행 (백그라운드 작업 시작)
+        // 3. 파이프라인 실행 (백그라운드 작업 시작)
         String dispatchUrl = aiServiceBaseUrl + "/api/delegator/dispatch";
         Map<String, Object> payload = Map.of(
-            "lecture_id", lectureId,
-            "pdf_path", pdfPath,
-            "webhook_url", webhookUrl
+            "lectureId", lectureId,  // int 타입
+            "pdf_path", pdfPath
         );
         Map<String, Object> dispatchBody = Map.of(
             "stage", "run_all",
@@ -308,27 +303,30 @@ public class LectureService {
             dispatchUrl, dispatchRequest, Map.class
         );
         
-        // 5. 즉시 응답 반환 (작업은 백그라운드에서 진행)
-        return dispatchResponse.getBody(); // { "status": "accepted", "lecture_id": "123" }
+        // 4. 즉시 응답 반환 (작업은 백그라운드에서 진행)
+        return dispatchResponse.getBody(); // { "status": "processing", "message": "AI content generation started." }
     }
     
     // 웹훅 엔드포인트 (FastAPI가 호출)
     @PostMapping("/api/ai/callback/{lectureId}")
     public ResponseEntity<?> handleWebhook(
-        @PathVariable String lectureId,
+        @PathVariable Integer lectureId,
         @RequestBody Map<String, Object> webhookPayload
     ) {
         String status = (String) webhookPayload.get("status");
+        Integer receivedLectureId = (Integer) webhookPayload.get("lectureId");
         
         if ("completed".equals(status)) {
             // 성공: 결과를 DB에 저장
             Object result = webhookPayload.get("result");
             // DB 저장 로직...
+            // lectureId로 강의를 찾아서 상태를 COMPLETED로 업데이트
             return ResponseEntity.ok().build();
         } else if ("failed".equals(status)) {
             // 실패: 에러 처리
             String error = (String) webhookPayload.get("error");
             // 에러 처리 로직...
+            // lectureId로 강의를 찾아서 상태를 FAILED로 업데이트
             return ResponseEntity.ok().build();
         }
         
@@ -341,7 +339,8 @@ public class LectureService {
 - [ ] 클라이언트로부터 파일을 받았나요? (MultipartFile)
 - [ ] `/api/files/upload`를 호출했나요? (파일을 FastAPI 서버로 업로드)
 - [ ] 업로드 응답의 `path`를 받았나요?
-- [ ] `/api/delegator/dispatch`에 `lecture_id`, `pdf_path`, `webhook_url`을 전달했나요?
+- [ ] `/api/delegator/dispatch`에 `lectureId` (int), `pdf_path`를 전달했나요?
+- [ ] `webhook_url`은 전달하지 않아도 됩니다 (자동 생성됨)
 - [ ] 웹훅 엔드포인트(`POST /api/ai/callback/{lectureId}`)를 구현했나요?
 - [ ] 웹훅에서 결과를 받아서 DB에 저장하는 로직이 있나요?
 - [ ] ❌ Spring Boot 서버의 경로(`C:\dev\...`)를 직접 전달하지 않았나요?

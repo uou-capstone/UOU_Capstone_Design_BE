@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import traceback
 import logging
 import asyncio
@@ -10,19 +10,27 @@ from ai_agent.Lecture_Agent.integration import main as run_full_pipeline
 
 logger = logging.getLogger(__name__)
 
+# ✅ payload를 위한 구체적인 모델 정의
+class DispatchPayload(BaseModel):
+    pdf_path: str = Field(..., description="처리할 PDF 파일 경로")
+    lectureId: int = Field(..., description="콜백을 위한 강의 ID")
+
 class DelegatorDispatchRequest(BaseModel):
     stage: str
-    payload: dict
+    payload: DispatchPayload  # 👈 dict 대신 구체적인 모델 사용
 
 router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 
 
-async def run_pipeline_background(
-    pdf_path: str,
-    lecture_id: str,
-    webhook_url: str
+async def run_ai_pipeline_and_callback(
+    lecture_id: int,
+    pdf_path: str
 ):
     """백그라운드에서 파이프라인을 실행하고 완료 후 웹훅 호출"""
+    # Spring Boot 서버 URL (환경변수 또는 기본값)
+    spring_boot_base_url = os.getenv("SPRING_BOOT_BASE_URL", "https://michal-unvulnerable-benita.ngrok-free.dev")
+    webhook_url = f"{spring_boot_base_url}/api/ai/callback/{lecture_id}"
+    
     try:
         print(f"[background] 파이프라인 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
         
@@ -33,7 +41,7 @@ async def run_pipeline_background(
         
         # 웹훅 호출 (성공)
         webhook_payload = {
-            "lecture_id": lecture_id,
+            "lectureId": lecture_id,
             "status": "completed",
             "result": result,
             "pdf_path": pdf_path
@@ -58,7 +66,7 @@ async def run_pipeline_background(
         # 웹훅 호출 (실패)
         try:
             webhook_payload = {
-                "lecture_id": lecture_id,
+                "lectureId": lecture_id,
                 "status": "failed",
                 "error": f"{type(e).__name__}: {str(e)}",
                 "pdf_path": pdf_path
@@ -78,20 +86,9 @@ async def run_pipeline_background(
 
 @router.post("/dispatch")
 async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTasks):
-    # 유효성 검사
-    if not isinstance(req.payload, dict):
-        raise HTTPException(status_code=400, detail="payload must be a dictionary")
-
-    pdf_path = req.payload.get("pdf_path")
-    lecture_id = req.payload.get("lecture_id")
-    webhook_url = req.payload.get("webhook_url")
-    
-    if not pdf_path:
-        raise HTTPException(status_code=400, detail="payload.pdf_path is required")
-    if not lecture_id:
-        raise HTTPException(status_code=400, detail="payload.lecture_id is required")
-    if not webhook_url:
-        raise HTTPException(status_code=400, detail="payload.webhook_url is required")
+    # ✅ Pydantic이 자동으로 유효성 검사를 해주므로 수동 검사 코드 삭제
+    pdf_path = req.payload.pdf_path  # 👈 모델에서 직접 접근
+    lecture_id = req.payload.lectureId  # 👈 모델에서 직접 접근
 
     # 파일 경로 검증
     file_path = Path(pdf_path)
@@ -110,19 +107,17 @@ async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTa
         print(f"[ERROR] {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
 
-    # 백그라운드 작업 추가
+    # ✅ 백그라운드 작업 시작
     background_tasks.add_task(
-        run_pipeline_background,
-        str(pdf_path),
-        str(lecture_id),
-        str(webhook_url)
+        run_ai_pipeline_and_callback,
+        lecture_id,
+        pdf_path
     )
     
-    print(f"[delegator] 작업 시작: lecture_id={lecture_id}, webhook_url={webhook_url}")
+    print(f"[delegator] 작업 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
     
-    # 즉시 응답 반환
+    # ✅ 즉시 응답 반환
     return {
-        "status": "accepted",
-        "message": "작업이 시작되었습니다",
-        "lecture_id": lecture_id
+        "status": "processing",
+        "message": "AI content generation started."
     }
