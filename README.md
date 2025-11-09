@@ -94,17 +94,34 @@
   - Body(form-data): `file` 필드에 PDF 첨부
   - Response(JSON): `{ "filename": string, "path": string }` (절대 경로 반환)
 
-- POST `/api/delegator/dispatch` — 통합 파이프라인 실행
-  - Body(JSON): 업로드 응답의 `path`를 `payload.pdf_path`로 전달
+- POST `/api/delegator/dispatch` — 통합 파이프라인 실행 (백그라운드 작업 + 웹훅)
+  - **동작 방식**: 즉시 응답 반환 후 백그라운드에서 작업 실행, 완료 시 웹훅 호출
+  - Body(JSON):
     ```json
     {
       "stage": "run_all",
       "payload": {
+        "lectureId": 123,
         "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
       }
     }
     ```
-  - Response(JSON): `{ "status": "ok", "result": null }` (현재 `integration.main`이 값을 반환하지 않음)
+  - **즉시 Response(JSON)**: `{ "status": "processing", "message": "AI content generation started." }`
+  - **웹훅 호출 (완료 시)**:
+    - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
+    - Method: `POST`
+    - Body (성공): `List<AiResponseDto>` 형식
+      ```json
+      [
+        {
+          "contentType": "SCRIPT",
+          "contentData": "강의 설명 내용...",
+          "materialReferences": "C:\\...\\ai-service\\uploads\\파일명.pdf"
+        },
+        ...
+      ]
+      ```
+    - Body (실패): 빈 리스트 `[]` (Spring Boot가 에러를 감지)
 
 - POST `/api/delegator/generated-content` — 통합 파이프라인 실행 + Spring Boot 연동
   - Body(JSON): `lecture_id`와 `pdf_path` 필요
@@ -213,21 +230,171 @@
   );
   ```
 
-### 5.3) 연동 플로우
+### 5.3) 연동 플로우 (백그라운드 작업 + 웹훅) ⚠️ 권장
 
-**방법 1: 2단계 (업로드 → 실행)**
-1. Spring Boot에서 클라이언트로부터 파일 수신
-2. FastAPI `/api/files/upload` 호출 → `path` 획득
-3. FastAPI `/api/delegator/dispatch` 호출 → `path` 전달
+**⚠️ 중요: Spring Boot 서버의 경로를 직접 전달하면 안 됩니다!**
+- ❌ `C:\dev\ai-platform-uploads\...` 같은 Spring Boot 서버 경로는 FastAPI에서 접근 불가
+- ✅ 반드시 `/api/files/upload`를 먼저 호출해서 FastAPI 서버에 파일을 업로드해야 합니다
 
-**방법 2: 1단계 (Spring Boot에서 직접 처리)**
-- Spring Boot에서 파일을 받아 FastAPI로 전달만 수행
+**Spring Boot → FastAPI 파일 업로드 → 백그라운드 작업 시작 → 웹훅으로 결과 수신**
+
+1. **Spring Boot에서 클라이언트로부터 파일 수신** (MultipartFile)
+2. **⚠️ 필수: FastAPI `/api/files/upload` 호출** → 파일을 FastAPI 서버의 `uploads` 디렉토리로 복사
+   - 응답: `{ "filename": "...", "path": "C:\\...\\ai-service\\uploads\\파일명.pdf" }`
+   - ⚠️ 이 `path`를 반드시 사용해야 합니다!
+3. **FastAPI `/api/delegator/dispatch` 호출** → 즉시 응답 반환 (0.1초)
+   - Body: 
+     ```json
+     {
+       "stage": "run_all",
+       "payload": {
+         "lectureId": 123,
+         "pdf_path": "업로드된_경로"
+       }
+     }
+     ```
+   - 즉시 Response: `{ "status": "processing", "message": "AI content generation started." }`
+   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}`
+4. **Spring Boot는 사용자에게 즉시 응답** → "작업이 시작되었습니다"
+5. **FastAPI가 백그라운드에서 작업 실행** (1분~수분 소요)
+6. **작업 완료 시 FastAPI가 Spring Boot 웹훅 호출**
+   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
+   - Body: `List<AiResponseDto>` 형식 (각 챕터별 강의 설명)
+7. **Spring Boot가 웹훅에서 결과 수신** → DB 저장 및 상태 업데이트
+
+**Spring Boot 예시 코드:**
+
+```java
+@Service
+@RequiredArgsConstructor
+public class LectureService {
+    
+    @Value("${ai-service.base-url:http://127.0.0.1:8000}")
+    private String aiServiceBaseUrl;
+    
+    @Value("${spring.boot.base-url:https://michal-unvulnerable-benita.ngrok-free.dev}")
+    private String springBootBaseUrl;
+    
+    private final RestTemplate restTemplate;
+    
+    public Map<String, Object> processLecture(String lectureId, MultipartFile file) {
+        // 1. FastAPI로 파일 업로드
+        String uploadUrl = aiServiceBaseUrl + "/api/files/upload";
+        
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
+            @Override
+            public String getFilename() {
+                return file.getOriginalFilename();
+            }
+        };
+        body.add("file", resource);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        HttpEntity<MultiValueMap<String, Object>> uploadRequest = 
+            new HttpEntity<>(body, headers);
+        
+        ResponseEntity<Map> uploadResponse = restTemplate.postForEntity(
+            uploadUrl, uploadRequest, Map.class
+        );
+        
+        // 2. 업로드된 파일 경로 획득
+        String pdfPath = (String) uploadResponse.getBody().get("path");
+        
+        // 3. 파이프라인 실행 (백그라운드 작업 시작)
+        String dispatchUrl = aiServiceBaseUrl + "/api/delegator/dispatch";
+        Map<String, Object> payload = Map.of(
+            "lectureId", lectureId,  // int 타입
+            "pdf_path", pdfPath
+        );
+        Map<String, Object> dispatchBody = Map.of(
+            "stage", "run_all",
+            "payload", payload
+        );
+        
+        HttpHeaders dispatchHeaders = new HttpHeaders();
+        dispatchHeaders.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> dispatchRequest = 
+            new HttpEntity<>(dispatchBody, dispatchHeaders);
+        
+        ResponseEntity<Map> dispatchResponse = restTemplate.postForEntity(
+            dispatchUrl, dispatchRequest, Map.class
+        );
+        
+        // 4. 즉시 응답 반환 (작업은 백그라운드에서 진행)
+        return dispatchResponse.getBody(); // { "status": "processing", "message": "AI content generation started." }
+    }
+    
+    // 웹훅 엔드포인트 (FastAPI가 호출)
+    // 실제 Spring Boot 엔드포인트: POST /api/ai/callback/lectures/{lectureId}
+    @PostMapping("/api/ai/callback/lectures/{lectureId}")
+    public ResponseEntity<?> handleWebhook(
+        @PathVariable Long lectureId,
+        @RequestBody List<AiResponseDto> aiResults  // FastAPI가 List<AiResponseDto>를 전송
+    ) {
+        if (aiResults == null || aiResults.isEmpty()) {
+            // 빈 리스트는 실패를 의미
+            lectureService.saveAiContentCallback(lectureId, java.util.Collections.emptyList());
+            return ResponseEntity.ok().build();
+        }
+        
+        // 성공: 결과를 DB에 저장
+        lectureService.saveAiContentCallback(lectureId, aiResults);
+        return ResponseEntity.ok("Callback received successfully.");
+    }
+}
+```
+
+**⚠️ 체크리스트 (Spring Boot 개발자용):**
+- [ ] 클라이언트로부터 파일을 받았나요? (MultipartFile)
+- [ ] `/api/files/upload`를 호출했나요? (파일을 FastAPI 서버로 업로드)
+- [ ] 업로드 응답의 `path`를 받았나요?
+- [ ] `/api/delegator/dispatch`에 `lectureId` (int), `pdf_path`를 전달했나요?
+- [ ] `webhook_url`은 전달하지 않아도 됩니다 (자동 생성됨)
+- [ ] 웹훅 엔드포인트(`POST /api/ai/callback/lectures/{lectureId}`)를 구현했나요?
+- [ ] 웹훅에서 결과를 받아서 DB에 저장하는 로직이 있나요?
+- [ ] ❌ Spring Boot 서버의 경로(`C:\dev\...`)를 직접 전달하지 않았나요?
+
+**⚠️ Spring Boot 수정 필요 사항:**
+
+1. **`AiRequestDto.java` 수정** - `lectureId` 추가:
+```java
+@Getter
+public class AiRequestDto {
+    private final String stage;
+    private final Map<String, Object> payload; // String -> Object로 변경
+
+    public AiRequestDto(Long lectureId, String pdfPath) {
+        this.stage = "run_all";
+        this.payload = Map.of(
+            "lectureId", lectureId,  // int 타입
+            "pdf_path", pdfPath
+        );
+    }
+}
+```
+
+2. **`LectureService.java` 수정** - `generateAiContent` 메서드:
+```java
+// 기존: AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+// 수정:
+AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
+```
+
+3. **웹훅 URL 확인** - FastAPI는 `/api/ai/callback/lectures/{lectureId}`로 호출합니다.
+
+**주의:** 이 방법을 사용하면 파일이 FastAPI 서버의 `uploads` 디렉토리에 저장되므로, FastAPI 서버가 해당 경로에 접근할 수 있습니다.
 
 ### 5.4) 주의사항
-- **타임아웃**: AI 처리 시간이 길 수 있으므로 `RestTemplate`의 `readTimeout`을 충분히 설정 (최소 30초 권장)
-- **에러 처리**: FastAPI 서버가 응답하지 않을 경우를 대비한 예외 처리 필요
+- **백그라운드 작업**: `/api/delegator/dispatch`는 즉시 응답을 반환하므로 `RestTemplate`의 `readTimeout`은 짧게 설정해도 됩니다 (5초 정도)
+- **웹훅 타임아웃**: FastAPI가 웹훅을 호출할 때 30초 타임아웃이 설정되어 있습니다
+- **에러 처리**: 
+  - FastAPI 서버가 응답하지 않을 경우를 대비한 예외 처리 필요
+  - 웹훅 호출 실패 시에도 로그에 기록되므로 모니터링 필요
 - **파일 경로**: Windows 경로는 `\\` 이스케이프 필요
 - **서버 실행**: Spring Boot 서버 실행 전에 FastAPI 서버가 실행 중이어야 함
+- **웹훅 엔드포인트**: Spring Boot에서 웹훅 엔드포인트(`/api/ai/callback/{lectureId}`)를 반드시 구현해야 합니다
 
 ### 5.5) 설정 예시 (application.yml)
 ```yaml
@@ -235,6 +402,8 @@ ai-service:
   base-url: http://127.0.0.1:8000  # FastAPI 서버 URL
 
 spring:
+  boot:
+    base-url: https://michal-unvulnerable-benita.ngrok-free.dev  # Spring Boot 서버 URL (웹훅용)
   servlet:
     multipart:
       max-file-size: 50MB
