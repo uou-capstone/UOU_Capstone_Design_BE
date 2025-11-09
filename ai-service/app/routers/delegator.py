@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import traceback
 import logging
+import asyncio
 from pathlib import Path
 from ai_agent.Lecture_Agent.integration import main as run_full_pipeline
 
@@ -14,7 +15,7 @@ class DelegatorDispatchRequest(BaseModel):
 router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 
 @router.post("/dispatch")
-def dispatch(req: DelegatorDispatchRequest):
+async def dispatch(req: DelegatorDispatchRequest):
     # 유효성 검사
     if not isinstance(req.payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a dictionary")
@@ -44,7 +45,8 @@ def dispatch(req: DelegatorDispatchRequest):
     try:
         print(f"[delegator] 파이프라인 시작: pdf_path={pdf_path}")
         print(f"[delegator] 파일 존재 확인: {file_path.exists()}")
-        result = run_full_pipeline(str(pdf_path))
+        # 동기 함수를 스레드 풀에서 실행하여 블로킹 방지
+        result = await asyncio.to_thread(run_full_pipeline, str(pdf_path))
         print(f"[delegator] 파이프라인 완료")
         return {"status": "ok", "result": result}
     except FileNotFoundError as e:
