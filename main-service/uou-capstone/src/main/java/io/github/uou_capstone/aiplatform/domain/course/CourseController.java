@@ -4,6 +4,7 @@ import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDt
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
     import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+@Tag(name = "과목 API", description = "인증된 사용자(특히 선생님과 학생)가 과목을 생성, 조회, 수정, 삭제하고 수강 신청하는 흐름을 다룸")
 @RestController
 @RequestMapping("/api/courses")
 @RequiredArgsConstructor

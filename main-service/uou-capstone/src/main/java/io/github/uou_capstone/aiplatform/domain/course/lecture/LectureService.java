@@ -7,16 +7,22 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.*;
 import io.github.uou_capstone.aiplatform.domain.material.Material;
 import io.github.uou_capstone.aiplatform.domain.material.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.*;
-import org.springframework.web.reactive.function.client.WebClient;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import reactor.core.publisher.Flux;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
+
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LectureService {
@@ -165,41 +171,83 @@ public class LectureService {
 
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
-//         4. AI 서비스(FastAPI) 호출
-
+        //4. AI 서비스(FastAPI) 비동기 호출
         AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
 
-        Flux<AiResponseDto> aiResponseFlux = aiServiceWebClient.post()
-                .uri("/generate-content")
-                .bodyValue(aiRequest)
+        aiServiceWebClient.post()
+                .uri("/api/delegator/dispatch")
+                .contentType(MediaType.APPLICATION_JSON) // Content-Type을 JSON으로 명시
+                .header("ngrok-skip-browser-warning", "true") //Ngrok 경고 스킵 헤더
+                .body(BodyInserters.fromValue(aiRequest))
                 .retrieve()
-                .bodyToFlux(AiResponseDto.class);
+                .toBodilessEntity()
+                .doOnError(error -> {
+                    log.error("AI 서비스 호출 실패: lectureId={}", lectureId, error);
+                    lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
+                    lectureRepository.save(lecture);
+                })
+                .subscribe();
 
-//        ///임시 테스트 코드 ///
-//        // ✅ 4-1. [임시 테스트용 코드] AI의 응답을 흉내내는 가짜 DTO 리스트 생성
-//        // (AiResponseDto에 @AllArgsConstructor 어노테이션이 있어야 합니다)
-//        List<AiResponseDto> fakeAiResults = List.of(
-//                new AiResponseDto("SCRIPT", "이것은 AI가 생성한 [가짜] 강의 대본입니다.", "{\"page\": 1}"),
-//                new AiResponseDto("SUMMARY", "이것은 AI가 생성한 [가짜] 요약입니다.", "{\"page\": \"1-5\"}")
-//        );
+        // 5.  강의 상태를 'PROCESSING'(처리 중)으로 변경
+        lecture.updateAiGeneratedStatus(AiGeneratedStatus.PROCESSING);
+        // (DB 저장은 @Transactional이 알아서 처리)
+//        // 4. AI 서비스(FastAPI) 동기 호출
+//        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess); // AiRequestDto(lectureId, pdfPath)로 수정 필요
 //
-//        // ✅ 4-2. [임시 테스트용 코드] 가짜 DTO 리스트를 Flux로 변환 (기존 코드 구조와 동일하게 맞춤)
-//        Flux<AiResponseDto> aiResponseFlux = Flux.fromIterable(fakeAiResults);
+//        // ✅ [수정] WebClient 호출을 동기(.block())로 변경
+//        AiApiResponseWrapper apiResponse = aiServiceWebClient.post()
+//                .uri("/api/delegator/dispatch") // 👈 ai-service 엔드포인트
+//                .contentType(MediaType.APPLICATION_JSON)
+//                .header("ngrok-skip-browser-warning", "true")
+//                .body(BodyInserters.fromValue(aiRequest))
+//                .retrieve()
+//                .bodyToMono(AiApiResponseWrapper.class) // 👈 껍데기 DTO로 응답을 받음
+//                .block(); // 👈 AI 서비스가 응답을 줄 때까지 (최대 5분) 동기식으로 기다림
 //
-//        /// 여기까지 ///
+//        // 5. ✅ [수정] 껍데기 DTO에서 실제 결과 리스트 추출
+//        List<AiResponseDto> aiResults;
+//        if (apiResponse != null && "ok".equals(apiResponse.getStatus())) {
+//            aiResults = apiResponse.getResults();
+//        } else {
+//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
+//            throw new RuntimeException("AI 서비스 호출에 실패했거나 'ok' 상태가 아닙니다.");
+//        }
+//
+//        // 6. AI 응답 결과를 DB에 저장
+//        List<GeneratedContent> contentsToSave = aiResults.stream()
+//                .map(dto -> GeneratedContent.builder()
+//                        .lecture(lecture)
+//                        .contentType(ContentType.valueOf(dto.getContentType()))
+//                        .contentData(dto.getContentData())
+//                        .materialReferences(dto.getMaterialReferences())
+//                        .build())
+//                .collect(Collectors.toList());
+//
+//        // 7. 강의 상태를 '완료'로 변경
+//        if (contentsToSave != null && !contentsToSave.isEmpty()) {
+//            generatedContentRepository.saveAll(contentsToSave);
+//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
+//        } else {
+//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
+//        }
+    }
+
+    @Transactional
+    public void saveAiContentCallback(Long lectureId, List<AiResponseDto> aiResults) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("콜백: 해당 강의가 없습니다."));
 
         // 5. AI 응답 결과를 DB에 저장
-        List<GeneratedContent> contentsToSave = aiResponseFlux
+        List<GeneratedContent> contentsToSave = aiResults.stream()
                 .map(dto -> GeneratedContent.builder()
                         .lecture(lecture)
                         .contentType(ContentType.valueOf(dto.getContentType()))
                         .contentData(dto.getContentData())
                         .materialReferences(dto.getMaterialReferences())
                         .build())
-                .collectList()
-                .block();
+                .collect(Collectors.toList());
 
-        // 6. 강의 상태를 '완료'로 변경
+        // 6. 강의 상태를 'COMPLETED'로 변경
         if (contentsToSave != null && !contentsToSave.isEmpty()) {
             generatedContentRepository.saveAll(contentsToSave);
             lecture.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
