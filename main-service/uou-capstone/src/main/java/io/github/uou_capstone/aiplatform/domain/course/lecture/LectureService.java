@@ -172,7 +172,7 @@ public class LectureService {
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
         //4. AI 서비스(FastAPI) 비동기 호출
-        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+        AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
 
         aiServiceWebClient.post()
                 .uri("/api/delegator/dispatch")
