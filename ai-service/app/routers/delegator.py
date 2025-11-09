@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import traceback
 import logging
 import asyncio
@@ -14,14 +14,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ✅ payload를 위한 구체적인 모델 정의
-class DispatchPayload(BaseModel):
-    pdf_path: str = Field(..., description="처리할 PDF 파일 경로")
-    lectureId: int = Field(..., description="콜백을 위한 강의 ID")
-
 class DelegatorDispatchRequest(BaseModel):
     stage: str
-    payload: DispatchPayload  # 👈 dict 대신 구체적인 모델 사용
+    payload: dict
 
 router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 
@@ -53,17 +48,18 @@ def convert_to_ai_response_dto(chapters_info, lecture_results):
 
 
 async def run_ai_pipeline_and_callback(
-    lectureId: int,
+    lecture_id: int,
     pdf_path: str
 ):
     """백그라운드에서 파이프라인을 실행하고 완료 후 웹훅 호출"""
     # Spring Boot 서버 URL (환경변수 또는 기본값)
     spring_boot_base_url = os.getenv("SPRING_BOOT_BASE_URL", "http://127.0.0.1:8080")
-    # Spring Boot의 실제 웹훅 URL: /api/ai/callback/lectures/{lecture_id}
+    # Spring Boot의 실제 웹훅 URL: /api/ai/callback/lectures/{lectureId}
+    # PathVariable은 lectureId (camelCase)이지만, payload에서는 lecture_id (snake_case) 사용
     webhook_url = f"{spring_boot_base_url}/api/ai/callback/lectures/{lecture_id}"
     
     try:
-        print(f"[background] 파이프라인 시작: lectureId={lecture_id}, pdf_path={pdf_path}")
+        print(f"[background] 파이프라인 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
         
         # 파이프라인 실행 (동기 함수를 비동기로 실행)
         # skip_qa=True로 설정하여 Q&A 처리 건너뛰기 (API 호출 시)
@@ -72,7 +68,7 @@ async def run_ai_pipeline_and_callback(
         # result는 (chapters_info, lecture_results) 튜플
         chapters_info, lecture_results = result
         
-        print(f"[background] 파이프라인 완료: lectureId={lecture_id}, 챕터 수: {len(chapters_info)}")
+        print(f"[background] 파이프라인 완료: lecture_id={lecture_id}, 챕터 수: {len(chapters_info)}")
         
         # Spring Boot가 기대하는 형식: List<AiResponseDto>
         ai_response_list = convert_to_ai_response_dto(chapters_info, lecture_results)
@@ -85,14 +81,14 @@ async def run_ai_pipeline_and_callback(
                 headers={"Content-Type": "application/json"}
             )
             response.raise_for_status()
-            print(f"[background] 웹훅 호출 성공: lectureId={lecture_id}, status={response.status_code}")
+            print(f"[background] 웹훅 호출 성공: lecture_id={lecture_id}, status={response.status_code}")
             
     except Exception as e:
         error_trace = traceback.format_exc()
-        print(f"[background] 파이프라인 실행 실패: lectureId={lecture_id}")
+        print(f"[background] 파이프라인 실행 실패: lecture_id={lecture_id}")
         print(f"에러: {type(e).__name__}: {str(e)}")
         print(error_trace)
-        logger.error(f"파이프라인 실행 실패: lectureId={lecture_id}\n{error_trace}")
+        logger.error(f"파이프라인 실행 실패: lecture_id={lecture_id}\n{error_trace}")
         
         # 웹훅 호출 (실패) - Spring Boot는 실패 시에도 빈 리스트를 받을 수 있음
         try:
@@ -103,7 +99,7 @@ async def run_ai_pipeline_and_callback(
                     json=[],  # 빈 리스트로 실패를 알림
                     headers={"Content-Type": "application/json"}
                 )
-                print(f"[background] 웹훅 호출 (에러): lectureId={lectureId}, status={response.status_code}")
+                print(f"[background] 웹훅 호출 (에러): lecture_id={lecture_id}, status={response.status_code}")
         except Exception as webhook_error:
             print(f"[background] 웹훅 호출 실패: {str(webhook_error)}")
             logger.error(f"웹훅 호출 실패: {str(webhook_error)}")
@@ -111,9 +107,27 @@ async def run_ai_pipeline_and_callback(
 
 @router.post("/dispatch")
 async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTasks):
-    # ✅ Pydantic이 자동으로 유효성 검사를 해주므로 수동 검사 코드 삭제
-    pdf_path = req.payload.pdf_path  # 👈 모델에서 직접 접근
-    lectureId = req.payload.lectureId  # 👈 모델에서 직접 접근
+    """
+    Spring Boot에서 호출하는 엔드포인트
+    - Spring Boot는 lectureId를 전달하지 않으므로, payload에서 추출하거나 다른 방법 필요
+    - 현재는 payload에 lectureId가 포함되어 있다고 가정
+    """
+    # 유효성 검사
+    if not isinstance(req.payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+
+    pdf_path = req.payload.get("pdf_path")
+    lecture_id = req.payload.get("lecture_id")  # 엔드포인트는 lecture_id (snake_case)
+    
+    if not pdf_path:
+        raise HTTPException(status_code=400, detail="payload.pdf_path is required")
+    
+    # lecture_id가 없으면 에러 (Spring Boot가 전달해야 함)
+    if not lecture_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="payload.lecture_id가 필요합니다. Spring Boot에서 lecture_id를 전달해야 합니다."
+        )
 
     # 파일 경로 검증
     file_path = Path(pdf_path)
@@ -132,16 +146,22 @@ async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTa
         print(f"[ERROR] {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
 
+    # lectureId를 int로 변환
+    try:
+        lecture_id = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lecture_id는 정수여야 합니다.")
+
     # ✅ 백그라운드 작업 시작
     background_tasks.add_task(
         run_ai_pipeline_and_callback,
-        lectureId,
+        lecture_id,
         pdf_path
     )
     
-    print(f"[delegator] 작업 시작: lectureId={lecture_id}, pdf_path={pdf_path}")
+    print(f"[delegator] 작업 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
     
-    # ✅ 즉시 응답 반환
+    # ✅ 즉시 응답 반환 (Spring Boot는 응답을 기다리지 않음)
     return {
         "status": "processing",
         "message": "AI content generation started."

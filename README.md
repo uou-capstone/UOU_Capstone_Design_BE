@@ -100,10 +100,10 @@
     ```json
     {
       "stage": "run_all",
-      "payload": {
-        "lectureId": 123,
-        "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
-      }
+       "payload": {
+         "lecture_id": 123,
+         "pdf_path": "C:\\Users\\<user>\\...\\ai-service\\uploads\\ch6_DQN.pdf"
+       }
     }
     ```
   - **즉시 Response(JSON)**: `{ "status": "processing", "message": "AI content generation started." }`
@@ -248,17 +248,17 @@
      {
        "stage": "run_all",
        "payload": {
-         "lectureId": 123,
+         "lecture_id": 123,
          "pdf_path": "업로드된_경로"
        }
      }
      ```
    - 즉시 Response: `{ "status": "processing", "message": "AI content generation started." }`
-   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}`
+   - ⚠️ `webhook_url`은 자동 생성됩니다: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (PathVariable은 camelCase)
 4. **Spring Boot는 사용자에게 즉시 응답** → "작업이 시작되었습니다"
 5. **FastAPI가 백그라운드에서 작업 실행** (1분~수분 소요)
 6. **작업 완료 시 FastAPI가 Spring Boot 웹훅 호출**
-   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
+   - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (PathVariable은 camelCase)
    - Body: `List<AiResponseDto>` 형식 (각 챕터별 강의 설명)
 7. **Spring Boot가 웹훅에서 결과 수신** → DB 저장 및 상태 업데이트
 
@@ -305,7 +305,7 @@ public class LectureService {
         // 3. 파이프라인 실행 (백그라운드 작업 시작)
         String dispatchUrl = aiServiceBaseUrl + "/api/delegator/dispatch";
         Map<String, Object> payload = Map.of(
-            "lectureId", lectureId,  // int 타입
+            "lecture_id", lectureId,  // 엔드포인트는 lecture_id (snake_case)
             "pdf_path", pdfPath
         );
         Map<String, Object> dispatchBody = Map.of(
@@ -350,39 +350,54 @@ public class LectureService {
 - [ ] 클라이언트로부터 파일을 받았나요? (MultipartFile)
 - [ ] `/api/files/upload`를 호출했나요? (파일을 FastAPI 서버로 업로드)
 - [ ] 업로드 응답의 `path`를 받았나요?
-- [ ] `/api/delegator/dispatch`에 `lectureId` (int), `pdf_path`를 전달했나요?
+- [ ] `/api/delegator/dispatch`에 `lecture_id` (int), `pdf_path`를 전달했나요?
 - [ ] `webhook_url`은 전달하지 않아도 됩니다 (자동 생성됨)
 - [ ] 웹훅 엔드포인트(`POST /api/ai/callback/lectures/{lectureId}`)를 구현했나요?
 - [ ] 웹훅에서 결과를 받아서 DB에 저장하는 로직이 있나요?
 - [ ] ❌ Spring Boot 서버의 경로(`C:\dev\...`)를 직접 전달하지 않았나요?
 
-**⚠️ Spring Boot 수정 필요 사항:**
+**⚠️ Spring Boot 수정 필요 사항 (필수):**
+
+현재 Spring Boot의 `AiRequestDto`는 `lectureId`를 전달하지 않습니다. FastAPI가 웹훅을 호출하려면 `lectureId`가 필요하므로 반드시 수정해야 합니다.
 
 1. **`AiRequestDto.java` 수정** - `lectureId` 추가:
 ```java
+package io.github.uou_capstone.aiplatform.domain.course.lecture.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import java.util.Map;
+
 @Getter
 public class AiRequestDto {
     private final String stage;
     private final Map<String, Object> payload; // String -> Object로 변경
 
+    /**
+     * FastAPI의 DelegatorDispatchRequest 형식에 맞춘 요청 DTO 생성자
+     * @param lectureId 웹훅 콜백을 위한 강의 ID
+     * @param pdfPath ai-service에 전달할 파일 경로
+     */
     public AiRequestDto(Long lectureId, String pdfPath) {
         this.stage = "run_all";
         this.payload = Map.of(
-            "lectureId", lectureId,  // int 타입
+            "lecture_id", lectureId,  // 엔드포인트는 lecture_id (snake_case)
             "pdf_path", pdfPath
         );
     }
 }
 ```
 
-2. **`LectureService.java` 수정** - `generateAiContent` 메서드:
+2. **`LectureService.java` 수정** - `generateAiContent` 메서드 (175번째 줄):
 ```java
-// 기존: AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+// 기존 (175번째 줄):
+// AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+
 // 수정:
 AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
 ```
 
-3. **웹훅 URL 확인** - FastAPI는 `/api/ai/callback/lectures/{lectureId}`로 호출합니다.
+3. **웹훅 URL 확인** - FastAPI는 `/api/ai/callback/lectures/{lectureId}`로 호출합니다. (이미 구현되어 있음)
 
 **주의:** 이 방법을 사용하면 파일이 FastAPI 서버의 `uploads` 디렉토리에 저장되므로, FastAPI 서버가 해당 경로에 접근할 수 있습니다.
 
