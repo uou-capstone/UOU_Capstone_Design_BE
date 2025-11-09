@@ -188,15 +188,88 @@
   );
   ```
 
-### 5.3) 연동 플로우
+### 5.3) 연동 플로우 (권장) ⚠️ 필수
 
-**방법 1: 2단계 (업로드 → 실행)**
-1. Spring Boot에서 클라이언트로부터 파일 수신
-2. FastAPI `/api/files/upload` 호출 → `path` 획득
-3. FastAPI `/api/delegator/dispatch` 호출 → `path` 전달
+**⚠️ 중요: Spring Boot 서버의 경로를 직접 전달하면 안 됩니다!**
+- ❌ `C:\dev\ai-platform-uploads\...` 같은 Spring Boot 서버 경로는 FastAPI에서 접근 불가
+- ✅ 반드시 `/api/files/upload`를 먼저 호출해서 FastAPI 서버에 파일을 업로드해야 합니다
 
-**방법 2: 1단계 (Spring Boot에서 직접 처리)**
-- Spring Boot에서 파일을 받아 FastAPI로 전달만 수행
+**Spring Boot → FastAPI 파일 업로드 → 파이프라인 실행**
+
+1. **Spring Boot에서 클라이언트로부터 파일 수신** (MultipartFile)
+2. **⚠️ 필수: FastAPI `/api/files/upload` 호출** → 파일을 FastAPI 서버의 `uploads` 디렉토리로 복사
+   - 응답: `{ "filename": "...", "path": "C:\\...\\ai-service\\uploads\\파일명.pdf" }`
+   - ⚠️ 이 `path`를 반드시 사용해야 합니다!
+3. **FastAPI `/api/delegator/dispatch` 호출** → 업로드된 `path` 전달
+   - Body: `{ "stage": "run_all", "payload": { "pdf_path": "업로드된_경로" } }`
+   - ⚠️ `pdf_path`는 반드시 `/api/files/upload` 응답의 `path`여야 합니다!
+
+**Spring Boot 예시 코드:**
+
+```java
+@Service
+@RequiredArgsConstructor
+public class LectureService {
+    
+    @Value("${ai-service.base-url:http://127.0.0.1:8000}")
+    private String aiServiceBaseUrl;
+    
+    private final RestTemplate restTemplate;
+    
+    public Map<String, Object> processLecture(MultipartFile file) {
+        // 1. FastAPI로 파일 업로드
+        String uploadUrl = aiServiceBaseUrl + "/api/files/upload";
+        
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
+            @Override
+            public String getFilename() {
+                return file.getOriginalFilename();
+            }
+        };
+        body.add("file", resource);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        HttpEntity<MultiValueMap<String, Object>> uploadRequest = 
+            new HttpEntity<>(body, headers);
+        
+        ResponseEntity<Map> uploadResponse = restTemplate.postForEntity(
+            uploadUrl, uploadRequest, Map.class
+        );
+        
+        // 2. 업로드된 파일 경로 획득
+        String pdfPath = (String) uploadResponse.getBody().get("path");
+        
+        // 3. 파이프라인 실행
+        String dispatchUrl = aiServiceBaseUrl + "/api/delegator/dispatch";
+        Map<String, Object> dispatchBody = Map.of(
+            "stage", "run_all",
+            "payload", Map.of("pdf_path", pdfPath)
+        );
+        
+        HttpHeaders dispatchHeaders = new HttpHeaders();
+        dispatchHeaders.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> dispatchRequest = 
+            new HttpEntity<>(dispatchBody, dispatchHeaders);
+        
+        ResponseEntity<Map> dispatchResponse = restTemplate.postForEntity(
+            dispatchUrl, dispatchRequest, Map.class
+        );
+        
+        return dispatchResponse.getBody();
+    }
+}
+```
+
+**⚠️ 체크리스트 (Spring Boot 개발자용):**
+- [ ] 클라이언트로부터 파일을 받았나요? (MultipartFile)
+- [ ] `/api/files/upload`를 호출했나요? (파일을 FastAPI 서버로 업로드)
+- [ ] 업로드 응답의 `path`를 받았나요?
+- [ ] `/api/delegator/dispatch`에 업로드된 `path`를 전달했나요?
+- [ ] ❌ Spring Boot 서버의 경로(`C:\dev\...`)를 직접 전달하지 않았나요?
+
+**주의:** 이 방법을 사용하면 파일이 FastAPI 서버의 `uploads` 디렉토리에 저장되므로, FastAPI 서버가 해당 경로에 접근할 수 있습니다.
 
 ### 5.4) 주의사항
 - **타임아웃**: AI 처리 시간이 길 수 있으므로 `RestTemplate`의 `readTimeout`을 충분히 설정 (최소 30초 권장)
