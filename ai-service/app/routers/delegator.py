@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from pydantic import BaseModel
 import traceback
 import logging
 import asyncio
@@ -7,21 +7,26 @@ import httpx
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from ai_agent.Lecture_Agent.integration import main as run_full_pipeline
+from datetime import datetime
+from typing import Dict, Any
+from ai_agent.Lecture_Agent.integration import (
+    main as run_full_pipeline,
+    prepare_lecture_content,
+    generate_supplementary_explanation,
+)
 
 # .env 파일 로드
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ✅ payload를 위한 구체적인 모델 정의
-class DispatchPayload(BaseModel):
-    pdf_path: str = Field(..., description="처리할 PDF 파일 경로")
-    lectureId: int = Field(..., description="콜백을 위한 강의 ID")
+# 파이프라인 세션 관리 (간단한 인메모리 저장소)
+pipeline_sessions: Dict[int, Dict[str, Any]] = {}
+pipeline_lock = asyncio.Lock()
 
 class DelegatorDispatchRequest(BaseModel):
     stage: str
-    payload: DispatchPayload  # 👈 dict 대신 구체적인 모델 사용
+    payload: dict
 
 router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 
@@ -52,18 +57,205 @@ def convert_to_ai_response_dto(chapters_info, lecture_results):
     return ai_responses
 
 
+def build_question_index(chapters: Any) -> Dict[str, Dict[str, Any]]:
+    """chapters 구조를 순회해 질문 인덱스를 생성"""
+    question_index: Dict[str, Dict[str, Any]] = {}
+
+    for chapter_idx, chapter in enumerate(chapters):
+        chapter_title = chapter.get("chapterTitle")
+        pdf_path = chapter.get("pdfPath")
+        questions = (chapter.get("questions") or {}).items()
+
+        for question_id, meta in questions:
+            question_index[question_id] = {
+                "chapterIndex": chapter_idx,
+                "chapterTitle": chapter_title,
+                "question": meta.get("question"),
+                "questionIndex": meta.get("questionIndex"),
+                "pdfPath": pdf_path,
+                "answered": False,
+                "answer": None,
+                "supplementary": None,
+                "answeredAt": None,
+            }
+
+    return question_index
+
+
+async def handle_generate_script_stage(lecture_id: int, pdf_path: str):
+    """강의 스크립트와 질문을 준비하고 세션을 저장"""
+    structured_content = await asyncio.to_thread(prepare_lecture_content, pdf_path)
+
+    chapters = structured_content.get("chapters", [])
+    question_index = build_question_index(chapters)
+
+    async with pipeline_lock:
+        existing_session = pipeline_sessions.get(lecture_id, {})
+        created_at = existing_session.get("createdAt", datetime.utcnow().isoformat())
+        session_payload = {
+            "lectureId": lecture_id,
+            "pdfPath": pdf_path,
+            "status": "ready",
+            "chapters": chapters,
+            "questions": question_index,
+            "createdAt": created_at,
+            "updatedAt": datetime.utcnow().isoformat(),
+            "error": None,
+        }
+        pipeline_sessions[lecture_id] = session_payload
+
+    return {
+        "status": "ready",
+        "lectureId": lecture_id,
+        "chapters": chapters,
+        "questionCount": len(question_index),
+    }
+
+
+async def start_generate_script_background(lecture_id: int, pdf_path: str):
+    """generate_script 요청을 백그라운드에서 처리"""
+    now_iso = datetime.utcnow().isoformat()
+    async with pipeline_lock:
+        existing_session = pipeline_sessions.get(lecture_id, {})
+        pipeline_sessions[lecture_id] = {
+            "lectureId": lecture_id,
+            "pdfPath": pdf_path,
+            "status": "preparing",
+            "chapters": existing_session.get("chapters", []),
+            "questions": existing_session.get("questions", {}),
+            "createdAt": existing_session.get("createdAt", now_iso),
+            "updatedAt": now_iso,
+            "error": None,
+        }
+
+    try:
+        await handle_generate_script_stage(lecture_id, pdf_path)
+    except Exception as exc:
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id, {})
+            session.update({
+                "status": "error",
+                "error": str(exc),
+                "updatedAt": datetime.utcnow().isoformat(),
+            })
+            pipeline_sessions[lecture_id] = session
+        logger.error(f"generate_script 실패: lecture_id={lecture_id}, error={exc}", exc_info=True)
+
+
+async def handle_answer_question_stage(payload: Dict[str, Any]):
+    """질문 답변을 받아 보충 설명을 생성"""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+
+    lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+    question_id = payload.get("questionId")
+    user_answer = payload.get("answer")
+
+    if lecture_id is None:
+        raise HTTPException(status_code=400, detail="payload.lectureId is required")
+    if question_id is None:
+        raise HTTPException(status_code=400, detail="payload.questionId is required")
+    if user_answer is None:
+        raise HTTPException(status_code=400, detail="payload.answer is required")
+
+    try:
+        lecture_id_int = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lectureId must be convertible to int")
+
+    async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id_int)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"lectureId {lecture_id} session not found")
+
+        question_entry = session["questions"].get(question_id)
+        if question_entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"questionId {question_id} not found for lectureId {lecture_id}"
+            )
+
+    question_text = question_entry.get("question")
+    pdf_path = question_entry.get("pdfPath")
+
+    if not question_text:
+        raise HTTPException(status_code=400, detail="Stored question text is empty. Regenerate script first.")
+    if not pdf_path:
+        raise HTTPException(status_code=400, detail="PDF path is missing in session.")
+
+    supplementary_explanation = await asyncio.to_thread(
+        generate_supplementary_explanation,
+        question_text,
+        user_answer,
+        pdf_path
+    )
+
+    async with pipeline_lock:
+        question_entry.update({
+            "answered": True,
+            "answer": user_answer,
+            "supplementary": supplementary_explanation,
+            "answeredAt": datetime.utcnow().isoformat(),
+        })
+        session["questions"][question_id] = question_entry
+        session["updatedAt"] = datetime.utcnow().isoformat()
+        pipeline_sessions[lecture_id_int] = session
+
+    return {
+        "status": "supplementary",
+        "lectureId": lecture_id_int,
+        "questionId": question_id,
+        "chapterTitle": question_entry.get("chapterTitle"),
+        "question": question_text,
+        "supplementary": supplementary_explanation,
+    }
+
+
+async def handle_get_session_stage(payload: Dict[str, Any]):
+    """현재 저장된 파이프라인 세션 정보를 반환"""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+
+    lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+    if lecture_id is None:
+        raise HTTPException(status_code=400, detail="payload.lectureId is required")
+
+    try:
+        lecture_id_int = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lectureId must be convertible to int")
+
+    async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id_int)
+
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"lectureId {lecture_id} session not found")
+
+    return {
+        "status": "session",
+        "lectureId": lecture_id_int,
+        "serviceStatus": session.get("status", "unknown"),
+        "chapters": session.get("chapters"),
+        "questions": session.get("questions"),
+        "createdAt": session.get("createdAt"),
+        "updatedAt": session.get("updatedAt"),
+        "error": session.get("error"),
+    }
+
+
 async def run_ai_pipeline_and_callback(
-    lectureId: int,
+    lecture_id: int,
     pdf_path: str
 ):
     """백그라운드에서 파이프라인을 실행하고 완료 후 웹훅 호출"""
     # Spring Boot 서버 URL (환경변수 또는 기본값)
     spring_boot_base_url = os.getenv("SPRING_BOOT_BASE_URL", "http://127.0.0.1:8080")
-    # Spring Boot의 실제 웹훅 URL: /api/ai/callback/lectures/{lecture_id}
+    # Spring Boot의 실제 웹훅 URL: /api/ai/callback/lectures/{lectureId}
+    # PathVariable은 lectureId (camelCase)이지만, payload에서는 lecture_id (snake_case) 사용
     webhook_url = f"{spring_boot_base_url}/api/ai/callback/lectures/{lecture_id}"
     
     try:
-        print(f"[background] 파이프라인 시작: lectureId={lecture_id}, pdf_path={pdf_path}")
+        print(f"[background] 파이프라인 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
         
         # 파이프라인 실행 (동기 함수를 비동기로 실행)
         # skip_qa=True로 설정하여 Q&A 처리 건너뛰기 (API 호출 시)
@@ -72,57 +264,172 @@ async def run_ai_pipeline_and_callback(
         # result는 (chapters_info, lecture_results) 튜플
         chapters_info, lecture_results = result
         
-        print(f"[background] 파이프라인 완료: lectureId={lecture_id}, 챕터 수: {len(chapters_info)}")
+        print(f"[background] 파이프라인 완료: lecture_id={lecture_id}, 챕터 수: {len(chapters_info)}")
         
         # Spring Boot가 기대하는 형식: List<AiResponseDto>
         ai_response_list = convert_to_ai_response_dto(chapters_info, lecture_results)
         
+        # ✅ [추가] main-service와 약속한 비밀키 헤더
+        # 환경변수에서 비밀키 읽기 (기본값: YOUR_SUPER_SECRET_AI_KEY_12345)
+        ai_secret_key = os.getenv("AI_SECRET_KEY", "YOUR_SUPER_SECRET_AI_KEY_12345")
+        headers = {
+            "Content-Type": "application/json",
+            "X-AI-SECRET-KEY": ai_secret_key  # yml과 동일한 키
+        }
+        
         # 웹훅 호출 (성공)
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # 리다이렉트를 따라가도록 설정 (follow_redirects=True)
+        # Spring Boot의 SecurityConfig가 수정되지 않은 경우를 대비
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # ✅ 헤더를 포함하여 콜백 전송
             response = await client.post(
                 webhook_url,
                 json=ai_response_list,  # Spring Boot는 List<AiResponseDto>를 기대
-                headers={"Content-Type": "application/json"}
+                headers=headers
             )
-            response.raise_for_status()
-            print(f"[background] 웹훅 호출 성공: lectureId={lecture_id}, status={response.status_code}")
+            
+            # 302 리다이렉트가 발생했는지 확인 (리다이렉트를 따라간 후 최종 응답 확인)
+            if response.status_code >= 400:
+                error_msg = (
+                    f"웹훅 호출 실패: status={response.status_code}\n"
+                    f"응답 내용: {response.text[:500] if hasattr(response, 'text') else 'N/A'}\n\n"
+                    f"⚠️ Spring Boot의 SecurityConfig에서 `/api/ai/callback/**` 경로를 permitAll()에 추가해야 합니다.\n"
+                    f"현재 웹훅 엔드포인트가 Spring Security에 의해 보호되어 있을 수 있습니다."
+                )
+                print(f"[ERROR] {error_msg}")
+                # 200-299 범위가 아니면 에러로 처리하지 않고 경고만 출력
+                if response.status_code >= 500:
+                    raise HTTPException(status_code=502, detail=error_msg)
+                else:
+                    print(f"[WARNING] 웹훅 호출이 비정상 응답을 받았지만 계속 진행합니다: status={response.status_code}")
+            
+            print(f"[background] 웹훅 호출 완료: lecture_id={lecture_id}, status={response.status_code}")
             
     except Exception as e:
         error_trace = traceback.format_exc()
-        print(f"[background] 파이프라인 실행 실패: lectureId={lecture_id}")
+        print(f"[background] 파이프라인 실행 실패: lecture_id={lecture_id}")
         print(f"에러: {type(e).__name__}: {str(e)}")
         print(error_trace)
-        logger.error(f"파이프라인 실행 실패: lectureId={lecture_id}\n{error_trace}")
+        logger.error(f"파이프라인 실행 실패: lecture_id={lecture_id}\n{error_trace}")
         
         # 웹훅 호출 (실패) - Spring Boot는 실패 시에도 빈 리스트를 받을 수 있음
         try:
+            # ✅ [추가] main-service와 약속한 비밀키 헤더
+            ai_secret_key = os.getenv("AI_SECRET_KEY", "YOUR_SUPER_SECRET_AI_KEY_12345")
+            headers = {
+                "Content-Type": "application/json",
+                "X-AI-SECRET-KEY": ai_secret_key  # yml과 동일한 키
+            }
+            
             # 실패 시 빈 리스트 전송 (Spring Boot가 에러를 감지하도록)
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
                 response = await client.post(
                     webhook_url,
                     json=[],  # 빈 리스트로 실패를 알림
-                    headers={"Content-Type": "application/json"}
+                    headers=headers
                 )
-                print(f"[background] 웹훅 호출 (에러): lectureId={lectureId}, status={response.status_code}")
+                print(f"[background] 웹훅 호출 (에러): lecture_id={lecture_id}, status={response.status_code}")
         except Exception as webhook_error:
             print(f"[background] 웹훅 호출 실패: {str(webhook_error)}")
             logger.error(f"웹훅 호출 실패: {str(webhook_error)}")
 
 
-@router.post("/dispatch")
-async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTasks):
-    # ✅ Pydantic이 자동으로 유효성 검사를 해주므로 수동 검사 코드 삭제
-    pdf_path = req.payload.pdf_path  # 👈 모델에서 직접 접근
-    lectureId = req.payload.lectureId  # 👈 모델에서 직접 접근
+@router.get("/dispatch")
+async def dispatch_get(request: Request):
+    """GET 요청 핸들러 - 정보 제공용"""
+    print(f"[INFO] GET 요청 수신: {request.url}")
+    return {
+        "message": "이 엔드포인트는 POST 요청을 사용하세요.",
+        "method": "POST",
+        "endpoint": "/api/delegator/dispatch",
+        "example": {
+            "stage": "run_all",
+            "payload": {
+                "lectureId": 1,
+                "pdf_path": "C:\\...\\ai-service\\uploads\\file.pdf"
+            }
+        }
+    }
 
-    # 파일 경로 검증
+
+@router.post("/dispatch")
+async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: BackgroundTasks = None):
+    """
+    Spring Boot에서 호출하는 엔드포인트
+    - Spring Boot는 lectureId를 전달하지 않으므로, payload에서 추출하거나 다른 방법 필요
+    - 현재는 payload에 lectureId가 포함되어 있다고 가정
+    """
+    # 요청이 None인 경우 처리
+    if req is None:
+        print(f"[ERROR] 요청이 None입니다. 요청 형식을 확인하세요.")
+        raise HTTPException(
+            status_code=400,
+            detail="요청 본문이 없습니다. JSON 형식으로 stage와 payload를 전달해야 합니다."
+        )
+
+    stage = (req.stage or "run_all").lower()
+
+    # 디버깅: 요청 내용 로그 출력
+    print(f"[delegator] POST 요청 수신: stage={stage}")
+    print(f"[delegator] payload 타입: {type(req.payload)}")
+    print(f"[delegator] payload 내용: {req.payload}")
+
+    if stage in {"answer_question", "get_session"}:
+        if stage == "answer_question":
+            return await handle_answer_question_stage(req.payload)
+        return await handle_get_session_stage(req.payload)
+
+    if background_tasks is None:
+        from fastapi import BackgroundTasks as BGT
+        background_tasks = BGT()
+
+    if not isinstance(req.payload, dict):
+        print(f"[ERROR] payload가 dict가 아닙니다: {type(req.payload)}")
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+
+    pdf_path = req.payload.get("pdf_path")
+    lecture_id = req.payload.get("lectureId") or req.payload.get("lecture_id")
+
+    print(f"[delegator] pdf_path: {pdf_path}")
+    print(f"[delegator] lecture_id: {lecture_id}")
+    print(f"[delegator] payload의 모든 키: {list(req.payload.keys()) if isinstance(req.payload, dict) else 'N/A'}")
+
+    if not pdf_path:
+        print(f"[ERROR] pdf_path가 없습니다. payload: {req.payload}")
+        raise HTTPException(status_code=400, detail="payload.pdf_path is required")
+
+    if not lecture_id:
+        print(f"[ERROR] lectureId 또는 lecture_id가 없습니다. payload: {req.payload}")
+        print(f"[ERROR] payload의 모든 키: {list(req.payload.keys()) if isinstance(req.payload, dict) else 'N/A'}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"payload.lectureId 또는 payload.lecture_id가 필요합니다. 현재 payload: {req.payload}. Spring Boot에서 lectureId를 전달해야 합니다."
+        )
+
     file_path = Path(pdf_path)
+    
+    # Spring Boot 서버 경로 감지 (예: C:\dev\ai-platform-uploads\...)
+    if "ai-platform-uploads" in pdf_path or ("C:\\dev\\" in pdf_path and "ai-service" not in pdf_path):
+        error_msg = (
+            f"❌ 잘못된 경로입니다! Spring Boot 서버의 경로를 직접 전달하고 있습니다.\n\n"
+            f"❌ 현재 전달된 경로: {pdf_path}\n\n"
+            f"✅ 해결 방법:\n"
+            f"1. Spring Boot에서 먼저 `/api/files/upload`를 호출하세요.\n"
+            f"2. 업로드 응답의 `path`를 받으세요 (예: C:\\...\\ai-service\\uploads\\...)\n"
+            f"3. 그 `path`를 `payload.pdf_path`로 전달하세요.\n\n"
+            f"⚠️ Spring Boot 서버 경로(`C:\\dev\\...`)는 FastAPI에서 접근할 수 없습니다!"
+        )
+        print(f"[ERROR] {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
+    
     if not file_path.exists():
         error_msg = (
             f"PDF 파일을 찾을 수 없습니다.\n"
             f"경로: {pdf_path}\n"
             f"절대 경로: {file_path.resolve()}\n"
-            f"파일이 존재하는지 확인해주세요."
+            f"파일이 존재하는지 확인해주세요.\n\n"
+            f"⚠️ 경로가 `/api/files/upload` 응답의 `path`인지 확인하세요.\n"
+            f"⚠️ Spring Boot 서버의 경로(`C:\\dev\\...`)를 직접 전달하면 안 됩니다!"
         )
         print(f"[ERROR] {error_msg}")
         raise HTTPException(status_code=404, detail=error_msg)
@@ -132,16 +439,52 @@ async def dispatch(req: DelegatorDispatchRequest, background_tasks: BackgroundTa
         print(f"[ERROR] {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
 
-    # ✅ 백그라운드 작업 시작
+    try:
+        lecture_id = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lecture_id는 정수여야 합니다.")
+
+    if stage == "generate_script":
+        now_iso = datetime.utcnow().isoformat()
+        async with pipeline_lock:
+            existing_session = pipeline_sessions.get(lecture_id)
+            pipeline_sessions[lecture_id] = {
+                "lectureId": lecture_id,
+                "pdfPath": pdf_path,
+                "status": "preparing",
+                "chapters": existing_session.get("chapters", []) if existing_session else [],
+                "questions": existing_session.get("questions", {}) if existing_session else {},
+                "createdAt": existing_session.get("createdAt", now_iso) if existing_session else now_iso,
+                "updatedAt": now_iso,
+                "error": None,
+            }
+
+        if background_tasks is None:
+            from fastapi import BackgroundTasks as BGT
+            background_tasks = BGT()
+
+        background_tasks.add_task(start_generate_script_background, lecture_id, pdf_path)
+        print(f"[delegator] generate_script 비동기 시작: lecture_id={lecture_id}")
+        return {
+            "status": "preparing",
+            "lectureId": lecture_id,
+            "message": "script generation started (async). poll get_session to check readiness."
+        }
+
+    if stage not in {"run_all", "start", "run_all_with_callback"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"지원하지 않는 stage입니다: {stage}. 사용 가능한 stage: run_all, generate_script, answer_question, get_session"
+        )
+
     background_tasks.add_task(
         run_ai_pipeline_and_callback,
-        lectureId,
+        lecture_id,
         pdf_path
     )
-    
-    print(f"[delegator] 작업 시작: lectureId={lecture_id}, pdf_path={pdf_path}")
-    
-    # ✅ 즉시 응답 반환
+
+    print(f"[delegator] 작업 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
+
     return {
         "status": "processing",
         "message": "AI content generation started."
