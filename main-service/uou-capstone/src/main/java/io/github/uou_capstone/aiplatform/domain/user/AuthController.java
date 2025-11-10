@@ -1,15 +1,15 @@
 package io.github.uou_capstone.aiplatform.domain.user;
 
 import io.github.uou_capstone.aiplatform.domain.user.dto.LoginRequestDto;
+import io.github.uou_capstone.aiplatform.domain.user.dto.MyInfoResponseDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.SignUpRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.TokenResponseDto;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -22,6 +22,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 public class AuthController {
 
     private final AuthService authService;
+    private final UserService userService;
 
     @Operation(summary = "회원가입", description = "이메일, 비밀번호, 이름, 역할을 받아 회원가입을 진행합니다.")
     @ApiResponses({
@@ -44,4 +45,14 @@ public class AuthController {
         TokenResponseDto token = authService.login(requestDto);
         return ResponseEntity.ok(token);
     }
+
+    @Operation(summary = "내 정보 조회", description = "현재 로그인한 사용자의 정보를 조회합니다.")
+    @GetMapping("/me")
+    // @PreAuthorize("isAuthenticated()") // 이미 SecurityConfig에서 /api/auth/** 외에는 인증을 요구하므로 생략 가능
+    public ResponseEntity<MyInfoResponseDto> getMyInfo() {
+        MyInfoResponseDto myInfo = userService.getMyInfo();
+        return ResponseEntity.ok(myInfo);
+    }
+
+
 }
