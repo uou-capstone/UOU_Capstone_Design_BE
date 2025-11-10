@@ -42,6 +42,7 @@
      ```
      GEMINI_API_KEY=YOUR_API_KEY
      SPRING_BOOT_BASE_URL=http://127.0.0.1:8080  # Spring Boot 서버 URL (선택)
+     AI_SECRET_KEY=YOUR_SUPER_SECRET_AI_KEY_12345  # 웹훅 호출 시 사용할 비밀키 (선택, 기본값: YOUR_SUPER_SECRET_AI_KEY_12345)
      ```
 
 3. 업로드 디렉토리 준비(테스트용 PDF 위치)
@@ -110,6 +111,9 @@
   - **웹훅 호출 (완료 시)**:
     - URL: `{SPRING_BOOT_BASE_URL}/api/ai/callback/lectures/{lectureId}` (자동 생성)
     - Method: `POST`
+    - Headers:
+      - `Content-Type: application/json`
+      - `X-AI-SECRET-KEY: {AI_SECRET_KEY}` (환경변수에서 읽음, 기본값: `YOUR_SUPER_SECRET_AI_KEY_12345`)
     - Body (성공): `List<AiResponseDto>` 형식
       ```json
       [
@@ -398,6 +402,19 @@ AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
 ```
 
 3. **웹훅 URL 확인** - FastAPI는 `/api/ai/callback/lectures/{lectureId}`로 호출합니다. (이미 구현되어 있음)
+
+4. **⚠️ 중요: SecurityConfig 수정** - 웹훅 엔드포인트를 인증 없이 접근 가능하도록 설정:
+```java
+// SecurityConfig.java의 authorizeHttpRequests 부분 수정
+.authorizeHttpRequests(auth -> auth
+    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+    // 웹훅 엔드포인트를 permitAll에 추가
+    .requestMatchers("/api/ai/callback/**").permitAll()  // 👈 추가 필요
+    .requestMatchers("/swagger-ui.html","/api/auth/**", "/login/**", "/oauth2/**", "/swagger-ui/**", "/api-docs/**", "/api/lectures/").permitAll()
+    .anyRequest().authenticated()
+)
+```
+**현재 문제**: 웹훅 호출 시 302 리다이렉트가 발생하여 OAuth2 로그인 페이지로 이동합니다. 위 설정을 추가하면 해결됩니다.
 
 **주의:** 이 방법을 사용하면 파일이 FastAPI 서버의 `uploads` 디렉토리에 저장되므로, FastAPI 서버가 해당 경로에 접근할 수 있습니다.
 
