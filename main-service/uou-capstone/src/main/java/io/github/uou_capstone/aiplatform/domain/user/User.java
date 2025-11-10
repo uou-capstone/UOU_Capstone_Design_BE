@@ -38,6 +38,16 @@ public class User {
     @Column(nullable = false)
     private Role role;
 
+    @OneToOne
+    @MapsId
+    @JoinColumn(name = "user_id")
+    private Teacher teacher;
+
+    @OneToOne
+    @MapsId
+    @JoinColumn(name = "user_id")
+    private Student student;
+
     @Builder
     public User(String email, String password, String fullName, LocalDate birthDate, String phoneNum, Role role) {
         this.email = email;

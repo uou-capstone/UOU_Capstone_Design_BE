@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.user;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -26,4 +27,12 @@ public class Teacher {
     @MapsId
     @JoinColumn(name = "teacher_id")
     private User user;
+
+    @Builder
+    public Teacher(Long id, String schoolName, String department, User user) {
+        this.id = id;
+        this.schoolName = schoolName;
+        this.department = department;
+        this.user = user;
+    }
 }
