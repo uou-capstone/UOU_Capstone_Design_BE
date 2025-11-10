@@ -28,7 +28,6 @@ import java.util.Arrays;
 @EnableWebSecurity
 @EnableMethodSecurity
 @RequiredArgsConstructor
-@Order(1)
 public class SecurityConfig {
 
     private final CustomOAuth2UserService customOAuth2UserService;
@@ -56,9 +55,11 @@ public class SecurityConfig {
             // API 경로별 접근 권한 설정
             .authorizeHttpRequests(auth -> auth
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // 모든 OPTIONS 요청을 허용
+
+                    .requestMatchers("/api/auth/**").permitAll()
                     .requestMatchers("/api/ai/callback/**").permitAll()
                     // 아래 경로들은 인증 없이 누구나 접근 가능
-                    .requestMatchers("/swagger-ui.html","/api/auth/**", "/login/**", "/oauth2/**", "/swagger-ui/**",
+                    .requestMatchers("/swagger-ui.html","/login/**", "/oauth2/**", "/swagger-ui/**",
                             "/api-docs/**", "/api/lectures/").permitAll()
                     // 그 외 모든 경로는 인증된 사용자만 접근 가능
                     .anyRequest().authenticated()

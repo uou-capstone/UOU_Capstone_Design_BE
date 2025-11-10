@@ -25,15 +25,14 @@ public class Student {
     @Column(nullable = false)
     private String classNumber;
 
+
     @OneToOne
-    @MapsId
-    @JoinColumn(name = "student_id")
+    @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
     @Builder
-    public Student(User user, long id, int grade, String classNumber) {
+    public Student(User user, int grade, String classNumber) {
         this.user = user;
-        this.id = id;
         this.grade = grade;
         this.classNumber = classNumber;
     }

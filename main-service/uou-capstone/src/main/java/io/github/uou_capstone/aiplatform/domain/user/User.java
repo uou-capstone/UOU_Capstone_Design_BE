@@ -38,14 +38,10 @@ public class User {
     @Column(nullable = false)
     private Role role;
 
-    @OneToOne
-    @MapsId
-    @JoinColumn(name = "user_id")
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
     private Teacher teacher;
 
-    @OneToOne
-    @MapsId
-    @JoinColumn(name = "user_id")
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
     private Student student;
 
     @Builder

@@ -23,14 +23,13 @@ public class Teacher {
     @Column(nullable = false)
     private String department;
 
+
     @OneToOne
-    @MapsId
-    @JoinColumn(name = "teacher_id")
+    @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
     @Builder
-    public Teacher(Long id, String schoolName, String department, User user) {
-        this.id = id;
+    public Teacher(String schoolName, String department, User user) {
         this.schoolName = schoolName;
         this.department = department;
         this.user = user;
