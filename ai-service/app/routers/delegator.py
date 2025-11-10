@@ -113,7 +113,7 @@ async def handle_generate_script_stage(lecture_id: int, pdf_path: str):
 
 
 async def start_generate_script_background(lecture_id: int, pdf_path: str):
-    """generate_script 요청을 백그라운드에서 처리"""
+    """generate_script 요청을 백그라운드에서 처리 (내부 async 함수)"""
     now_iso = datetime.utcnow().isoformat()
     async with pipeline_lock:
         existing_session = pipeline_sessions.get(lecture_id, {})
@@ -140,6 +140,14 @@ async def start_generate_script_background(lecture_id: int, pdf_path: str):
             })
             pipeline_sessions[lecture_id] = session
         logger.error(f"generate_script 실패: lecture_id={lecture_id}, error={exc}", exc_info=True)
+
+
+def start_generate_script_background_sync(lecture_id: int, pdf_path: str):
+    """
+    BackgroundTasks용 동기 래퍼 함수
+    FastAPI 공식 문서: BackgroundTasks는 동기 함수를 받아야 함
+    """
+    asyncio.run(start_generate_script_background(lecture_id, pdf_path))
 
 
 async def handle_answer_question_stage(payload: Dict[str, Any]):
@@ -334,6 +342,14 @@ async def run_ai_pipeline_and_callback(
             logger.error(f"웹훅 호출 실패: {str(webhook_error)}")
 
 
+def run_ai_pipeline_and_callback_sync(lecture_id: int, pdf_path: str):
+    """
+    BackgroundTasks용 동기 래퍼 함수
+    FastAPI 공식 문서: BackgroundTasks는 동기 함수를 받아야 함
+    """
+    asyncio.run(run_ai_pipeline_and_callback(lecture_id, pdf_path))
+
+
 @router.get("/dispatch")
 async def dispatch_get(request: Request):
     """GET 요청 핸들러 - 정보 제공용"""
@@ -463,7 +479,7 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
             from fastapi import BackgroundTasks as BGT
             background_tasks = BGT()
 
-        background_tasks.add_task(start_generate_script_background, lecture_id, pdf_path)
+        background_tasks.add_task(start_generate_script_background_sync, lecture_id, pdf_path)
         print(f"[delegator] generate_script 비동기 시작: lecture_id={lecture_id}")
         return {
             "status": "preparing",
@@ -478,7 +494,7 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
         )
 
     background_tasks.add_task(
-        run_ai_pipeline_and_callback,
+        run_ai_pipeline_and_callback_sync,
         lecture_id,
         pdf_path
     )
