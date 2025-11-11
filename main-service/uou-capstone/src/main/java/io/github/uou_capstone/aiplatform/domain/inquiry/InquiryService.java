@@ -6,7 +6,7 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.GeneratedContentR
 import io.github.uou_capstone.aiplatform.domain.course.lecture.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.AiQuestionAnswerRequestDto;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.AiRequestDto;
+
 import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaRequestDto;
 import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaResponseDto;
 import io.github.uou_capstone.aiplatform.domain.inquiry.dto.InquiryRequestDto;

@@ -33,7 +33,7 @@ public class Student {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
-    @OneToMany(mappedBy = "lecture", cascade =  CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "student", cascade =  CascadeType.ALL, orphanRemoval = true)
     private List<StudentInquiry> studentInquiries = new ArrayList<>();
 
     @Builder
