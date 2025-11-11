@@ -38,6 +38,12 @@ public class User {
     @Column(nullable = false)
     private Role role;
 
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
+    private Teacher teacher;
+
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
+    private Student student;
+
     @Builder
     public User(String email, String password, String fullName, LocalDate birthDate, String phoneNum, Role role) {
         this.email = email;

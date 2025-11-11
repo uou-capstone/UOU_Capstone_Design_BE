@@ -12,6 +12,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @Tag(name = "강의 API", description = "강의 생성, AI 콘텐츠 생성 등 강의 관련 API")
 @RestController
 @RequestMapping("/api")
@@ -66,5 +68,14 @@ public class LectureController {
     public ResponseEntity<String> generateAiContent(@PathVariable Long lectureId) {
         lectureService.generateAiContent(lectureId);
         return ResponseEntity.ok("AI 콘텐츠 생성 작업이 시작되었습니다.");
+    }
+
+    // AI 작업 상태 폴링(Polling) API
+    @Operation(summary = "AI 콘텐츠 생성 상태 조회", description = "AI 작업 상태를 조회합니다. (PROCESSING, COMPLETED, FAILED)")
+    @GetMapping("/lectures/{lectureId}/ai-status")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<Map<String, String>> getAiContentStatus(@PathVariable Long lectureId) {
+        String status = lectureService.getLectureAiStatus(lectureId);
+        return ResponseEntity.ok(Map.of("status", status));
     }
 }

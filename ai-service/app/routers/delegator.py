@@ -34,25 +34,47 @@ router = APIRouter(prefix="/api/delegator", tags=["delegator"])
 def convert_to_ai_response_dto(chapters_info, lecture_results):
     """
     integration.py의 결과를 Spring Boot의 AiResponseDto 형식으로 변환
+    질문 토큰([질문]...[/질문])을 포함한 세그먼트 구조로 변환
     
     Args:
         chapters_info: List[Tuple[str, str]] - (chapter_title, pdf_path)
         lecture_results: List[Dict[str, str]] - [{chapter_title: explanation}, ...]
     
     Returns:
-        List[Dict] - AiResponseDto 형식의 리스트
+        List[Dict] - AiResponseDto 형식의 리스트 (질문 포함 세그먼트)
     """
+    from ai_agent.Lecture_Agent.integration import build_segments_from_explanation
+    
     ai_responses = []
     
-    for (chapter_title, pdf_path), lecture_dict in zip(chapters_info, lecture_results):
+    for chapter_idx, ((chapter_title, pdf_path), lecture_dict) in enumerate(zip(chapters_info, lecture_results)):
         explanation = lecture_dict.get(chapter_title, "")
         
-        # SCRIPT 타입으로 변환 (강의 설명)
-        ai_responses.append({
-            "contentType": "SCRIPT",
-            "contentData": explanation,
-            "materialReferences": pdf_path  # PDF 경로를 참조로 저장
-        })
+        # 질문을 포함한 세그먼트로 분리
+        segments, question_meta = build_segments_from_explanation(
+            explanation,
+            prefix=f"c{chapter_idx}-"
+        )
+        
+        # 각 세그먼트를 AiResponseDto로 변환
+        for segment in segments:
+            if segment.get("type") == "script":
+                # 스크립트 세그먼트
+                ai_responses.append({
+                    "contentType": "SCRIPT",
+                    "contentData": segment.get("content", ""),
+                    "materialReferences": pdf_path
+                })
+            elif segment.get("type") == "question":
+                # 질문 세그먼트 - questionId 필드로 프론트엔드에서 질문 감지 가능
+                question_text = segment.get("question", "")
+                question_id = segment.get("questionId", "")
+                ai_responses.append({
+                    "contentType": "SCRIPT",  # Spring Boot ContentType enum에 QUESTION이 없으므로 SCRIPT 사용
+                    "contentData": question_text,  # 질문 내용만 포함 (토큰 없이)
+                    "materialReferences": pdf_path,
+                    "questionId": question_id  # ✅ 이 필드가 있으면 프론트엔드에서 질문으로 처리
+                })
     
     return ai_responses
 
@@ -487,10 +509,10 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
             "message": "script generation started (async). poll get_session to check readiness."
         }
 
-    if stage not in {"run_all", "start", "run_all_with_callback"}:
+    if stage not in {"run_all", "start", "run_all_with_callback", "pdf_processing"}:
         raise HTTPException(
             status_code=400,
-            detail=f"지원하지 않는 stage입니다: {stage}. 사용 가능한 stage: run_all, generate_script, answer_question, get_session"
+            detail=f"지원하지 않는 stage입니다: {stage}. 사용 가능한 stage: run_all, pdf_processing, generate_script, answer_question, get_session"
         )
 
     background_tasks.add_task(

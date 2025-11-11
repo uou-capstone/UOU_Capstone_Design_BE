@@ -6,6 +6,7 @@ import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationSucc
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -54,8 +55,12 @@ public class SecurityConfig {
             // API 경로별 접근 권한 설정
             .authorizeHttpRequests(auth -> auth
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // 모든 OPTIONS 요청을 허용
+
+                    .requestMatchers("/api/auth/**").permitAll()
+                    .requestMatchers("/api/ai/callback/**").permitAll()
                     // 아래 경로들은 인증 없이 누구나 접근 가능
-                    .requestMatchers("/swagger-ui.html","/api/auth/**", "/login/**", "/oauth2/**", "/swagger-ui/**", "/api-docs/**", "/api/lectures/").permitAll()
+                    .requestMatchers("/swagger-ui.html","/login/**", "/oauth2/**", "/swagger-ui/**",
+                            "/api-docs/**", "/api/lectures/").permitAll()
                     // 그 외 모든 경로는 인증된 사용자만 접근 가능
                     .anyRequest().authenticated()
             )

@@ -171,73 +171,37 @@ public class LectureService {
 
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
-        //4. AI 서비스(FastAPI) 비동기 호출
-        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess);
+        // 4. AI 서비스(FastAPI) 비동기 호출
+        AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
 
         aiServiceWebClient.post()
-                .uri("/api/delegator/dispatch")
-                .contentType(MediaType.APPLICATION_JSON) // Content-Type을 JSON으로 명시
-                .header("ngrok-skip-browser-warning", "true") //Ngrok 경고 스킵 헤더
+                .uri("/api/delegator/dispatch") //  ai-service 엔드포인트
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("ngrok-skip-browser-warning", "true") // (ngrok 사용 시)
                 .body(BodyInserters.fromValue(aiRequest))
                 .retrieve()
-                .toBodilessEntity()
-                .doOnError(error -> {
+                .toBodilessEntity() //  성공(200 OK) 여부만 확인
+                .doOnError(error -> { //  AI 서비스 호출 실패 시 예외 처리
                     log.error("AI 서비스 호출 실패: lectureId={}", lectureId, error);
-                    lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
-                    lectureRepository.save(lecture);
+                    updateLectureStatusToFailed(lectureId); // 👈 (별도 트랜잭션 메서드)
                 })
-                .subscribe();
+                .subscribe(); // 👈 ✅ 비동기 요청 실행 (결과를 기다리지 않음)
 
         // 5.  강의 상태를 'PROCESSING'(처리 중)으로 변경
         lecture.updateAiGeneratedStatus(AiGeneratedStatus.PROCESSING);
-        // (DB 저장은 @Transactional이 알아서 처리)
-//        // 4. AI 서비스(FastAPI) 동기 호출
-//        AiRequestDto aiRequest = new AiRequestDto(pdfPathToProcess); // AiRequestDto(lectureId, pdfPath)로 수정 필요
-//
-//        // ✅ [수정] WebClient 호출을 동기(.block())로 변경
-//        AiApiResponseWrapper apiResponse = aiServiceWebClient.post()
-//                .uri("/api/delegator/dispatch") // 👈 ai-service 엔드포인트
-//                .contentType(MediaType.APPLICATION_JSON)
-//                .header("ngrok-skip-browser-warning", "true")
-//                .body(BodyInserters.fromValue(aiRequest))
-//                .retrieve()
-//                .bodyToMono(AiApiResponseWrapper.class) // 👈 껍데기 DTO로 응답을 받음
-//                .block(); // 👈 AI 서비스가 응답을 줄 때까지 (최대 5분) 동기식으로 기다림
-//
-//        // 5. ✅ [수정] 껍데기 DTO에서 실제 결과 리스트 추출
-//        List<AiResponseDto> aiResults;
-//        if (apiResponse != null && "ok".equals(apiResponse.getStatus())) {
-//            aiResults = apiResponse.getResults();
-//        } else {
-//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
-//            throw new RuntimeException("AI 서비스 호출에 실패했거나 'ok' 상태가 아닙니다.");
-//        }
-//
-//        // 6. AI 응답 결과를 DB에 저장
-//        List<GeneratedContent> contentsToSave = aiResults.stream()
-//                .map(dto -> GeneratedContent.builder()
-//                        .lecture(lecture)
-//                        .contentType(ContentType.valueOf(dto.getContentType()))
-//                        .contentData(dto.getContentData())
-//                        .materialReferences(dto.getMaterialReferences())
-//                        .build())
-//                .collect(Collectors.toList());
-//
-//        // 7. 강의 상태를 '완료'로 변경
-//        if (contentsToSave != null && !contentsToSave.isEmpty()) {
-//            generatedContentRepository.saveAll(contentsToSave);
-//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
-//        } else {
-//            lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
-//        }
     }
 
+
+    /**
+     * AI 작업이 끝난 후 호출될 메서드 (DB 저장)
+     * (generateAiContent의 @Transactional과 분리된 새 트랜잭션으로 실행됨)
+     */
     @Transactional
     public void saveAiContentCallback(Long lectureId, List<AiResponseDto> aiResults) {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new IllegalArgumentException("콜백: 해당 강의가 없습니다."));
 
-        // 5. AI 응답 결과를 DB에 저장
+        // 7. AI 응답 결과를 DB에 저장
         List<GeneratedContent> contentsToSave = aiResults.stream()
                 .map(dto -> GeneratedContent.builder()
                         .lecture(lecture)
@@ -247,13 +211,37 @@ public class LectureService {
                         .build())
                 .collect(Collectors.toList());
 
-        // 6. 강의 상태를 'COMPLETED'로 변경
+        // 8. 강의 상태를 'COMPLETED'로 변경
         if (contentsToSave != null && !contentsToSave.isEmpty()) {
             generatedContentRepository.saveAll(contentsToSave);
             lecture.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
         } else {
             lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
         }
+    }
+
+    /**
+     * AI 작업 실패 시 호출될 메서드 (DB 저장)
+     */
+    @Transactional
+    public void updateLectureStatusToFailed(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
+        if (lecture != null) {
+            lecture.updateAiGeneratedStatus(AiGeneratedStatus.FAILED);
+        }
+    }
+
+    /**
+     *  폴링(Polling)을 위한 상태 조회 메서드
+     */
+    @Transactional(readOnly = true)
+    public String getLectureAiStatus(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        // (권한 확인 로직 추가 필요 - getLectureDetail과 동일하게)
+
+        return lecture.getAiGeneratedStatus().name();
     }
 
 }

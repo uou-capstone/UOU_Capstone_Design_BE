@@ -47,4 +47,16 @@ public class AssessmentController {
         AssessmentDetailDto assessmentDetail = assessmentService.getAssessmentDetail(assessmentId);
         return ResponseEntity.ok(assessmentDetail);
     }
+
+    @Operation(summary = "AI 퀴즈 생성 요청", description = "특정 강의 자료를 기반으로 AI 퀴즈 생성을 요청합니다.")
+    // 예시: /api/assessments/ai-generate?courseId=1&lectureId=1
+    @PostMapping("/ai-generate")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<String> generateAiQuiz(
+            @RequestParam Long courseId,
+            @RequestParam Long lectureId) {
+
+        assessmentService.generateAiQuiz(courseId, lectureId);
+        return ResponseEntity.ok("AI 퀴즈 생성 작업이 시작되었습니다.");
+    }
 }

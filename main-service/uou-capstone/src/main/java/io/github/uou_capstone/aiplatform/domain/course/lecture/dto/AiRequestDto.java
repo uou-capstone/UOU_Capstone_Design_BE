@@ -15,14 +15,14 @@ import java.util.Map;
 public class AiRequestDto {
 
     private final String stage;
-    private final Map<String, String> payload; // "payload": {"pdf_path": "..."}를 만들기 위함
+    private final Map<String, Object> payload; // ✅ String이 아니라 Object
 
-    /**
-     * FastAPI의 DelegatorDispatchRequest 형식에 맞춘 요청 DTO 생성자
-     * @param pdfPath ai-service에 전달할 파일 경로
-     */
-    public AiRequestDto(String pdfPath) {
-        this.stage = "pdf_processing"; // FastAPI에 전달할 stage 값 (임의 지정)
-        this.payload = Map.of("pdf_path", pdfPath); // payload 맵 생성
+    // 생성자
+    public AiRequestDto(Long lectureId, String pdfPath) {
+        this.stage = "pdf_processing";
+        this.payload = Map.of(
+                "lectureId", lectureId,   // ✅ 콜백을 위한 lectureId
+                "pdf_path", pdfPath
+        );
     }
 }
