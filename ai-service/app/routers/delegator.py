@@ -13,6 +13,9 @@ from ai_agent.Lecture_Agent.integration import (
     main as run_full_pipeline,
     prepare_lecture_content,
     generate_supplementary_explanation,
+    initialize_lecture,
+    generate_single_chapter,
+    get_next_segment,
 )
 
 # .env 파일 로드
@@ -66,14 +69,14 @@ def convert_to_ai_response_dto(chapters_info, lecture_results):
                     "materialReferences": pdf_path
                 })
             elif segment.get("type") == "question":
-                # 질문 세그먼트 - questionId 필드로 프론트엔드에서 질문 감지 가능
+                # 질문 세그먼트 - aiQuestionId 필드로 프론트엔드에서 질문 감지 가능
                 question_text = segment.get("question", "")
-                question_id = segment.get("questionId", "")
+                ai_question_id = segment.get("questionId", "")  # integration.py에서는 questionId로 생성됨
                 ai_responses.append({
                     "contentType": "SCRIPT",  # Spring Boot ContentType enum에 QUESTION이 없으므로 SCRIPT 사용
                     "contentData": question_text,  # 질문 내용만 포함 (토큰 없이)
                     "materialReferences": pdf_path,
-                    "questionId": question_id  # ✅ 이 필드가 있으면 프론트엔드에서 질문으로 처리
+                    "aiQuestionId": ai_question_id  # ✅ 이 필드가 있으면 프론트엔드에서 질문으로 처리
                 })
     
     return ai_responses
@@ -173,18 +176,18 @@ def start_generate_script_background_sync(lecture_id: int, pdf_path: str):
 
 
 async def handle_answer_question_stage(payload: Dict[str, Any]):
-    """질문 답변을 받아 보충 설명을 생성"""
+    """질문 답변을 받아 보충 설명을 생성 (스트리밍/배치 모드 공통)"""
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a dictionary")
 
     lecture_id = payload.get("lectureId") or payload.get("lecture_id")
-    question_id = payload.get("questionId")
+    ai_question_id = payload.get("aiQuestionId")
     user_answer = payload.get("answer")
 
     if lecture_id is None:
         raise HTTPException(status_code=400, detail="payload.lectureId is required")
-    if question_id is None:
-        raise HTTPException(status_code=400, detail="payload.questionId is required")
+    if ai_question_id is None:
+        raise HTTPException(status_code=400, detail="payload.aiQuestionId is required")
     if user_answer is None:
         raise HTTPException(status_code=400, detail="payload.answer is required")
 
@@ -198,21 +201,49 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
         if session is None:
             raise HTTPException(status_code=404, detail=f"lectureId {lecture_id} session not found")
 
-        question_entry = session["questions"].get(question_id)
-        if question_entry is None:
+        session_mode = session.get("mode", "batch")
+        
+        # 스트리밍 모드인 경우
+        if session_mode == "streaming":
+            # allQuestions에서 질문 찾기
+            question_entry = session.get("allQuestions", {}).get(ai_question_id)
+            if question_entry is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"aiQuestionId {ai_question_id} not found for lectureId {lecture_id}"
+                )
+            
+            # 대기 중인 질문인지 확인
+            if not session.get("waitingForAnswer") or session.get("currentQuestionId") != ai_question_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Not waiting for answer to question {ai_question_id}"
+                )
+        else:
+            # 배치 모드 (기존 방식)
+            question_entry = session.get("questions", {}).get(ai_question_id)
+            if question_entry is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"aiQuestionId {ai_question_id} not found for lectureId {lecture_id}"
+                )
+        
+        # 중복 답변 방지
+        if question_entry.get("answered"):
             raise HTTPException(
-                status_code=404,
-                detail=f"questionId {question_id} not found for lectureId {lecture_id}"
+                status_code=400,
+                detail=f"이미 답변한 질문입니다. (질문 ID: {ai_question_id})"
             )
 
     question_text = question_entry.get("question")
     pdf_path = question_entry.get("pdfPath")
 
     if not question_text:
-        raise HTTPException(status_code=400, detail="Stored question text is empty. Regenerate script first.")
+        raise HTTPException(status_code=400, detail="Stored question text is empty.")
     if not pdf_path:
         raise HTTPException(status_code=400, detail="PDF path is missing in session.")
 
+    # 보충 설명 생성
     supplementary_explanation = await asyncio.to_thread(
         generate_supplementary_explanation,
         question_text,
@@ -220,6 +251,7 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
         pdf_path
     )
 
+    # 세션 업데이트
     async with pipeline_lock:
         question_entry.update({
             "answered": True,
@@ -227,18 +259,216 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             "supplementary": supplementary_explanation,
             "answeredAt": datetime.utcnow().isoformat(),
         })
-        session["questions"][question_id] = question_entry
+        
+        if session_mode == "streaming":
+            # 스트리밍 모드: 대기 상태 해제
+            session["allQuestions"][ai_question_id] = question_entry
+            session["waitingForAnswer"] = False
+            session["currentQuestionId"] = None
+        else:
+            # 배치 모드: 기존 방식
+            session["questions"][ai_question_id] = question_entry
+        
         session["updatedAt"] = datetime.utcnow().isoformat()
         pipeline_sessions[lecture_id_int] = session
 
     return {
-        "status": "supplementary",
+        "status": "success",
         "lectureId": lecture_id_int,
-        "questionId": question_id,
-        "chapterTitle": question_entry.get("chapterTitle"),
+        "aiQuestionId": ai_question_id,
         "question": question_text,
+        "chapterTitle": question_entry.get("chapterTitle"),
         "supplementary": supplementary_explanation,
+        "canContinue": True  # 스트리밍 모드에서 다음 콘텐츠 요청 가능
     }
+
+
+async def handle_initialize_stage(payload: Dict[str, Any]):
+    """
+    PDF 분석만 수행하여 챕터 리스트 반환 (강의는 생성하지 않음)
+    스트리밍 모드의 첫 단계
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+    
+    lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+    pdf_path = payload.get("pdf_path")
+    
+    if lecture_id is None:
+        raise HTTPException(status_code=400, detail="payload.lectureId is required")
+    if not pdf_path:
+        raise HTTPException(status_code=400, detail="payload.pdf_path is required")
+    
+    try:
+        lecture_id_int = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lectureId must be convertible to int")
+    
+    # PDF 분석 실행 (챕터 정보와 원본 PDF 경로 반환)
+    chapters_info, original_pdf_path = await asyncio.to_thread(initialize_lecture, pdf_path)
+    
+    # 세션 초기화
+    now_iso = datetime.utcnow().isoformat()
+    async with pipeline_lock:
+        pipeline_sessions[lecture_id_int] = {
+            "lectureId": lecture_id_int,
+            "pdfPath": original_pdf_path,
+            "mode": "streaming",
+            "status": "initialized",
+            "chaptersInfo": chapters_info,  # [{"chapter_title": str, "start_page": int, "end_page": int}, ...]
+            "totalChapters": len(chapters_info),
+            "currentChapterIndex": 0,
+            "currentSegmentIndex": 0,
+            "waitingForAnswer": False,
+            "currentQuestionId": None,
+            "generatedChapters": {},  # 캐싱: {chapter_index: chapter_data}
+            "allQuestions": {},  # 모든 질문 통합: {questionId: {...}}
+            "createdAt": now_iso,
+            "updatedAt": now_iso,
+            "error": None,
+        }
+    
+    return {
+        "status": "initialized",
+        "lectureId": lecture_id_int,
+        "totalChapters": len(chapters_info),
+        "chapters": [
+            {"title": ch["chapter_title"], "startPage": ch["start_page"], "endPage": ch["end_page"]}
+            for ch in chapters_info
+        ],
+    }
+
+
+async def handle_get_next_content_stage(payload: Dict[str, Any]):
+    """
+    다음 콘텐츠 세그먼트 하나를 반환
+    질문이 나오면 waitingForAnswer = True로 설정하고 멈춤
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a dictionary")
+    
+    lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+    
+    if lecture_id is None:
+        raise HTTPException(status_code=400, detail="payload.lectureId is required")
+    
+    try:
+        lecture_id_int = int(lecture_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="lectureId must be convertible to int")
+    
+    async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id_int)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"lectureId {lecture_id} session not found. Call 'initialize' first.")
+        
+        # 답변 대기 중이면 에러
+        if session.get("waitingForAnswer"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Waiting for answer to question {session.get('currentQuestionId')}. Call 'answer_question' first."
+            )
+        
+        current_chapter_idx = session["currentChapterIndex"]
+        current_segment_idx = session["currentSegmentIndex"]
+        total_chapters = session["totalChapters"]
+        
+        # 모든 챕터 완료 체크
+        if current_chapter_idx >= total_chapters:
+            return {
+                "status": "completed",
+                "lectureId": lecture_id_int,
+                "message": "All chapters completed",
+                "hasMore": False
+            }
+        
+        # 현재 챕터 데이터 가져오기 (없으면 생성)
+        chapter_data = session["generatedChapters"].get(current_chapter_idx)
+        if chapter_data is None:
+            # 챕터 강의 생성 (백그라운드가 아닌 동기 처리)
+            chapter_info = session["chaptersInfo"][current_chapter_idx]
+            original_pdf_path = session["pdfPath"]
+            
+            print(f"[get_next_content] 챕터 {current_chapter_idx} 생성 중: {chapter_info['chapter_title']}")
+            chapter_data = await asyncio.to_thread(
+                generate_single_chapter,
+                original_pdf_path,
+                chapter_info,
+                current_chapter_idx
+            )
+            session["generatedChapters"][current_chapter_idx] = chapter_data
+            
+            # 질문들을 allQuestions에 추가
+            for qid, qmeta in chapter_data.get("questions", {}).items():
+                session["allQuestions"][qid] = {
+                    **qmeta,
+                    "chapterIndex": current_chapter_idx,
+                    "chapterTitle": chapter_info["chapter_title"],
+                    "pdfPath": chapter_data["pdfPath"],  # 분할된 챕터 PDF 경로
+                    "answered": False,
+                    "answer": None,
+                    "supplementary": None,
+                }
+            
+            session["updatedAt"] = datetime.utcnow().isoformat()
+        
+        # 다음 세그먼트 가져오기
+        segment, next_segment_idx = get_next_segment(chapter_data, current_segment_idx)
+        
+        if segment is None:
+            # 현재 챕터 끝 → 다음 챕터로
+            session["currentChapterIndex"] = current_chapter_idx + 1
+            session["currentSegmentIndex"] = 0
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            pipeline_sessions[lecture_id_int] = session
+            
+            # 다음 챕터가 있는지 확인
+            if session["currentChapterIndex"] >= total_chapters:
+                return {
+                    "status": "completed",
+                    "lectureId": lecture_id_int,
+                    "message": "All chapters completed",
+                    "hasMore": False
+                }
+            else:
+                # 다음 챕터의 첫 세그먼트를 반환하도록 재귀 호출
+                return await handle_get_next_content_stage(payload)
+        
+        # 세그먼트가 있음
+        session["currentSegmentIndex"] = next_segment_idx
+        
+        if segment["type"] == "question":
+            # 질문 세그먼트 → 대기 상태로 전환
+            question_id = segment["questionId"]
+            session["waitingForAnswer"] = True
+            session["currentQuestionId"] = question_id
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            pipeline_sessions[lecture_id_int] = session
+            
+            return {
+                "status": "question",
+                "lectureId": lecture_id_int,
+                "contentType": "SCRIPT",
+                "contentData": segment["question"],
+                "aiQuestionId": question_id,
+                "chapterTitle": chapter_data["chapterTitle"],
+                "hasMore": True,
+                "waitingForAnswer": True
+            }
+        else:
+            # 일반 스크립트 세그먼트
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            pipeline_sessions[lecture_id_int] = session
+            
+            return {
+                "status": "content",
+                "lectureId": lecture_id_int,
+                "contentType": "SCRIPT",
+                "contentData": segment["content"],
+                "chapterTitle": chapter_data["chapterTitle"],
+                "hasMore": True,
+                "waitingForAnswer": False
+            }
 
 
 async def handle_get_session_stage(payload: Dict[str, Any]):
@@ -412,10 +642,16 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
     print(f"[delegator] payload 타입: {type(req.payload)}")
     print(f"[delegator] payload 내용: {req.payload}")
 
-    if stage in {"answer_question", "get_session"}:
+    # 즉시 처리 stage: answer_question, get_session, initialize, get_next_content
+    if stage in {"answer_question", "get_session", "initialize", "get_next_content"}:
         if stage == "answer_question":
             return await handle_answer_question_stage(req.payload)
-        return await handle_get_session_stage(req.payload)
+        elif stage == "get_session":
+            return await handle_get_session_stage(req.payload)
+        elif stage == "initialize":
+            return await handle_initialize_stage(req.payload)
+        elif stage == "get_next_content":
+            return await handle_get_next_content_stage(req.payload)
 
     if background_tasks is None:
         from fastapi import BackgroundTasks as BGT

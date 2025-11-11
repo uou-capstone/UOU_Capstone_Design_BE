@@ -11,19 +11,19 @@ public class AiQuestionAnswerRequestDto {
     @Getter
     private static class Payload {
         private final Long lectureId;
-        private final String questionId;
+        private final String aiQuestionId;  // AI 생성 질문 ID
         private final String answer;
 
-        public Payload(Long lectureId, String questionId, String answer) {
+        public Payload(Long lectureId, String aiQuestionId, String answer) {
             this.lectureId = lectureId;
-            this.questionId = questionId;
+            this.aiQuestionId = aiQuestionId;
             this.answer = answer;
         }
     }
 
     // 생성자
-    public AiQuestionAnswerRequestDto(Long lectureId, String questionId, String answer) {
+    public AiQuestionAnswerRequestDto(Long lectureId, String aiQuestionId, String answer) {
         this.stage = "answer_question"; // 👈 AI팀과 협의된 stage
-        this.payload = new Payload(lectureId, questionId, answer);
+        this.payload = new Payload(lectureId, aiQuestionId, answer);
     }
 }

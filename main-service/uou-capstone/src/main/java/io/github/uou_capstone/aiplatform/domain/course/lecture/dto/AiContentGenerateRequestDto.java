@@ -23,7 +23,7 @@ public class AiContentGenerateRequestDto {  // ai 강의 대본 생성
 
     // 생성자
     public AiContentGenerateRequestDto(Long lectureId, String pdfPath) {
-        this.stage = "pdf_processing"; //  AI팀과 협의된 stage
+        this.stage = "pdf_processing"; // AI 콘텐츠 생성용 stage (run_all과 동일하게 동작)
         this.payload = new Payload(lectureId, pdfPath);
     }
 }
