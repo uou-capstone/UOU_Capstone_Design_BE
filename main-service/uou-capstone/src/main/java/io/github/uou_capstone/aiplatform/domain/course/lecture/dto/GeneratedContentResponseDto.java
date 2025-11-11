@@ -9,10 +9,12 @@ public class GeneratedContentResponseDto {
     private final Long contentId;
     private final ContentType contentType;
     private final String contentData; // 실제 텍스트 내용
+    private final String aiQuestionId; // 대본에서 질문
 
     public GeneratedContentResponseDto(GeneratedContent content) {
         this.contentId = content.getId();
         this.contentType = content.getContentType();
         this.contentData = content.getContentData();
+        this.aiQuestionId = content.getAiQuestionId();
     }
 }

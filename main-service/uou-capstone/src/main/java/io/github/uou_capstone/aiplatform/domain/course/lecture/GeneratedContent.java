@@ -39,13 +39,17 @@ public class GeneratedContent extends BaseTimeEntity {
     @JoinColumn(name = "student_id")
     private Student student; // 학생이 생성했을 경우 (nullable)
 
+    @Column(name = "ai_question_id")
+    private String aiQuestionId;
+
     @Builder
     public GeneratedContent(Lecture lecture, ContentType contentType, String contentData,
-                            String materialReferences, Student student) {
+                            String materialReferences, Student student,  String aiQuestionId) {
         this.lecture = lecture;
         this.contentType = contentType;
         this.contentData = contentData;
         this.materialReferences = materialReferences;
         this.student = student;
+        this.aiQuestionId = aiQuestionId;
     }
 }

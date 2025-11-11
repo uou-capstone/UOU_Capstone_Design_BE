@@ -7,12 +7,12 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public class AiQaRequestDto {
-    @JsonProperty("original_q") //  ai-service 모델의 필드명(스네이크 케이스)에 맞춤
-    private String originalQ;
+    @JsonProperty("lectureId") //  ai-service 페이로드에 맞춤
+    private Long lectureId;
 
-    @JsonProperty("user_answer")
-    private String userAnswer;
+    @JsonProperty("aiQuestionId") //  ai-service 페이로드에 맞춤
+    private String aiQuestionId;
 
-    @JsonProperty("pdf_path")
-    private String pdfPath;
+    @JsonProperty("answer") //  ai-service 페이로드에 맞춤
+    private String answer;
 }
