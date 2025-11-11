@@ -179,7 +179,7 @@ public class AssessmentService {
         AiQuizGenerateRequestDto aiRequest = new AiQuizGenerateRequestDto(assessment.getId(), pdfPath);
 
         aiServiceWebClient.post()
-                .uri("/api/quiz/generate") // 👈 ai-service의 퀴즈 생성 엔드포인트 (예시)
+                .uri("/api/quiz/generate") // ai-service의 퀴즈 생성 엔드포인트 (예시)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(BodyInserters.fromValue(aiRequest))
                 .retrieve()
@@ -194,13 +194,13 @@ public class AssessmentService {
         return assessment.getId();
     }
 
-    // ✅ 2. AI 퀴즈 콜백 처리 메서드
+    // AI 퀴즈 콜백 처리 메서드
     @Transactional
     public void saveAiQuizCallback(Long assessmentId, List<QuestionCreateDto> quizResults) {
         Assessment assessment = assessmentRepository.findById(assessmentId)
                 .orElseThrow(() -> new IllegalArgumentException("콜백: 해당 평가가 없습니다."));
 
-        // 5. 콜백으로 받은 퀴즈 문제와 선택지를 DB에 저장
+        // 1. 콜백으로 받은 퀴즈 문제와 선택지를 DB에 저장
         for (QuestionCreateDto questionDto : quizResults) {
             Question newQuestion = Question.builder()
                     .assessment(assessment)
@@ -208,6 +208,7 @@ public class AssessmentService {
                     .type(questionDto.getType())
                     .createdBy(CreatedBy.AI) // AI가 생성
                     .build();
+
             questionRepository.save(newQuestion);
 
             if (questionDto.getChoiceOptions() != null) {
@@ -222,7 +223,7 @@ public class AssessmentService {
             }
         }
 
-        // 6. 평가 상태를 '완료'로 변경
-        // assessment.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
+        // 2. 평가 상태를 '완료'로 변경
+        assessment.updateAiGeneratedStatus(AiGeneratedStatus.COMPLETED);
     }
 }

@@ -19,7 +19,7 @@ public class AiRequestDto {
 
     // 생성자
     public AiRequestDto(Long lectureId, String pdfPath) {
-        this.stage = "pdf_processing";
+        this.stage = "run_all_with_callback";
         this.payload = Map.of(
                 "lectureId", lectureId,   // ✅ 콜백을 위한 lectureId
                 "pdf_path", pdfPath
