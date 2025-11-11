@@ -28,7 +28,7 @@ public class GeneratedContent extends BaseTimeEntity {
     private ContentType contentType; // 콘텐츠 종류
 
     @Lob // json
-    @Column(name = "content_data", nullable = false)
+    @Column(name = "content_data", columnDefinition = "TEXT", nullable = false)
     private String contentData;
 
     @Lob //json

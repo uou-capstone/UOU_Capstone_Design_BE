@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.lecture;
 
 import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
 import io.github.uou_capstone.aiplatform.domain.course.Course;
+import io.github.uou_capstone.aiplatform.domain.inquiry.StudentInquiry;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -39,6 +40,8 @@ public class Lecture extends BaseTimeEntity {
     @OneToMany(mappedBy = "lecture", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<GeneratedContent> generatedContents = new ArrayList<>();
 
+    @OneToMany(mappedBy = "lecture", cascade =  CascadeType.ALL, orphanRemoval = true)
+    private List<StudentInquiry> studentInquiries = new ArrayList<>();
 
     @Enumerated(EnumType.STRING)
     @Column(name = "ai_generated_status", nullable = false)

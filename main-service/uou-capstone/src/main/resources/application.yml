@@ -22,6 +22,20 @@ spring:
      username: root
      password: 1234
 
+  jpa:
+    hibernate:
+      # ddl-auto 옵션:
+      # create: 서버 시작 시 기존 테이블 삭제 후 새로 생성
+      # update: 변경된 스키마만 찾아서 반영
+      # validate: Entity와 테이블이 정상 매핑되었는지 검증만 함
+      # none: 사용 안 함 (운영 환경에서 권장)
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
+        default_batch_fetch_size: 100
+    show-sql: true # 실행되는 SQL 쿼리를 로그에 출력
+
   servlet:
     multipart:
       max-file-size: 50MB    # 👈 개별 파일 최대 용량 (예: 50MB)
@@ -72,19 +86,7 @@ springdoc:
     description: 이 문서는 AI 기반 교육 플랫폼의 API 명세서입니다.
     version: v1.0.0
 
-  jpa:
-    hibernate:
-      # ddl-auto 옵션:
-      # create: 서버 시작 시 기존 테이블 삭제 후 새로 생성
-      # update: 변경된 스키마만 찾아서 반영
-      # validate: Entity와 테이블이 정상 매핑되었는지 검증만 함
-      # none: 사용 안 함 (운영 환경에서 권장)
-      ddl-auto: update
-    properties:
-      hibernate:
-        format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
-        default_batch_fetch_size: 100
-    show-sql: true # 실행되는 SQL 쿼리를 로그에 출력
+
 
 
 # =================================================================================

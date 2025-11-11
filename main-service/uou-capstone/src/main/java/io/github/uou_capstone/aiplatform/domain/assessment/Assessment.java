@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.assessment;
 
 import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
 import io.github.uou_capstone.aiplatform.domain.course.Course;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.AiGeneratedStatus;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -42,11 +43,20 @@ public class Assessment extends BaseTimeEntity {
     @Column(name = "assessment_type", nullable = false)
     private AssessmentType type; // 월말 평가 느낌, 그냥 퀴즈 느낌
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ai_generated_status", nullable = false)
+    private AiGeneratedStatus aiGeneratedStatus;
+
     @Builder
     public Assessment(Course course, String title, AssessmentType type,  LocalDateTime dueDate) {
         this.course = course;
         this.title = title;
         this.type = type;
         this.dueDate = dueDate;
+        this.aiGeneratedStatus = AiGeneratedStatus.PENDING; // 생성 시 기본 상태는 PENDING
+    }
+
+    public void updateAiGeneratedStatus(AiGeneratedStatus status) {
+        this.aiGeneratedStatus = status;
     }
 }

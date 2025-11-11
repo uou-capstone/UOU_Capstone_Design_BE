@@ -36,6 +36,8 @@ public class AuthService {
                 .password(encodedPassword)
                 .fullName(requestDto.getFullName())
                 .role(requestDto.getRole())
+                .phoneNum(requestDto.getPhoneNum())
+                .birthDate(requestDto.getBirthdate())
                 .build();
 
         // 4. 사용자 저장
@@ -44,22 +46,23 @@ public class AuthService {
         // 5. Role에 따라 테이블 저장
         if (requestDto.getRole() == Role.STUDENT) {
             Student student = Student.builder()
-                    .user(user)
-                    .grade(requestDto.getGrade()) // DTO에 추가했다면 반영
-                    .classNumber(requestDto.getClassNumber()) // DTO에 추가했다면 반영
+                    .user(savedUser)
+                    .grade(requestDto.getGrade()!= null ? requestDto.getGrade() : 0)
+                    .classNumber(requestDto.getClassNumber()!= null ? requestDto.getClassNumber() : "반 미지정")
                     .build();
             studentRepository.save(student);
 
         } else if (requestDto.getRole() == Role.TEACHER) {
             Teacher teacher = Teacher.builder()
-                    .user(user)
-                    .schoolName(requestDto.getSchoolName()) // DTO에 추가했다면 반영
-                    .department(requestDto.getDepartment()) // DTO에 추가했다면 반영
+                    .user(savedUser)
+                    .schoolName(requestDto.getSchoolName() != null ? requestDto.getSchoolName() : "학교 미지정")
+                    .department(requestDto.getDepartment() != null ? requestDto.getDepartment() : "학과 미지정")
                     .build();
             teacherRepository.save(teacher);
+
         }
 
-        return user.getId();
+        return savedUser.getId();
     }
 
 
