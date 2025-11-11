@@ -172,7 +172,7 @@ public class LectureService {
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
         // 4. AI 서비스(FastAPI) 비동기 호출
-        AiRequestDto aiRequest = new AiRequestDto(lectureId, pdfPathToProcess);
+        AiContentGenerateRequestDto aiRequest = new AiContentGenerateRequestDto(lectureId, pdfPathToProcess);
 
         aiServiceWebClient.post()
                 .uri("/api/delegator/dispatch") //  ai-service 엔드포인트
@@ -185,7 +185,7 @@ public class LectureService {
                     log.error("AI 서비스 호출 실패: lectureId={}", lectureId, error);
                     updateLectureStatusToFailed(lectureId); // 👈 (별도 트랜잭션 메서드)
                 })
-                .subscribe(); // 👈 ✅ 비동기 요청 실행 (결과를 기다리지 않음)
+                .subscribe(); // 비동기 요청 실행 (결과를 기다리지 않음)
 
         // 5.  강의 상태를 'PROCESSING'(처리 중)으로 변경
         lecture.updateAiGeneratedStatus(AiGeneratedStatus.PROCESSING);
