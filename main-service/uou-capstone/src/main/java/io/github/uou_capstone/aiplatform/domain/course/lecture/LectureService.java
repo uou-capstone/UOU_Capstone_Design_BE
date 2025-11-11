@@ -208,6 +208,7 @@ public class LectureService {
                         .contentType(ContentType.valueOf(dto.getContentType()))
                         .contentData(dto.getContentData())
                         .materialReferences(dto.getMaterialReferences())
+                        .aiQuestionId(dto.getAiQuestionId())
                         .build())
                 .collect(Collectors.toList());
 

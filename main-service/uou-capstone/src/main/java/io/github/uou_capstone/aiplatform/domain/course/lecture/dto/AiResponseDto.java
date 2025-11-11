@@ -15,4 +15,5 @@ public class AiResponseDto {
     private String contentType; // 예: "SCRIPT", "SUMMARY"
     private String contentData; // 예: "생성된 텍스트 대본..."
     private String materialReferences; // 예: "참조한 자료 ID JSON..."
+    private String aiQuestionId;
 }
