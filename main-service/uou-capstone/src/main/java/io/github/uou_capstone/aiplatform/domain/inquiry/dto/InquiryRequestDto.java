@@ -4,6 +4,6 @@ import lombok.Getter;
 
 @Getter
 public class InquiryRequestDto {
-    private Long lectureId;
-    private String questionText;
+    private String aiQuestionId;
+    private String answerText;
 }

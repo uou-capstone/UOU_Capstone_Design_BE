@@ -1,27 +1,28 @@
 package io.github.uou_capstone.aiplatform.domain.course.lecture.dto;
 
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 
 import java.util.Map;
 
-
 /**
- * (Spring → FastAPI 로 보낼 요청)
- * // 예시: AI가 처리할 PDF 파일의 경로
- * (실제로는 파일 자체를 보낼 수도 있습니다)
+ * AI Service (FastAPI)의 /api/delegator/dispatch 엔드포인트로 보낼 요청 DTO
+ * FastAPI의 DelegatorDispatchRequest 형식에 맞춘 요청
  */
 @Getter
 public class AiRequestDto {
 
     private final String stage;
-    private final Map<String, Object> payload; // ✅ String이 아니라 Object
+    private final Map<String, Object> payload;
 
-    // 생성자
+    /**
+     * AI 강의 콘텐츠 생성용 생성자
+     * @param lectureId 웹훅 콜백을 위한 강의 ID
+     * @param pdfPath ai-service에 전달할 파일 경로
+     */
     public AiRequestDto(Long lectureId, String pdfPath) {
-        this.stage = "pdf_processing";
+        this.stage = "run_all";  // README에 명시된 대로 "run_all" 사용
         this.payload = Map.of(
-                "lectureId", lectureId,   // ✅ 콜백을 위한 lectureId
+                "lectureId", lectureId,  // 웹훅 콜백을 위한 lectureId
                 "pdf_path", pdfPath
         );
     }

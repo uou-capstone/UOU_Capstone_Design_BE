@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor
 public class AiQaResponseDto {
-    @JsonProperty("supplementary_explanation") // ai-service의 응답 필드명에 맞춤
-    private String supplementaryExplanation;
+    //  ai-service의 handle_answer_question_stage 응답 필드
+    @JsonProperty("supplementary")
+    private String supplementary;
 }

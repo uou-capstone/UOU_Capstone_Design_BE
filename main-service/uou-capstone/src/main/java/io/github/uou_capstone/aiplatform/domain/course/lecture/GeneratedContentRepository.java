@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.lecture;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface GeneratedContentRepository extends JpaRepository<GeneratedContent, Long> {
 
@@ -13,4 +14,6 @@ public interface GeneratedContentRepository extends JpaRepository<GeneratedConte
      */
     // Lecture ID로 모든 GeneratedContent를 찾는 메서드 추가
     List<GeneratedContent> findByLectureId(Long lectureId);
+
+    Optional<GeneratedContent> findByAiQuestionId(String aiQuestionId);
 }
