@@ -2,8 +2,11 @@ package io.github.uou_capstone.aiplatform.domain.user;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+
+import java.time.LocalDate;
 
 @Entity
 @Getter
@@ -26,4 +29,12 @@ public class Student {
     @MapsId
     @JoinColumn(name = "student_id")
     private User user;
+
+    @Builder
+    public Student(User user, long id, int grade, String classNumber) {
+        this.user = user;
+        this.id = id;
+        this.grade = grade;
+        this.classNumber = classNumber;
+    }
 }

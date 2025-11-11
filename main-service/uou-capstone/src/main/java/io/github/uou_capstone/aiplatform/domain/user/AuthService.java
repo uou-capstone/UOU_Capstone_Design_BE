@@ -16,6 +16,9 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider; // (나중에 추가할 JWT 토큰 제공자)
+    private final TeacherRepository teacherRepository;
+    private final StudentRepository studentRepository;
+
 
     @Transactional
     public Long signup(SignUpRequestDto requestDto) {
@@ -37,8 +40,28 @@ public class AuthService {
 
         // 4. 사용자 저장
         User savedUser = userRepository.save(user);
-        return savedUser.getId();
+
+        // 5. Role에 따라 테이블 저장
+        if (requestDto.getRole() == Role.STUDENT) {
+            Student student = Student.builder()
+                    .user(user)
+                    .grade(requestDto.getGrade()) // DTO에 추가했다면 반영
+                    .classNumber(requestDto.getClassNumber()) // DTO에 추가했다면 반영
+                    .build();
+            studentRepository.save(student);
+
+        } else if (requestDto.getRole() == Role.TEACHER) {
+            Teacher teacher = Teacher.builder()
+                    .user(user)
+                    .schoolName(requestDto.getSchoolName()) // DTO에 추가했다면 반영
+                    .department(requestDto.getDepartment()) // DTO에 추가했다면 반영
+                    .build();
+            teacherRepository.save(teacher);
+        }
+
+        return user.getId();
     }
+
 
 
 
