@@ -1,0 +1,25 @@
+# FastAPI core
+fastapi==0.121.0
+uvicorn[standard]==0.38.0
+pydantic==2.11.9
+python-dotenv==1.0.1
+
+# Google Generative AI
+google-genai==1.37.0
+google-api-core==2.25.1
+google-auth==2.40.3
+
+# LangGraph
+langgraph==1.0.2
+langgraph-checkpoint==3.0.0
+langgraph-prebuilt==1.0.2
+
+# PDF processing
+pypdf==5.9.0
+PyPDF2==3.0.1
+
+# Upload
+python-multipart==0.0.9
+
+# HTTP Client
+httpx==0.27.0
