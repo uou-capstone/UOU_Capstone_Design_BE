@@ -4,11 +4,13 @@ import io.github.uou_capstone.aiplatform.domain.course.Course;
 import io.github.uou_capstone.aiplatform.domain.course.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.*;
+import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaResponseDto;
 import io.github.uou_capstone.aiplatform.domain.material.Material;
 import io.github.uou_capstone.aiplatform.domain.material.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -16,9 +18,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
 
+
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 
@@ -28,6 +32,8 @@ import java.util.stream.Collectors;
 public class LectureService {
 
     private final WebClient aiServiceWebClient;
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+            new ParameterizedTypeReference<>() {};
 
     private final CourseRepository courseRepository;
     private final LectureRepository lectureRepository;
@@ -192,6 +198,91 @@ public class LectureService {
     }
 
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> initializeLectureStream(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        User currentUser = getCurrentUser();
+        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new AccessDeniedException("해당 강의의 스트리밍을 초기화할 권한이 없습니다.");
+        }
+
+        Material sourceMaterial = materialRepository.findByLecture_IdAndMaterialType(lectureId, "PDF")
+                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 원본 PDF 자료가 없습니다."));
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lectureId);
+        payload.put("pdf_path", sourceMaterial.getFilePath());
+
+        return callDelegatorForMap("initialize", payload);
+    }
+
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getNextLectureStreamContent(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        User currentUser = getCurrentUser();
+        validateLectureParticipant(lecture, currentUser);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lectureId);
+
+        return callDelegatorForMap("get_next_content", payload);
+    }
+
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getLectureStreamSession(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        User currentUser = getCurrentUser();
+        validateLectureParticipant(lecture, currentUser);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lectureId);
+
+        return callDelegatorForMap("get_session", payload);
+    }
+
+
+    @Transactional(readOnly = true)
+    public AiQaResponseDto answerLectureStreamQuestion(Long lectureId, LectureStreamAnswerRequestDto requestDto) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        User currentUser = getCurrentUser();
+        validateLectureParticipant(lecture, currentUser);
+
+        AiQuestionAnswerRequestDto aiRequest = new AiQuestionAnswerRequestDto(
+                lecture.getId(),
+                requestDto.getAiQuestionId(),
+                requestDto.getAnswer()
+        );
+
+        AiQaResponseDto aiResponse = aiServiceWebClient.post()
+                .uri("/api/delegator/dispatch")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("ngrok-skip-browser-warning", "true")
+                .body(BodyInserters.fromValue(aiRequest))
+                .retrieve()
+                .bodyToMono(AiQaResponseDto.class)
+                .block();
+
+        if (aiResponse == null || aiResponse.getSupplementary() == null) {
+            throw new IllegalStateException("AI 보충 설명 생성에 실패했습니다.");
+        }
+
+        return aiResponse;
+    }
+
+
     /**
      * AI 작업이 끝난 후 호출될 메서드 (DB 저장)
      * (generateAiContent의 @Transactional과 분리된 새 트랜잭션으로 실행됨)
@@ -243,6 +334,48 @@ public class LectureService {
         // (권한 확인 로직 추가 필요 - getLectureDetail과 동일하게)
 
         return lecture.getAiGeneratedStatus().name();
+    }
+
+    private Map<String, Object> callDelegatorForMap(String stage, Map<String, Object> payload) {
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("stage", stage);
+        requestBody.put("payload", payload);
+
+        Map<String, Object> response = aiServiceWebClient.post()
+                .uri("/api/delegator/dispatch")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("ngrok-skip-browser-warning", "true")
+                .body(BodyInserters.fromValue(requestBody))
+                .retrieve()
+                .bodyToMono(MAP_TYPE)
+                .block();
+
+        if (response == null) {
+            throw new IllegalStateException("AI 서비스 응답이 비어 있습니다.");
+        }
+        return response;
+    }
+
+    private User getCurrentUser() {
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        return userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
+    }
+
+    private void validateLectureParticipant(Lecture lecture, User currentUser) {
+        Course course = lecture.getCourse();
+
+        boolean isTeacherOfCourse = teacherRepository.findById(currentUser.getId())
+                .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
+                .orElse(false);
+
+        boolean isStudentEnrolled = studentRepository.findById(currentUser.getId())
+                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, course))
+                .orElse(false);
+
+        if (!isTeacherOfCourse && !isStudentEnrolled) {
+            throw new AccessDeniedException("강의를 조회할 권한이 없습니다.");
+        }
     }
 
 }
