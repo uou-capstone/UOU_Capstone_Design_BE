@@ -5,7 +5,10 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureDetail
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureStreamAnswerRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureUpdateRequestDto;
-import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingAnswerResponse;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingContentResponse;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingInitializeResponse;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingSessionDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -85,34 +88,34 @@ public class LectureController {
     @Operation(summary = "AI 스트리밍 초기화", description = "스트리밍 모드를 시작하기 위해 PDF 분석을 수행하고 세션을 초기화합니다.")
     @PostMapping("/lectures/{lectureId}/stream/initialize")
     @PreAuthorize("hasAuthority('TEACHER')")
-    public ResponseEntity<Map<String, Object>> initializeLectureStream(@PathVariable Long lectureId) {
-        Map<String, Object> response = lectureService.initializeLectureStream(lectureId);
+    public ResponseEntity<StreamingInitializeResponse> initializeLectureStream(@PathVariable Long lectureId) {
+        StreamingInitializeResponse response = lectureService.initializeLectureStream(lectureId);
         return ResponseEntity.ok(response);
     }
 
     @Operation(summary = "AI 스트리밍 다음 콘텐츠", description = "스트리밍 세션에서 다음 콘텐츠 세그먼트를 가져옵니다.")
     @PostMapping("/lectures/{lectureId}/stream/next")
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<Map<String, Object>> getNextLectureStreamContent(@PathVariable Long lectureId) {
-        Map<String, Object> response = lectureService.getNextLectureStreamContent(lectureId);
+    public ResponseEntity<StreamingContentResponse> getNextLectureStreamContent(@PathVariable Long lectureId) {
+        StreamingContentResponse response = lectureService.getNextLectureStreamContent(lectureId);
         return ResponseEntity.ok(response);
     }
 
     @Operation(summary = "AI 스트리밍 세션 조회", description = "현재 스트리밍 세션 정보를 조회합니다.")
     @GetMapping("/lectures/{lectureId}/stream/session")
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<Map<String, Object>> getLectureStreamSession(@PathVariable Long lectureId) {
-        Map<String, Object> response = lectureService.getLectureStreamSession(lectureId);
+    public ResponseEntity<StreamingSessionDto> getLectureStreamSession(@PathVariable Long lectureId) {
+        StreamingSessionDto response = lectureService.getLectureStreamSession(lectureId);
         return ResponseEntity.ok(response);
     }
 
     @Operation(summary = "AI 스트리밍 질문 답변", description = "스트리밍 중 AI가 제시한 질문에 대한 사용자의 답변을 전송하고 보충 설명을 받습니다.")
     @PostMapping("/lectures/{lectureId}/stream/answer")
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<AiQaResponseDto> answerLectureStreamQuestion(
+    public ResponseEntity<StreamingAnswerResponse> answerLectureStreamQuestion(
             @PathVariable Long lectureId,
             @Valid @RequestBody LectureStreamAnswerRequestDto requestDto) {
-        AiQaResponseDto response = lectureService.answerLectureStreamQuestion(lectureId, requestDto);
+        StreamingAnswerResponse response = lectureService.answerLectureStreamQuestion(lectureId, requestDto);
         return ResponseEntity.ok(response);
     }
 }

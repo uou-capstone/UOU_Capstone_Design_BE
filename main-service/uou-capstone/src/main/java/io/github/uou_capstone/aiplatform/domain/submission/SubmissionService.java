@@ -115,7 +115,7 @@ public class SubmissionService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId()) // User ID로 Teacher 조회
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId()) // User ID로 Teacher 조회
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다.")); // 선생님 정보 없으면 접근 거부
             // 평가를 만든 선생님 ID와 현재 로그인한 선생님 ID 비교
         if (!assessment.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {

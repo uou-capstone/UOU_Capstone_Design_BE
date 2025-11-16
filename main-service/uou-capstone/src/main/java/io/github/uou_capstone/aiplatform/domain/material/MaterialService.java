@@ -42,7 +42,7 @@ public class MaterialService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {

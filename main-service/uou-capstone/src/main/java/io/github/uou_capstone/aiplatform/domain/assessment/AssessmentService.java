@@ -99,7 +99,7 @@ public class AssessmentService {
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
 
         // 2-1. 선생님 권한 확인
-        boolean isTeacherOfCourse = teacherRepository.findById(currentUser.getId())
+        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
                 .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
                 .orElse(false);
 
@@ -133,7 +133,7 @@ public class AssessmentService {
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
 
-        boolean isTeacherOfCourse = teacherRepository.findById(currentUser.getId())
+        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
                 .map(teacher -> teacher.getId().equals(assessment.getCourse().getTeacher().getId()))
                 .orElse(false);
 

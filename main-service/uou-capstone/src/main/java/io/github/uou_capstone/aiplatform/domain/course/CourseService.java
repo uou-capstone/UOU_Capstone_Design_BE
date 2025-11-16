@@ -3,10 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
-import io.github.uou_capstone.aiplatform.domain.user.Teacher;
-import io.github.uou_capstone.aiplatform.domain.user.TeacherRepository;
-import io.github.uou_capstone.aiplatform.domain.user.User;
-import io.github.uou_capstone.aiplatform.domain.user.UserRepository;
+import io.github.uou_capstone.aiplatform.domain.user.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -23,6 +20,8 @@ public class CourseService {
     private final CourseRepository courseRepository;
     private final UserRepository userRepository;
     private final TeacherRepository teacherRepository;
+    private final StudentRepository studentRepository;
+    private final EnrollmentRepository enrollmentRepository;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //과목 생성
@@ -48,12 +47,30 @@ public class CourseService {
 
     @Transactional(readOnly = true) // 조회 기능이므로 readOnly = true 설정
     public List<CourseResponseDto> getAllCourses() { //과목 전체 조회
-        // 1. DB에서 모든 Course를 찾아 List<Course> 형태로 가져옴
-        List<Course> courses = courseRepository.findAll();
+        
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
-        // 2. List<Course>를 List<CourseResponseDto>로 변환하여 반환
+        List<Course> courses;
+
+        if (currentUser.getRole() == Role.TEACHER) {
+            Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
+                    .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+            courses = courseRepository.findByTeacher(currentTeacher);
+        } else if (currentUser.getRole() == Role.STUDENT) {
+            Student student = studentRepository.findById(currentUser.getId())
+                    .orElseThrow(() -> new IllegalArgumentException("학생 정보를 찾을 수 없습니다."));
+            courses = enrollmentRepository.findByStudent(student).stream()
+                    .map(Enrollment::getCourse)
+                    .distinct()
+                    .collect(Collectors.toList());
+        } else {
+            courses = courseRepository.findAll();
+        }
+
         return courses.stream()
-                .map(CourseResponseDto::new) // 각 Course 객체를 CourseResponseDto로 변환
+                .map(CourseResponseDto::new)
                 .collect(Collectors.toList());
     }
 
@@ -74,7 +91,7 @@ public class CourseService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
@@ -97,7 +114,7 @@ public class CourseService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {

@@ -1,23 +1,32 @@
 package io.github.uou_capstone.aiplatform.domain.course.lecture;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.Course;
 import io.github.uou_capstone.aiplatform.domain.course.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.*;
-import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.exception.StreamingApiException;
 import io.github.uou_capstone.aiplatform.domain.material.Material;
 import io.github.uou_capstone.aiplatform.domain.material.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 
 import java.util.HashMap;
@@ -32,8 +41,12 @@ import java.util.stream.Collectors;
 public class LectureService {
 
     private final WebClient aiServiceWebClient;
+    private final ObjectMapper objectMapper;
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
             new ParameterizedTypeReference<>() {};
+
+    @Value("${ai.service.secret-key:}")
+    private String aiServiceSecretKey;
 
     private final CourseRepository courseRepository;
     private final LectureRepository lectureRepository;
@@ -55,8 +68,9 @@ public class LectureService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
-                .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
+
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
+                .orElseThrow(() -> new IllegalArgumentException("선생님 계정 정보가 없습니다."));
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
             throw new AccessDeniedException("해당 과목에 강의를 생성할 권한이 없습니다.");
@@ -87,7 +101,7 @@ public class LectureService {
         Course course = lecture.getCourse(); // 강의가 속한 과목 정보 가져오기
 
         // 2-1. 선생님 권한 확인
-        boolean isTeacherOfCourse = teacherRepository.findById(currentUser.getId())
+        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
                 .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
                 .orElse(false);
 
@@ -118,7 +132,7 @@ public class LectureService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
@@ -141,7 +155,7 @@ public class LectureService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
@@ -164,7 +178,7 @@ public class LectureService {
         String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new IllegalArgumentException("사용자 정보를 찾을 수 없습니다."));
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
@@ -199,12 +213,12 @@ public class LectureService {
 
 
     @Transactional(readOnly = true)
-    public Map<String, Object> initializeLectureStream(Long lectureId) {
+    public StreamingInitializeResponse initializeLectureStream(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
 
         User currentUser = getCurrentUser();
-        Teacher currentTeacher = teacherRepository.findById(currentUser.getId())
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
                 .orElseThrow(() -> new AccessDeniedException("선생님 계정 정보가 없습니다."));
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
@@ -218,12 +232,12 @@ public class LectureService {
         payload.put("lecture_id", lectureId);
         payload.put("pdf_path", sourceMaterial.getFilePath());
 
-        return callDelegatorForMap("initialize", payload);
+        return executeStreamingStage("initialize", payload, StreamingInitializeResponse.class);
     }
 
 
     @Transactional(readOnly = true)
-    public Map<String, Object> getNextLectureStreamContent(Long lectureId) {
+    public StreamingContentResponse getNextLectureStreamContent(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
 
@@ -233,12 +247,12 @@ public class LectureService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
 
-        return callDelegatorForMap("get_next_content", payload);
+        return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);
     }
 
 
     @Transactional(readOnly = true)
-    public Map<String, Object> getLectureStreamSession(Long lectureId) {
+    public StreamingSessionDto getLectureStreamSession(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
 
@@ -248,38 +262,30 @@ public class LectureService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
 
-        return callDelegatorForMap("get_session", payload);
+        return executeStreamingStage("get_session", payload, StreamingSessionDto.class);
     }
 
 
     @Transactional(readOnly = true)
-    public AiQaResponseDto answerLectureStreamQuestion(Long lectureId, LectureStreamAnswerRequestDto requestDto) {
+    public StreamingAnswerResponse answerLectureStreamQuestion(Long lectureId, LectureStreamAnswerRequestDto requestDto) {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
 
         User currentUser = getCurrentUser();
         validateLectureParticipant(lecture, currentUser);
 
-        AiQuestionAnswerRequestDto aiRequest = new AiQuestionAnswerRequestDto(
-                lecture.getId(),
-                requestDto.getAiQuestionId(),
-                requestDto.getAnswer()
-        );
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lecture.getId());
+        payload.put("ai_question_id", requestDto.getAiQuestionId());
+        payload.put("answer", requestDto.getAnswer());
 
-        AiQaResponseDto aiResponse = aiServiceWebClient.post()
-                .uri("/api/delegator/dispatch")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("ngrok-skip-browser-warning", "true")
-                .body(BodyInserters.fromValue(aiRequest))
-                .retrieve()
-                .bodyToMono(AiQaResponseDto.class)
-                .block();
+        StreamingAnswerResponse response = executeStreamingStage("answer_question", payload, StreamingAnswerResponse.class);
 
-        if (aiResponse == null || aiResponse.getSupplementary() == null) {
+        if (response.getSupplementary() == null) {
             throw new IllegalStateException("AI 보충 설명 생성에 실패했습니다.");
         }
 
-        return aiResponse;
+        return response;
     }
 
 
@@ -336,7 +342,12 @@ public class LectureService {
         return lecture.getAiGeneratedStatus().name();
     }
 
-    private Map<String, Object> callDelegatorForMap(String stage, Map<String, Object> payload) {
+    private <T> T executeStreamingStage(String stage, Map<String, Object> payload, Class<T> responseType) {
+        Map<String, Object> responseMap = executeStreamingStage(stage, payload);
+        return objectMapper.convertValue(responseMap, responseType);
+    }
+
+    private Map<String, Object> executeStreamingStage(String stage, Map<String, Object> payload) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("stage", stage);
         requestBody.put("payload", payload);
@@ -344,16 +355,55 @@ public class LectureService {
         Map<String, Object> response = aiServiceWebClient.post()
                 .uri("/api/delegator/dispatch")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("ngrok-skip-browser-warning", "true")
+                .headers(this::applyCommonHeaders)
                 .body(BodyInserters.fromValue(requestBody))
                 .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, clientResponse -> clientResponse.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .flatMap(body -> Mono.error(new StreamingApiException(
+                                clientResponse.statusCode(),
+                                extractErrorMessage(body, clientResponse.statusCode())))))
+                .onStatus(HttpStatusCode::is5xxServerError, clientResponse -> clientResponse.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .flatMap(body -> Mono.error(new StreamingApiException(
+                                clientResponse.statusCode(),
+                                extractErrorMessage(body, clientResponse.statusCode())))))
                 .bodyToMono(MAP_TYPE)
                 .block();
 
         if (response == null) {
-            throw new IllegalStateException("AI 서비스 응답이 비어 있습니다.");
+            throw new StreamingApiException(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서비스 응답이 비어 있습니다.");
         }
         return response;
+    }
+
+    private void applyCommonHeaders(HttpHeaders headers) {
+        headers.set("ngrok-skip-browser-warning", "true");
+        if (StringUtils.hasText(aiServiceSecretKey)) {
+            headers.set("X-AI-SECRET-KEY", aiServiceSecretKey);
+        }
+    }
+
+    private String extractErrorMessage(String body, HttpStatusCode statusCode) {
+        if (!StringUtils.hasText(body)) {
+            return "AI 서비스 호출 중 오류가 발생했습니다. (status=" + statusCode.value() + ")";
+        }
+        try {
+            JsonNode node = objectMapper.readTree(body);
+            if (node.has("detail")) {
+                JsonNode detailNode = node.get("detail");
+                if (detailNode.isTextual()) {
+                    return detailNode.asText();
+                }
+                return detailNode.toString();
+            }
+            if (node.has("message") && node.get("message").isTextual()) {
+                return node.get("message").asText();
+            }
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to parse ai-service error response: {}", body, e);
+        }
+        return body;
     }
 
     private User getCurrentUser() {
@@ -365,7 +415,7 @@ public class LectureService {
     private void validateLectureParticipant(Lecture lecture, User currentUser) {
         Course course = lecture.getCourse();
 
-        boolean isTeacherOfCourse = teacherRepository.findById(currentUser.getId())
+        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
                 .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
                 .orElse(false);
 
