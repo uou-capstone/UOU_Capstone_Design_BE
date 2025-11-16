@@ -212,6 +212,12 @@ public class LectureService {
     }
 
 
+    /**
+     * 스트리밍 세션을 초기화한다.
+     *  - 강의 소유 선생님 권한을 확인
+     *  - 업로드된 PDF 경로를 ai-service에 전달하여 챕터 정보를 생성
+     *  - ai-service가 구성한 초기 세션 내용을 DTO로 반환
+     */
     @Transactional(readOnly = true)
     public StreamingInitializeResponse initializeLectureStream(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
@@ -236,6 +242,11 @@ public class LectureService {
     }
 
 
+    /**
+     * 다음 스트리밍 세그먼트를 요청한다.
+     *  - 선생님 또는 수강생 권한 검증 후 ai-service stage(get_next_content)를 호출
+     *  - 설명/질문/완료 상태를 StreamingContentResponse로 전달
+     */
     @Transactional(readOnly = true)
     public StreamingContentResponse getNextLectureStreamContent(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
@@ -251,6 +262,11 @@ public class LectureService {
     }
 
 
+    /**
+     * 현재 스트리밍 세션 상태를 조회한다.
+     *  - 선생님 또는 수강생 권한 검증 후 ai-service stage(get_session)를 호출
+     *  - 세션에 저장된 메타데이터를 그대로 StreamingSessionDto로 반환
+     */
     @Transactional(readOnly = true)
     public StreamingSessionDto getLectureStreamSession(Long lectureId) {
         Lecture lecture = lectureRepository.findById(lectureId)
@@ -265,7 +281,11 @@ public class LectureService {
         return executeStreamingStage("get_session", payload, StreamingSessionDto.class);
     }
 
-
+    
+    /**
+     * 질문 세그먼트에 대한 학생 답변을 ai-service로 전달한다.
+     *  - 권한 검증 후 stage(answer_question)를 호출하여 보충 설명을 얻는다.
+     */
     @Transactional(readOnly = true)
     public StreamingAnswerResponse answerLectureStreamQuestion(Long lectureId, LectureStreamAnswerRequestDto requestDto) {
         Lecture lecture = lectureRepository.findById(lectureId)
@@ -342,11 +362,17 @@ public class LectureService {
         return lecture.getAiGeneratedStatus().name();
     }
 
+    /**
+     * ai-service 스트리밍 stage 호출 결과를 지정한 타입으로 변환한다.
+     */
     private <T> T executeStreamingStage(String stage, Map<String, Object> payload, Class<T> responseType) {
         Map<String, Object> responseMap = executeStreamingStage(stage, payload);
         return objectMapper.convertValue(responseMap, responseType);
     }
 
+    /**
+     * ai-service 스트리밍 stage를 공통 WebClient 설정으로 호출한다.
+     */
     private Map<String, Object> executeStreamingStage(String stage, Map<String, Object> payload) {
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("stage", stage);
@@ -377,6 +403,9 @@ public class LectureService {
         return response;
     }
 
+    /**
+     * 모든 스트리밍 요청에 공통으로 적용할 헤더를 설정한다.
+     */
     private void applyCommonHeaders(HttpHeaders headers) {
         headers.set("ngrok-skip-browser-warning", "true");
         if (StringUtils.hasText(aiServiceSecretKey)) {
@@ -384,6 +413,9 @@ public class LectureService {
         }
     }
 
+    /**
+     * ai-service 오류 응답 본문에서 사용자에게 노출할 메시지를 추출한다.
+     */
     private String extractErrorMessage(String body, HttpStatusCode statusCode) {
         if (!StringUtils.hasText(body)) {
             return "AI 서비스 호출 중 오류가 발생했습니다. (status=" + statusCode.value() + ")";
