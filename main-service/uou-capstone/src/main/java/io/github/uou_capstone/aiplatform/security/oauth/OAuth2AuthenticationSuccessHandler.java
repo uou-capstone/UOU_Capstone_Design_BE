@@ -25,32 +25,8 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
 
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response, Authentication authentication) throws IOException, ServletException {
-
-        // 1. 인증된 사용자 정보 가져오기
-        OAuth2User oAuth2User = (OAuth2User) authentication.getPrincipal();
-
-        // 2. getAttributes()로 전체 맵을 먼저 가져옵니다.
-        Map<String, Object> attributes = oAuth2User.getAttributes();
-        Map<String, Object> kakaoAccount = (Map<String, Object>) attributes.get("kakao_account");
-        String email = (String) kakaoAccount.get("email");
-
-        // 3. DB에서 사용자 정보 조회
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 사용자입니다."));
-
-        // 4. 우리 서비스의 JWT 생성 (액세스 토큰과 리프레시 토큰 모두 생성)
-        String accessToken = jwtTokenProvider.createAccessToken(user.getEmail(), user.getRole().name());
-        String refreshToken = jwtTokenProvider.createRefreshToken(user.getEmail());
-
-        // (선택) 리프레시 토큰을 DB에 저장하는 로직을 추가할 수 있습니다.
-
-        // 5. 프론트엔드로 리다이렉트할 URL 생성 (두 토큰을 쿼리 파라미터로 포함)
-        String targetUrl = UriComponentsBuilder.fromUriString("http://localhost:3000/oauth-redirect") // 프론트엔드 OAuth 처리 전용 주소
-                .queryParam("accessToken", accessToken)
-                .queryParam("refreshToken", refreshToken)
-                .build().toUriString();
-
-        // 6. 생성된 URL로 리다이렉트
-        getRedirectStrategy().sendRedirect(request, response, targetUrl);
+        // TODO: Kakao OAuth 연동 재구현 예정.
+        // 현재는 명시적으로 501(Not Implemented)을 반환해 프론트가 테스트 시 다른 흐름을 타도록 한다.
+        response.sendError(HttpServletResponse.SC_NOT_IMPLEMENTED, "OAuth login is temporarily disabled.");
     }
 }
