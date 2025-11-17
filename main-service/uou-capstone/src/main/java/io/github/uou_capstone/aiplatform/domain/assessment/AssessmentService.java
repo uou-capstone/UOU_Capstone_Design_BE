@@ -161,8 +161,9 @@ public class AssessmentService {
         // ... (선생님 권한 확인 로직 추가: createAssessment과 동일) 나중에 추가
 
         // 2. AI가 참고할 PDF 경로 조회
-        Material sourceMaterial = materialRepository.findByLecture_IdAndMaterialType(lectureId, "PDF")
-                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 원본 PDF 자료가 없습니다."));
+        Material sourceMaterial = materialRepository
+                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lectureId, "PDF")
+                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 최신 PDF 자료가 없습니다."));
         String pdfPath = sourceMaterial.getFilePath();
 
         // 3. 퀴즈 껍데기(Assessment) 먼저 생성

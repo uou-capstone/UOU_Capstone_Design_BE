@@ -49,7 +49,10 @@ public class MaterialService {
             throw new AccessDeniedException("파일을 업로드할 권한이 없습니다.");
         }
 
-        // 3. 파일을 ai-service의 /api/files/upload 로 포워딩
+        // 3. 기존 PDF 자료 삭제
+        materialRepository.deleteByLecture_IdAndMaterialType(lectureId, "PDF");
+
+        // 4. 파일을 ai-service의 /api/files/upload 로 포워딩
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("file", file.getResource());
 
@@ -64,7 +67,7 @@ public class MaterialService {
             throw new RuntimeException("AI 서비스 파일 업로드 실패");
         }
 
-        // 4. DB에 ai-service가 알려준 경로를 저장
+        // 5. DB에 ai-service가 알려준 경로를 저장
         Material material = Material.builder()
                 .lecture(lecture)
                 .displayName(file.getOriginalFilename())

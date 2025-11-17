@@ -186,8 +186,7 @@ public class LectureService {
         }
 
         // 3. AI가 처리할 원본 PDF 경로 조회
-        Material sourceMaterial = materialRepository.findByLecture_IdAndMaterialType(lectureId, "PDF")
-                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 원본 PDF 자료가 없습니다."));
+        Material sourceMaterial = getLatestPdfMaterial(lectureId);
 
         String pdfPathToProcess = sourceMaterial.getFilePath();
 
@@ -231,12 +230,13 @@ public class LectureService {
             throw new AccessDeniedException("해당 강의의 스트리밍을 초기화할 권한이 없습니다.");
         }
 
-        Material sourceMaterial = materialRepository.findByLecture_IdAndMaterialType(lectureId, "PDF")
-                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 원본 PDF 자료가 없습니다."));
+        Material sourceMaterial = getLatestPdfMaterial(lectureId);
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
+        payload.put("lectureId", lectureId);
         payload.put("pdf_path", sourceMaterial.getFilePath());
+        payload.put("pdfPath", sourceMaterial.getFilePath());
 
         return executeStreamingStage("initialize", payload, StreamingInitializeResponse.class);
     }
@@ -257,6 +257,7 @@ public class LectureService {
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
+        payload.put("lectureId", lectureId);
 
         return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);
     }
@@ -277,6 +278,7 @@ public class LectureService {
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
+        payload.put("lectureId", lectureId);
 
         return executeStreamingStage("get_session", payload, StreamingSessionDto.class);
     }
@@ -296,7 +298,9 @@ public class LectureService {
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lecture.getId());
+        payload.put("lectureId", lecture.getId());
         payload.put("ai_question_id", requestDto.getAiQuestionId());
+        payload.put("aiQuestionId", requestDto.getAiQuestionId());
         payload.put("answer", requestDto.getAnswer());
 
         StreamingAnswerResponse response = executeStreamingStage("answer_question", payload, StreamingAnswerResponse.class);
@@ -460,4 +464,8 @@ public class LectureService {
         }
     }
 
+    private Material getLatestPdfMaterial(Long lectureId) {
+        return materialRepository.findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lectureId, "PDF")
+                .orElseThrow(() -> new IllegalArgumentException("AI가 처리할 최신 PDF 자료가 없습니다."));
+    }
 }
