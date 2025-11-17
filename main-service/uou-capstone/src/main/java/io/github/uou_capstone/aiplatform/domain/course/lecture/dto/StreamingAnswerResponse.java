@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class StreamingAnswerResponse {
+public class StreamingAnswerResponse { //answer_question 응답 매핑
     private String status;
     private Long lectureId;
     private String aiQuestionId;

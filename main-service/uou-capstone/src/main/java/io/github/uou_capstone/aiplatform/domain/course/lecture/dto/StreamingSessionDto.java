@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class StreamingSessionDto {
+public class StreamingSessionDto { //get_session 응답 매핑
     private String status;
     private Long lectureId;
     private String serviceStatus;
