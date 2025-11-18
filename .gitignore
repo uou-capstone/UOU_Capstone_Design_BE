@@ -1,0 +1,9 @@
+**/.env
+**/.env.*
+data/uploads/
+ai-service/uploads/*
+!ai-service/uploads/.gitkeep
+*.log
+*.tmp
+.DS_Store
+
