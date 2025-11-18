@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: uou-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-uoucapstone}
+      MYSQL_USER: ${MYSQL_USER:-capstone}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-capstonepass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: ai-service/Dockerfile
+    container_name: uou-ai-service
+    restart: unless-stopped
+    environment:
+      UPLOAD_ROOT: ${UPLOAD_ROOT:-/data/uploads}
+    volumes:
+      - ./data/uploads:${UPLOAD_ROOT:-/data/uploads}
+    ports:
+      - "8000:8000"
+
+  main-service:
+    build:
+      context: .
+      dockerfile: main-service/uou-capstone/Dockerfile
+    container_name: uou-main-service
+    depends_on:
+      - db
+      - ai-service
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mysql://db:3306/uoucapstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-capstone}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-capstonepass}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      AI_SERVICE_BASE_URL: ${AI_SERVICE_BASE_URL:-http://ai-service:8000/}
+      AI_SERVICE_SECRET_KEY: ${AI_SERVICE_SECRET_KEY:-dev-secret}
+    ports:
+      - "8080:8080"
+
+volumes:
+  mysql-data:
+
