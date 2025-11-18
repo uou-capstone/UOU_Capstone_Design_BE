@@ -244,12 +244,18 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="PDF path is missing in session.")
 
     # 보충 설명 생성
-    supplementary_explanation = await asyncio.to_thread(
+    qa_result = await asyncio.to_thread(
         generate_supplementary_explanation,
         question_text,
         user_answer,
         pdf_path
     )
+    supplementary_explanation = qa_result.get("supplementary_explanation", "")
+    validation_result = qa_result.get("validation_result", "")
+    concept_queue = qa_result.get("concept_queue") or []
+    bad_mode_history = qa_result.get("bad_mode_history") or []
+    needs_follow_up = bool(qa_result.get("needs_follow_up"))
+    qa_state = qa_result.get("state", "GOOD")
 
     # 세션 업데이트
     async with pipeline_lock:
@@ -258,6 +264,11 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             "answer": user_answer,
             "supplementary": supplementary_explanation,
             "answeredAt": datetime.utcnow().isoformat(),
+            "validationResult": validation_result,
+            "needsFollowUp": needs_follow_up,
+            "conceptQueue": concept_queue,
+            "badModeHistory": bad_mode_history,
+            "qaState": qa_state,
         })
         
         if session_mode == "streaming":
@@ -265,6 +276,15 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             session["allQuestions"][ai_question_id] = question_entry
             session["waitingForAnswer"] = False
             session["currentQuestionId"] = None
+            session["lastAnswerMeta"] = {
+                "aiQuestionId": ai_question_id,
+                "validationResult": validation_result,
+                "needsFollowUp": needs_follow_up,
+                "conceptQueue": concept_queue,
+                "badModeHistory": bad_mode_history,
+                "qaState": qa_state,
+                "updatedAt": datetime.utcnow().isoformat()
+            }
         else:
             # 배치 모드: 기존 방식
             session["questions"][ai_question_id] = question_entry
@@ -279,6 +299,11 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
         "question": question_text,
         "chapterTitle": question_entry.get("chapterTitle"),
         "supplementary": supplementary_explanation,
+        "validationResult": validation_result,
+        "needsFollowUp": needs_follow_up,
+        "conceptQueue": concept_queue,
+        "badModeHistory": bad_mode_history,
+        "qaState": qa_state,
         "canContinue": True  # 스트리밍 모드에서 다음 콘텐츠 요청 가능
     }
 
@@ -497,6 +522,7 @@ async def handle_get_session_stage(payload: Dict[str, Any]):
         "serviceStatus": session.get("status", "unknown"),
         "chapters": session.get("chapters"),
         "questions": session.get("questions"),
+        "lastAnswerMeta": session.get("lastAnswerMeta"),
         "createdAt": session.get("createdAt"),
         "updatedAt": session.get("updatedAt"),
         "error": session.get("error"),
