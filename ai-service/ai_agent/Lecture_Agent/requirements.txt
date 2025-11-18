@@ -1,0 +1,13 @@
+# Core dependencies
+google-genai==1.37.0
+langgraph==1.0.2
+pypdf==5.9.0
+
+# Additional langgraph dependencies
+langgraph-checkpoint==3.0.0
+langgraph-prebuilt==1.0.2
+
+# Google API dependencies (automatically installed with google-genai, but listed for clarity)
+google-api-core==2.25.1
+google-auth==2.40.3
+
