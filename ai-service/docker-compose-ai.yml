@@ -1,11 +1,6 @@
-version: "3.9"
-
 services:
   ai-service:
-    container_name: ai-service
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: golila0611/ai-service:latest
     env_file:
       - .env
     ports:
@@ -13,4 +8,3 @@ services:
     volumes:
       - ./uploads:/app/uploads
     restart: unless-stopped
-
