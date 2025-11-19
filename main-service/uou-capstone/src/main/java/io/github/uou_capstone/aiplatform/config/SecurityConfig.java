@@ -1,12 +1,12 @@
 package io.github.uou_capstone.aiplatform.config;
 
+import io.github.uou_capstone.aiplatform.security.exception.RestAuthenticationEntryPoint;
 import io.github.uou_capstone.aiplatform.security.jwt.JwtAuthenticationFilter;
 import io.github.uou_capstone.aiplatform.security.oauth.CustomOAuth2UserService;
 import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationSuccessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -16,7 +16,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -33,6 +32,7 @@ public class SecurityConfig {
     private final CustomOAuth2UserService customOAuth2UserService;
     private final OAuth2AuthenticationSuccessHandler oAuth2AuthenticationSuccessHandler;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RestAuthenticationEntryPoint restAuthenticationEntryPoint;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -48,6 +48,7 @@ public class SecurityConfig {
             .httpBasic(AbstractHttpConfigurer::disable)
             .logout(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .exceptionHandling(ex -> ex.authenticationEntryPoint(restAuthenticationEntryPoint))
 
             // 세션을 사용하지 않도록 설정 (STATELESS)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -58,6 +59,7 @@ public class SecurityConfig {
 
                     .requestMatchers("/api/auth/**").permitAll()
                     .requestMatchers("/api/ai/callback/**").permitAll()
+                    .requestMatchers("/error").permitAll()
                     // 아래 경로들은 인증 없이 누구나 접근 가능
                     .requestMatchers("/swagger-ui.html","/login/**", "/oauth2/**", "/swagger-ui/**",
                             "/api-docs/**", "/api/lectures/").permitAll()
