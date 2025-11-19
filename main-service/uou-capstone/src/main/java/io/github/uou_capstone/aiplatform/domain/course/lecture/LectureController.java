@@ -118,4 +118,12 @@ public class LectureController {
         StreamingAnswerResponse response = lectureService.answerLectureStreamQuestion(lectureId, requestDto);
         return ResponseEntity.ok(response);
     }
+
+    @Operation(summary = "AI 스트리밍 취소", description = "진행 중인 스트리밍 세션을 취소합니다.")
+    @PostMapping("/lectures/{lectureId}/stream/cancel")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<Void> cancelLectureStream(@PathVariable Long lectureId) {
+        lectureService.cancelLectureStream(lectureId);
+        return ResponseEntity.noContent().build();
+    }
 }

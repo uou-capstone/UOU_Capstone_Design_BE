@@ -312,6 +312,27 @@ public class LectureService {
         return response;
     }
 
+    /**
+     * 진행 중인 스트리밍 세션을 강제 종료한다.
+     *  - 선생님 혹은 수강생이 모두 취소 요청을 보낼 수 있도록 권한 검증
+     *  - ai-service stage(cancel)를 호출해 세션 상태를 cancelled로 전환
+     */
+    @Transactional(readOnly = true)
+    public void cancelLectureStream(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new IllegalArgumentException("해당 강의가 없습니다."));
+
+        User currentUser = getCurrentUser();
+        validateLectureParticipant(lecture, currentUser);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lecture.getId());
+        payload.put("lectureId", lecture.getId());
+
+        executeStreamingStage("cancel", payload);
+        log.info("Streaming session cancelled for lectureId={}", lectureId);
+    }
+
 
     /**
      * AI 작업이 끝난 후 호출될 메서드 (DB 저장)
