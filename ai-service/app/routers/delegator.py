@@ -529,6 +529,18 @@ async def handle_get_session_stage(payload: Dict[str, Any]):
     }
 
 
+class PipelineCancelledException(Exception):
+    pass
+
+def check_cancellation(lecture_id: int):
+    """세션 상태가 cancelled인지 확인하고 예외 발생"""
+    # 비동기 락 없이 읽기 (간단한 dict 조회라 큰 문제 없음, 엄밀하려면 lock 필요하지만 성능 고려)
+    session = pipeline_sessions.get(lecture_id)
+    if session and session.get("status") == "cancelled":
+        print(f"[pipeline] 작업 취소 감지됨: lecture_id={lecture_id}")
+        raise PipelineCancelledException(f"Pipeline cancelled for lecture {lecture_id}")
+
+
 async def run_ai_pipeline_and_callback(
     lecture_id: int,
     pdf_path: str
@@ -543,9 +555,13 @@ async def run_ai_pipeline_and_callback(
     try:
         print(f"[background] 파이프라인 시작: lecture_id={lecture_id}, pdf_path={pdf_path}")
         
+        # 취소 체크 콜백
+        cancellation_callback = lambda: check_cancellation(lecture_id)
+
         # 파이프라인 실행 (동기 함수를 비동기로 실행)
         # skip_qa=True로 설정하여 Q&A 처리 건너뛰기 (API 호출 시)
-        result = await asyncio.to_thread(run_full_pipeline, pdf_path, True)
+        # cancellation_callback 전달 (integration.py가 지원해야 함)
+        result = await asyncio.to_thread(run_full_pipeline, pdf_path, True, cancellation_callback)
         
         # result는 (chapters_info, lecture_results) 튜플
         chapters_info, lecture_results = result
@@ -591,6 +607,12 @@ async def run_ai_pipeline_and_callback(
             
             print(f"[background] 웹훅 호출 완료: lecture_id={lecture_id}, status={response.status_code}")
             
+    except PipelineCancelledException:
+        print(f"[background] 파이프라인 실행 취소: lecture_id={lecture_id}")
+        # 취소된 경우 웹훅을 호출하지 않거나, 취소 상태를 알리는 웹훅을 호출할 수 있음
+        # 여기서는 그냥 종료
+        return
+
     except Exception as e:
         error_trace = traceback.format_exc()
         print(f"[background] 파이프라인 실행 실패: lecture_id={lecture_id}")
@@ -668,8 +690,8 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
     print(f"[delegator] payload 타입: {type(req.payload)}")
     print(f"[delegator] payload 내용: {req.payload}")
 
-    # 즉시 처리 stage: answer_question, get_session, initialize, get_next_content
-    if stage in {"answer_question", "get_session", "initialize", "get_next_content"}:
+    # 즉시 처리 stage: answer_question, get_session, initialize, get_next_content, cancel
+    if stage in {"answer_question", "get_session", "initialize", "get_next_content", "cancel"}:
         if stage == "answer_question":
             return await handle_answer_question_stage(req.payload)
         elif stage == "get_session":
@@ -678,6 +700,22 @@ async def dispatch(req: DelegatorDispatchRequest = None, background_tasks: Backg
             return await handle_initialize_stage(req.payload)
         elif stage == "get_next_content":
             return await handle_get_next_content_stage(req.payload)
+        elif stage == "cancel":
+            lecture_id = req.payload.get("lectureId") or req.payload.get("lecture_id")
+            if not lecture_id:
+                raise HTTPException(status_code=400, detail="payload.lectureId is required")
+            try:
+                lecture_id_int = int(lecture_id)
+            except:
+                raise HTTPException(status_code=400, detail="lectureId must be int")
+            
+            async with pipeline_lock:
+                if lecture_id_int in pipeline_sessions:
+                    pipeline_sessions[lecture_id_int]["status"] = "cancelled"
+                    print(f"[delegator] 취소 요청 접수: lecture_id={lecture_id_int}")
+                    return {"status": "cancelled", "message": "Cancellation requested."}
+                else:
+                    return {"status": "not_found", "message": "Session not found."}
 
     if background_tasks is None:
         from fastapi import BackgroundTasks as BGT

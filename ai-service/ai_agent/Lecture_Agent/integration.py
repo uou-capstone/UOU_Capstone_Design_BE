@@ -290,13 +290,14 @@ def get_next_segment(
     return segment, current_segment_index + 1
 
 
-def main(pdf_path: str, skip_qa: bool = False):
+def main(pdf_path: str, skip_qa: bool = False, cancellation_callback=None):
     """
     통합 에이전트 시스템의 메인 함수
     
     Args:
         pdf_path (str): 분석할 PDF 파일의 경로
         skip_qa (bool): Q&A 처리 건너뛰기 (API 호출 시 True)
+        cancellation_callback (Callable): 호출 시 취소 여부를 확인하고 예외를 던지는 함수 (Optional)
     
     Returns:
         Tuple[List[Tuple[str, str]], List[Dict[str, str]]]: (chapters_info, lecture_results)
@@ -307,6 +308,9 @@ def main(pdf_path: str, skip_qa: bool = False):
     print("교육 에이전트 시스템을 시작합니다")
     print("="*60 + "\n")
     
+    # 시작 전 취소 체크
+    if cancellation_callback: cancellation_callback()
+
     # 1. PDF 분석 및 챕터별 분할
     print("📄 PDF 파일을 분석하고 챕터별로 분할하고 있습니다...\n")
     try:
@@ -316,6 +320,9 @@ def main(pdf_path: str, skip_qa: bool = False):
         traceback.print_exc()
         raise
     
+    # 분석 후 취소 체크
+    if cancellation_callback: cancellation_callback()
+
     print(f"총 {len(chapters_info)}개의 챕터를 발견했습니다.\n")
     for i, (title, path) in enumerate(chapters_info, 1):
         print(f"  {i}. {title}")
@@ -323,8 +330,20 @@ def main(pdf_path: str, skip_qa: bool = False):
     
     # 2. 모든 챕터에 대해 동시에 강의 에이전트 호출
     print("🎓 각 챕터에 대한 강의 설명을 생성하고 있습니다...\n")
+    
+    # 원래는 asyncio.run(run_all_lecture_agents(chapters_info)) 였으나
+    # 취소 체크를 위해 여기서도 직접 핸들링하거나 run_all_lecture_agents 내부를 고쳐야 함.
+    # 하지만 여기서는 간단히 실행 전후에만 체크.
+    # 더 정교한 제어가 필요하면 run_all_lecture_agents 내부 루프에도 cancellation_callback을 넣어야 함.
+    
+    # 취소 체크
+    if cancellation_callback: cancellation_callback()
+
     lecture_results = asyncio.run(run_all_lecture_agents(chapters_info))
     
+    # 실행 후 취소 체크
+    if cancellation_callback: cancellation_callback()
+
     print("모든 강의 설명 생성이 완료되었습니다.\n")
     print("="*60 + "\n")
     
@@ -332,6 +351,9 @@ def main(pdf_path: str, skip_qa: bool = False):
     if not skip_qa:
         # 순서대로 강의 진행
         for i, ((chapter_title, pdf_path), lecture_dict) in enumerate(zip(chapters_info, lecture_results), 1):
+            # 루프마다 취소 체크
+            if cancellation_callback: cancellation_callback()
+
             print("\n" + "="*60)
             print(f"📚 Chapter {i}: {chapter_title}")
             print("="*60 + "\n")
