@@ -1,11 +1,11 @@
-server:
-  port: 8080 # 서버 포트 번호
+﻿server:
+  port: 8080 # ?쒕쾭 ?ы듃 踰덊샇
 
 jwt:
   secret: dW1jLW5hZGFtc3BhY2UtcHJvamVjdC1zcHJpbmctYm9vdC1qd3Qtc2VjcmV0LWtleS1mb3ItZGlhcnktYXBwbGljYXRpb24K
-  # Access Token 유효 시간 (30분)
+  # Access Token ?좏슚 ?쒓컙 (30遺?
   access-token-expiration-time: 1800000
-  # Refresh Token 유효 시간 (2주)
+  # Refresh Token ?좏슚 ?쒓컙 (2二?
   refresh-token-expiration-time: 1209600000
 
 
@@ -24,25 +24,21 @@ spring:
 
   jpa:
     hibernate:
-      # ddl-auto 옵션:
-      # create: 서버 시작 시 기존 테이블 삭제 후 새로 생성
-      # update: 변경된 스키마만 찾아서 반영
-      # validate: Entity와 테이블이 정상 매핑되었는지 검증만 함
-      # none: 사용 안 함 (운영 환경에서 권장)
+
       ddl-auto: update
     properties:
       hibernate:
-        format_sql: true # SQL 쿼리를 보기 좋게 포맷팅하여 로그에 출력
+        format_sql: true # SQL 荑쇰━瑜?蹂닿린 醫뗪쾶 ?щ㎎?낇븯??濡쒓렇??異쒕젰
         default_batch_fetch_size: 100
-    show-sql: true # 실행되는 SQL 쿼리를 로그에 출력
+    show-sql: true # ?ㅽ뻾?섎뒗 SQL 荑쇰━瑜?濡쒓렇??異쒕젰
 
   servlet:
     multipart:
-      max-file-size: 50MB    # 👈 개별 파일 최대 용량 (예: 50MB)
-      max-request-size: 50MB # 👈 전체 요청(여러 파일 포함 시) 최대 용량 (예: 50MB)
+      max-file-size: 100MB    # ?몚 媛쒕퀎 ?뚯씪 理쒕? ?⑸웾 (?? 50MB)
+      max-request-size: 100MB # ?몚 ?꾩껜 ?붿껌(?щ윭 ?뚯씪 ?ы븿 ?? 理쒕? ?⑸웾 (?? 50MB)
 
 
-#테스트 : https://kauth.kakao.com/oauth/authorize?client_id=275b2717e98d58ac245a1ba255f57d03&redirect_uri=http://localhost:8080/login/oauth2/code/kakao&response_type=code
+#?뚯뒪??: https://kauth.kakao.com/oauth/authorize?client_id=275b2717e98d58ac245a1ba255f57d03&redirect_uri=http://localhost:8080/login/oauth2/code/kakao&response_type=code
 
   security:
     oauth2:
@@ -68,22 +64,22 @@ spring:
 
 
 springdoc:
-  # 1. API 명세서(JSON) 자체에 대한 설정
+  # 1. API 紐낆꽭??JSON) ?먯껜??????ㅼ젙
   api-docs:
-    path: /api-docs   # API 명세서(JSON)가 노출될 경로 (예: http://localhost:8080/api-docs)
+    path: /api-docs   # API 紐낆꽭??JSON)媛 ?몄텧??寃쎈줈 (?? http://localhost:8080/api-docs)
 
-  # 2. Swagger UI 페이지에 대한 설정
+  # 2. Swagger UI ?섏씠吏??????ㅼ젙
   swagger-ui:
-    path: /swagger-ui.html   # Swagger UI 페이지 접속 경로
-    disable-swagger-default-url: true # Spring Boot 기본 API 숨기기
-    display-request-duration: true  # API 테스트 시 응답 시간 표시
+    path: /swagger-ui.html   # Swagger UI ?섏씠吏 ?묒냽 寃쎈줈
+    disable-swagger-default-url: true # Spring Boot 湲곕낯 API ?④린湲?
+    display-request-duration: true  # API ?뚯뒪?????묐떟 ?쒓컙 ?쒖떆
 
-  # 3. API 문서의 기본 정보 설정
+  # 3. API 臾몄꽌??湲곕낯 ?뺣낫 ?ㅼ젙
   default-produces-media-type: application/json
   default-consumes-media-type: application/json
   info:
-    title: AI 교육 플랫폼 API 명세서
-    description: 이 문서는 AI 기반 교육 플랫폼의 API 명세서입니다.
+    title: AI 援먯쑁 ?뚮옯??API 紐낆꽭??
+    description: ??臾몄꽌??AI 湲곕컲 援먯쑁 ?뚮옯?쇱쓽 API 紐낆꽭?쒖엯?덈떎.
     version: v1.0.0
 
 
@@ -95,13 +91,13 @@ springdoc:
 ai:
   service:
     base-url: https://plutean-clement-apheliotropically.ngrok-free.dev/
-    secret-key: "YOUR_SUPER_SECRET_AI_KEY_12345" # ai-service(FastAPI)의 주소
+    secret-key: "YOUR_SUPER_SECRET_AI_KEY_12345" # ai-service(FastAPI)??二쇱냼
 
 
-  # 파일 업로드 용량 제한 설정
+  # ?뚯씪 ?낅줈???⑸웾 ?쒗븳 ?ㅼ젙
 
 # =================================================================================
 # FILE UPLOAD CONFIGURATION
 # =================================================================================
 #file:
-#  upload-dir: C:/dev/ai-platform-uploads #필요없음
+#  upload-dir: C:/dev/ai-platform-uploads #?꾩슂?놁쓬
