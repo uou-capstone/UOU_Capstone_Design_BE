@@ -20,5 +20,7 @@ public class StreamingSessionDto { //get_session 응답 매핑
     private String createdAt;
     private String updatedAt;
     private Object error;
+    private Object job;
+    private Object logs;
 }
 
