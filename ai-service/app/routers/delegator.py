@@ -237,6 +237,13 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             # allQuestions에서 질문 찾기
             question_entry = session.get("allQuestions", {}).get(ai_question_id)
             if question_entry is None:
+                available_ids = list((session.get("allQuestions") or {}).keys())
+                _append_log_entry(
+                    session,
+                    "ERROR",
+                    f"answer_question missing id={ai_question_id}; known_ids={available_ids}"
+                )
+                pipeline_sessions[lecture_id_int] = session
                 raise HTTPException(
                     status_code=404,
                     detail=f"aiQuestionId {ai_question_id} not found for lectureId {lecture_id}"
@@ -252,6 +259,13 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             # 배치 모드 (기존 방식)
             question_entry = session.get("questions", {}).get(ai_question_id)
             if question_entry is None:
+                available_ids = list((session.get("questions") or {}).keys())
+                _append_log_entry(
+                    session,
+                    "ERROR",
+                    f"[batch] answer_question missing id={ai_question_id}; known_ids={available_ids}"
+                )
+                pipeline_sessions[lecture_id_int] = session
                 raise HTTPException(
                     status_code=404,
                     detail=f"aiQuestionId {ai_question_id} not found for lectureId {lecture_id}"
@@ -320,6 +334,11 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
         
         session["updatedAt"] = datetime.utcnow().isoformat()
         pipeline_sessions[lecture_id_int] = session
+        _append_log_entry(
+            session,
+            "INFO",
+            f"answer received for question {ai_question_id}"
+        )
 
     return {
         "status": "success",
@@ -566,6 +585,7 @@ async def _generate_next_content_internal(lecture_id: int):
                 current_chapter_idx
             )
             generated_chapters[current_chapter_idx] = chapter_data
+            new_qids = []
             for qid, qmeta in (chapter_data.get("questions") or {}).items():
                 all_questions[qid] = {
                     **qmeta,
@@ -576,6 +596,13 @@ async def _generate_next_content_internal(lecture_id: int):
                     "answer": None,
                     "supplementary": None,
                 }
+                new_qids.append(qid)
+            if new_qids:
+                await append_session_log(
+                    lecture_id,
+                    "DEBUG",
+                    f"chapter {current_chapter_idx} questions indexed: {new_qids}"
+                )
 
         segment, next_segment_idx = get_next_segment(chapter_data, current_segment_idx)
         if segment is None:
@@ -600,6 +627,11 @@ async def _generate_next_content_internal(lecture_id: int):
                 "currentQuestionId": question_id,
                 "status": "waiting_for_answer",
             }
+            await append_session_log(
+                lecture_id,
+                "INFO",
+                f"queued question segment {question_id}"
+            )
             result_payload = {
                 "status": "question",
                 "lectureId": lecture_id,
@@ -611,6 +643,11 @@ async def _generate_next_content_internal(lecture_id: int):
                 "waitingForAnswer": True
             }
         else:
+            await append_session_log(
+                lecture_id,
+                "INFO",
+                f"queued content segment for chapter {chapter_data['chapterTitle']}"
+            )
             session_updates = {
                 **base_updates,
                 "waitingForAnswer": False,
