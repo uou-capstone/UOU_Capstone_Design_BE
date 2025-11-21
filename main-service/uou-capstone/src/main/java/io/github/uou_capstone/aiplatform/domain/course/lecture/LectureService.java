@@ -305,7 +305,7 @@ public class LectureService {
 
         StreamingAnswerResponse response = executeStreamingStage("answer_question", payload, StreamingAnswerResponse.class);
 
-        if (response.getSupplementary() == null) {
+        if (!"PROCESSING".equals(response.getStatus()) && response.getSupplementary() == null) {
             throw new IllegalStateException("AI 보충 설명 생성에 실패했습니다.");
         }
 
