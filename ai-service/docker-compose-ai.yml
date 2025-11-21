@@ -1,0 +1,10 @@
+services:
+  ai-service:
+    image: golila0611/ai-service:latest
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped

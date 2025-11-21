@@ -1,25 +1,30 @@
-FROM python:3.11-slim AS base
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=off \
-    POETRY_VIRTUALENVS_CREATE=false
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH="/app"
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install --no-install-recommends -y build-essential curl \
+RUN if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|deb.debian.org|mirror.kakao.com|g' /etc/apt/sources.list; \
+    fi \
+    && if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|https://deb.debian.org/debian|http://mirror.kakao.com/debian|g' /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ai-service/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt .
 
-COPY ai-service/app ./app
-COPY ai-service/ai_agent ./ai_agent
+RUN pip install -r requirements.txt
 
-RUN mkdir -p /data/uploads
-ENV UPLOAD_ROOT=/data/uploads \
-    PYTHONPATH=/app
+COPY . .
+
+RUN mkdir -p /app/uploads
 
 EXPOSE 8000
 
