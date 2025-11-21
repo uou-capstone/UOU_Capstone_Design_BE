@@ -6,9 +6,11 @@ import asyncio
 import httpx
 import os
 from pathlib import Path
+import copy
 from dotenv import load_dotenv
 from datetime import datetime
 from typing import Dict, Any
+import copy
 from ai_agent.Lecture_Agent.integration import (
     main as run_full_pipeline,
     prepare_lecture_content,
@@ -26,6 +28,33 @@ logger = logging.getLogger(__name__)
 # 파이프라인 세션 관리 (간단한 인메모리 저장소)
 pipeline_sessions: Dict[int, Dict[str, Any]] = {}
 pipeline_lock = asyncio.Lock()
+
+SESSION_LOG_LIMIT = 50
+
+
+def _append_log_entry(session: Dict[str, Any], level: str, message: str):
+    logs = session.setdefault("logs", [])
+    logs.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "level": level,
+        "message": message
+    })
+    if len(logs) > SESSION_LOG_LIMIT:
+        session["logs"] = logs[-SESSION_LOG_LIMIT:]
+    else:
+        session["logs"] = logs
+
+
+async def append_session_log(lecture_id: int, level: str, message: str):
+    """
+    파이프라인 세션 로그에 메시지를 추가
+    """
+    async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id)
+        if session is None:
+            session = {"lectureId": lecture_id}
+        _append_log_entry(session, level, message)
+        pipeline_sessions[lecture_id] = session
 
 class DelegatorDispatchRequest(BaseModel):
     stage: str
@@ -310,8 +339,7 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
 
 async def handle_initialize_stage(payload: Dict[str, Any]):
     """
-    PDF 분석만 수행하여 챕터 리스트 반환 (강의는 생성하지 않음)
-    스트리밍 모드의 첫 단계
+    PDF 분석을 비동기로 시작하고 즉시 상태를 반환
     """
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a dictionary")
@@ -328,40 +356,278 @@ async def handle_initialize_stage(payload: Dict[str, Any]):
         lecture_id_int = int(lecture_id)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="lectureId must be convertible to int")
-    
-    # PDF 분석 실행 (챕터 정보와 원본 PDF 경로 반환)
-    chapters_info, original_pdf_path = await asyncio.to_thread(initialize_lecture, pdf_path)
-    
-    # 세션 초기화
+
     now_iso = datetime.utcnow().isoformat()
     async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id_int)
+        if session and session.get("status") == "initialized":
+            chapters_info = session.get("chaptersInfo", [])
+            return {
+                "status": "initialized",
+                "lectureId": lecture_id_int,
+                "totalChapters": len(chapters_info),
+                "chapters": [
+                    {"title": ch["chapter_title"], "startPage": ch["start_page"], "endPage": ch["end_page"]}
+                    for ch in chapters_info
+                ],
+            }
+        if session and session.get("status") == "initializing":
+            return {
+                "status": "processing",
+                "lectureId": lecture_id_int,
+                "message": "chapter analysis in progress"
+            }
+
         pipeline_sessions[lecture_id_int] = {
             "lectureId": lecture_id_int,
-            "pdfPath": original_pdf_path,
+            "pdfPath": pdf_path,
             "mode": "streaming",
-            "status": "initialized",
-            "chaptersInfo": chapters_info,  # [{"chapter_title": str, "start_page": int, "end_page": int}, ...]
-            "totalChapters": len(chapters_info),
-            "currentChapterIndex": 0,
-            "currentSegmentIndex": 0,
+            "status": "initializing",
+            "chaptersInfo": session.get("chaptersInfo", []) if session else [],
+            "totalChapters": session.get("totalChapters", 0) if session else 0,
+            "currentChapterIndex": session.get("currentChapterIndex", 0) if session else 0,
+            "currentSegmentIndex": session.get("currentSegmentIndex", 0) if session else 0,
             "waitingForAnswer": False,
             "currentQuestionId": None,
-            "generatedChapters": {},  # 캐싱: {chapter_index: chapter_data}
-            "allQuestions": {},  # 모든 질문 통합: {questionId: {...}}
-            "createdAt": now_iso,
+            "generatedChapters": session.get("generatedChapters", {}) if session else {},
+            "allQuestions": session.get("allQuestions", {}) if session else {},
+            "pendingContents": session.get("pendingContents", []) if session else [],
+            "createdAt": session.get("createdAt", now_iso) if session else now_iso,
             "updatedAt": now_iso,
             "error": None,
+            "job": {
+                "type": "initialize",
+                "status": "processing",
+                "startedAt": now_iso,
+            },
         }
-    
+        _append_log_entry(pipeline_sessions[lecture_id_int], "INFO", "initialize requested; chapter analysis queued")
+
+    asyncio.create_task(background_initialize_session(lecture_id_int, pdf_path))
+
     return {
-        "status": "initialized",
+        "status": "processing",
         "lectureId": lecture_id_int,
-        "totalChapters": len(chapters_info),
-        "chapters": [
-            {"title": ch["chapter_title"], "startPage": ch["start_page"], "endPage": ch["end_page"]}
-            for ch in chapters_info
-        ],
+        "message": "chapter analysis started"
     }
+
+
+async def background_initialize_session(lecture_id: int, pdf_path: str):
+    """
+    스트리밍 세션 초기화를 백그라운드에서 수행
+    """
+    try:
+        chapters_info, original_pdf_path = await asyncio.to_thread(initialize_lecture, pdf_path)
+        now_iso = datetime.utcnow().isoformat()
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id, {})
+            session.update({
+                "lectureId": lecture_id,
+                "pdfPath": original_pdf_path,
+                "mode": "streaming",
+                "status": "initialized",
+                "chaptersInfo": chapters_info,
+                "totalChapters": len(chapters_info),
+                "currentChapterIndex": 0,
+                "currentSegmentIndex": 0,
+                "waitingForAnswer": False,
+                "currentQuestionId": None,
+                "generatedChapters": {},
+                "allQuestions": {},
+                "pendingContents": session.get("pendingContents", []),
+                "createdAt": session.get("createdAt", now_iso),
+                "updatedAt": now_iso,
+                "error": None,
+                "job": {
+                    "type": "initialize",
+                    "status": "completed",
+                    "completedAt": now_iso,
+                },
+            })
+            pipeline_sessions[lecture_id] = session
+            _append_log_entry(session, "INFO", f"chapter analysis completed ({len(chapters_info)} chapters)")
+    except Exception as exc:
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id, {})
+            session["status"] = "error"
+            session["error"] = str(exc)
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            session["job"] = {
+                "type": "initialize",
+                "status": "error",
+                "error": str(exc),
+            }
+            pipeline_sessions[lecture_id] = session
+            _append_log_entry(session, "ERROR", f"chapter analysis failed: {exc}")
+
+
+async def background_generate_next_content(lecture_id: int):
+    """
+    다음 콘텐츠 생성을 백그라운드에서 수행
+    """
+    try:
+        result_payload, session_updates = await _generate_next_content_internal(lecture_id)
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id)
+            if session is None:
+                return
+            pending = session.setdefault("pendingContents", [])
+            pending.append(result_payload)
+            session["pendingContents"] = pending
+            session.update(session_updates)
+            session["job"] = {
+                "type": "generate_next_content",
+                "status": "completed",
+                "completedAt": datetime.utcnow().isoformat(),
+            }
+            pipeline_sessions[lecture_id] = session
+            _append_log_entry(session, "INFO", f"next content ready ({result_payload.get('status')})")
+    except PipelineCancelledException:
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id)
+            if session:
+                session["status"] = "cancelled"
+                session["job"] = {
+                    "type": "generate_next_content",
+                    "status": "cancelled",
+                    "updatedAt": datetime.utcnow().isoformat(),
+                }
+                pipeline_sessions[lecture_id] = session
+                _append_log_entry(session, "WARNING", "content generation cancelled")
+    except Exception as exc:
+        async with pipeline_lock:
+            session = pipeline_sessions.get(lecture_id, {})
+            session["status"] = "error"
+            session["error"] = str(exc)
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            session["job"] = {
+                "type": "generate_next_content",
+                "status": "error",
+                "error": str(exc),
+            }
+            pipeline_sessions[lecture_id] = session
+            _append_log_entry(session, "ERROR", f"content generation failed: {exc}")
+
+
+async def _generate_next_content_internal(lecture_id: int):
+    """
+    기존 get_next_content 로직을 백그라운드 실행용으로 분리
+    """
+    async with pipeline_lock:
+        session = pipeline_sessions.get(lecture_id)
+        if session is None:
+            raise RuntimeError(f"lectureId {lecture_id} session not found")
+        if session.get("status") == "cancelled":
+            raise PipelineCancelledException()
+        waiting_for_answer = session.get("waitingForAnswer")
+        if waiting_for_answer:
+            raise RuntimeError("Waiting for answer before generating next content")
+        total_chapters = session.get("totalChapters", 0)
+        chapters_info = session.get("chaptersInfo") or []
+        current_chapter_idx = session.get("currentChapterIndex", 0)
+        current_segment_idx = session.get("currentSegmentIndex", 0)
+        pdf_path = session.get("pdfPath")
+        generated_chapters = copy.deepcopy(session.get("generatedChapters", {}))
+        all_questions = copy.deepcopy(session.get("allQuestions", {}))
+
+    if not chapters_info:
+        raise RuntimeError("Chapters information not ready. Initialize first.")
+
+    while True:
+        check_cancellation(lecture_id)
+
+        if current_chapter_idx >= total_chapters:
+            now_iso = datetime.utcnow().isoformat()
+            session_updates = {
+                "currentChapterIndex": current_chapter_idx,
+                "currentSegmentIndex": current_segment_idx,
+                "status": "completed",
+                "waitingForAnswer": False,
+                "currentQuestionId": None,
+                "generatedChapters": generated_chapters,
+                "allQuestions": all_questions,
+                "updatedAt": now_iso,
+            }
+            result_payload = {
+                "status": "completed",
+                "lectureId": lecture_id,
+                "message": "All chapters completed",
+                "hasMore": False
+            }
+            return result_payload, session_updates
+
+        chapter_data = generated_chapters.get(current_chapter_idx)
+        if chapter_data is None:
+            chapter_info = chapters_info[current_chapter_idx]
+            chapter_data = await asyncio.to_thread(
+                generate_single_chapter,
+                pdf_path,
+                chapter_info,
+                current_chapter_idx
+            )
+            generated_chapters[current_chapter_idx] = chapter_data
+            for qid, qmeta in (chapter_data.get("questions") or {}).items():
+                all_questions[qid] = {
+                    **qmeta,
+                    "chapterIndex": current_chapter_idx,
+                    "chapterTitle": chapter_info["chapter_title"],
+                    "pdfPath": chapter_data["pdfPath"],
+                    "answered": False,
+                    "answer": None,
+                    "supplementary": None,
+                }
+
+        segment, next_segment_idx = get_next_segment(chapter_data, current_segment_idx)
+        if segment is None:
+            current_chapter_idx += 1
+            current_segment_idx = 0
+            continue
+
+        now_iso = datetime.utcnow().isoformat()
+        base_updates = {
+            "currentChapterIndex": current_chapter_idx,
+            "currentSegmentIndex": next_segment_idx,
+            "generatedChapters": generated_chapters,
+            "allQuestions": all_questions,
+            "updatedAt": now_iso,
+        }
+
+        if segment["type"] == "question":
+            question_id = segment["questionId"]
+            session_updates = {
+                **base_updates,
+                "waitingForAnswer": True,
+                "currentQuestionId": question_id,
+                "status": "waiting_for_answer",
+            }
+            result_payload = {
+                "status": "question",
+                "lectureId": lecture_id,
+                "contentType": "SCRIPT",
+                "contentData": segment["question"],
+                "aiQuestionId": question_id,
+                "chapterTitle": chapter_data["chapterTitle"],
+                "hasMore": True,
+                "waitingForAnswer": True
+            }
+        else:
+            session_updates = {
+                **base_updates,
+                "waitingForAnswer": False,
+                "currentQuestionId": None,
+                "status": "ready",
+            }
+            result_payload = {
+                "status": "content",
+                "lectureId": lecture_id,
+                "contentType": "SCRIPT",
+                "contentData": segment["content"],
+                "chapterTitle": chapter_data["chapterTitle"],
+                "hasMore": True,
+                "waitingForAnswer": False
+            }
+
+        return result_payload, session_updates
 
 
 async def handle_get_next_content_stage(payload: Dict[str, Any]):
@@ -387,113 +653,79 @@ async def handle_get_next_content_stage(payload: Dict[str, Any]):
         if session is None:
             raise HTTPException(status_code=404, detail=f"lectureId {lecture_id} session not found. Call 'initialize' first.")
         
-        # 답변 대기 중이면 에러
+        current_status = session.get("status")
+        if current_status == "error":
+            raise HTTPException(status_code=500, detail=session.get("error") or "session is in error state")
+        if current_status == "cancelled":
+            return {
+                "status": "cancelled",
+                "lectureId": lecture_id_int,
+                "message": "Pipeline has been cancelled."
+            }
+        if current_status == "initializing":
+            return {
+                "status": "processing",
+                "lectureId": lecture_id_int,
+                "message": "chapter analysis in progress"
+            }
+
         if session.get("waitingForAnswer"):
             raise HTTPException(
                 status_code=400,
                 detail=f"Waiting for answer to question {session.get('currentQuestionId')}. Call 'answer_question' first."
             )
-        
-        current_chapter_idx = session["currentChapterIndex"]
-        current_segment_idx = session["currentSegmentIndex"]
-        total_chapters = session["totalChapters"]
-        
-        # 모든 챕터 완료 체크
-        if current_chapter_idx >= total_chapters:
+
+        pending_contents = session.get("pendingContents") or []
+        if pending_contents:
+            next_payload = pending_contents.pop(0)
+            session["pendingContents"] = pending_contents
+            session["updatedAt"] = datetime.utcnow().isoformat()
+            if next_payload.get("status") == "question":
+                session["status"] = "waiting_for_answer"
+            elif next_payload.get("status") == "completed":
+                session["status"] = "completed"
+            else:
+                session["status"] = "ready"
+            _append_log_entry(session, "INFO", f"delivered cached segment ({next_payload.get('status')})")
+            pipeline_sessions[lecture_id_int] = session
+            return next_payload
+
+        job_info = session.get("job") or {}
+        if job_info.get("type") == "generate_next_content" and job_info.get("status") == "processing":
+            _append_log_entry(session, "INFO", "content generation still in progress")
+            pipeline_sessions[lecture_id_int] = session
+            return {
+                "status": "processing",
+                "lectureId": lecture_id_int,
+                "message": "Content generation in progress"
+            }
+
+        if current_status == "completed":
             return {
                 "status": "completed",
                 "lectureId": lecture_id_int,
                 "message": "All chapters completed",
                 "hasMore": False
             }
-        
-        # 현재 챕터 데이터 가져오기 (없으면 생성)
-        chapter_data = session["generatedChapters"].get(current_chapter_idx)
-        if chapter_data is None:
-            # 챕터 강의 생성 (백그라운드가 아닌 동기 처리)
-            chapter_info = session["chaptersInfo"][current_chapter_idx]
-            original_pdf_path = session["pdfPath"]
-            
-            print(f"[get_next_content] 챕터 {current_chapter_idx} 생성 중: {chapter_info['chapter_title']}")
-            chapter_data = await asyncio.to_thread(
-                generate_single_chapter,
-                original_pdf_path,
-                chapter_info,
-                current_chapter_idx
-            )
-            session["generatedChapters"][current_chapter_idx] = chapter_data
-            
-            # 질문들을 allQuestions에 추가
-            for qid, qmeta in chapter_data.get("questions", {}).items():
-                session["allQuestions"][qid] = {
-                    **qmeta,
-                    "chapterIndex": current_chapter_idx,
-                    "chapterTitle": chapter_info["chapter_title"],
-                    "pdfPath": chapter_data["pdfPath"],  # 분할된 챕터 PDF 경로
-                    "answered": False,
-                    "answer": None,
-                    "supplementary": None,
-                }
-            
-            session["updatedAt"] = datetime.utcnow().isoformat()
-        
-        # 다음 세그먼트 가져오기
-        segment, next_segment_idx = get_next_segment(chapter_data, current_segment_idx)
-        
-        if segment is None:
-            # 현재 챕터 끝 → 다음 챕터로
-            session["currentChapterIndex"] = current_chapter_idx + 1
-            session["currentSegmentIndex"] = 0
-            session["updatedAt"] = datetime.utcnow().isoformat()
-            pipeline_sessions[lecture_id_int] = session
-            
-            # 다음 챕터가 있는지 확인
-            if session["currentChapterIndex"] >= total_chapters:
-                return {
-                    "status": "completed",
-                    "lectureId": lecture_id_int,
-                    "message": "All chapters completed",
-                    "hasMore": False
-                }
-            else:
-                # 다음 챕터의 첫 세그먼트를 반환하도록 재귀 호출
-                return await handle_get_next_content_stage(payload)
-        
-        # 세그먼트가 있음
-        session["currentSegmentIndex"] = next_segment_idx
-        
-        if segment["type"] == "question":
-            # 질문 세그먼트 → 대기 상태로 전환
-            question_id = segment["questionId"]
-            session["waitingForAnswer"] = True
-            session["currentQuestionId"] = question_id
-            session["updatedAt"] = datetime.utcnow().isoformat()
-            pipeline_sessions[lecture_id_int] = session
-            
-            return {
-                "status": "question",
-                "lectureId": lecture_id_int,
-                "contentType": "SCRIPT",
-                "contentData": segment["question"],
-                "aiQuestionId": question_id,
-                "chapterTitle": chapter_data["chapterTitle"],
-                "hasMore": True,
-                "waitingForAnswer": True
-            }
-        else:
-            # 일반 스크립트 세그먼트
-            session["updatedAt"] = datetime.utcnow().isoformat()
-            pipeline_sessions[lecture_id_int] = session
-            
-            return {
-                "status": "content",
-                "lectureId": lecture_id_int,
-                "contentType": "SCRIPT",
-                "contentData": segment["content"],
-                "chapterTitle": chapter_data["chapterTitle"],
-                "hasMore": True,
-                "waitingForAnswer": False
-            }
+
+        job_start = datetime.utcnow().isoformat()
+        session["job"] = {
+            "type": "generate_next_content",
+            "status": "processing",
+            "startedAt": job_start,
+        }
+        session["status"] = "generating"
+        session.setdefault("pendingContents", [])
+        pipeline_sessions[lecture_id_int] = session
+
+    await append_session_log(lecture_id_int, "INFO", "next content generation queued")
+    asyncio.create_task(background_generate_next_content(lecture_id_int))
+
+    return {
+        "status": "processing",
+        "lectureId": lecture_id_int,
+        "message": "Content generation started"
+    }
 
 
 async def handle_get_session_stage(payload: Dict[str, Any]):
@@ -526,6 +758,8 @@ async def handle_get_session_stage(payload: Dict[str, Any]):
         "createdAt": session.get("createdAt"),
         "updatedAt": session.get("updatedAt"),
         "error": session.get("error"),
+        "job": session.get("job"),
+        "logs": session.get("logs", []),
     }
 
 
