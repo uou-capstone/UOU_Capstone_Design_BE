@@ -259,7 +259,20 @@ public class LectureService {
         payload.put("lecture_id", lectureId);
         payload.put("lectureId", lectureId);
 
-        return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);
+        try {
+            return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);
+        } catch (StreamingApiException e) {
+            // AI 서비스가 "답변 대기 중"이라며 400을 반환한 경우 -> 에러가 아니라 "질문 타임"으로 처리
+            if (e.getStatusCode() == HttpStatus.BAD_REQUEST && e.getMessage() != null && e.getMessage().contains("Waiting for answer")) {
+                return StreamingContentResponse.builder()
+                        .status("WAITING_FOR_ANSWER")
+                        .lectureId(lectureId)
+                        .waitingForAnswer(true)
+                        .hasMore(true)
+                        .build();
+            }
+            throw e;
+        }
     }
 
 
