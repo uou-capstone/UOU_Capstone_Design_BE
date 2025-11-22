@@ -264,15 +264,64 @@ public class LectureService {
         } catch (StreamingApiException e) {
             // AI 서비스가 "답변 대기 중"이라며 400을 반환한 경우 -> 에러가 아니라 "질문 타임"으로 처리
             if (e.getStatusCode() == HttpStatus.BAD_REQUEST && e.getMessage() != null && e.getMessage().contains("Waiting for answer")) {
+                String aiQuestionId = extractQuestionIdFromMessage(e.getMessage());
+                String questionText = null;
+
+                // 질문 ID가 있다면 세션에서 질문 내용을 조회
+                if (aiQuestionId != null) {
+                    try {
+                        Map<String, Object> sessionData = executeStreamingStage("get_session", payload);
+                        questionText = findQuestionTextInSession(sessionData, aiQuestionId);
+                    } catch (Exception ex) {
+                        log.warn("질문 텍스트 조회 실패: {}", aiQuestionId, ex);
+                    }
+                }
+
                 return StreamingContentResponse.builder()
                         .status("WAITING_FOR_ANSWER")
                         .lectureId(lectureId)
                         .waitingForAnswer(true)
                         .hasMore(true)
+                        .aiQuestionId(aiQuestionId)
+                        .contentData(questionText) // 질문 텍스트 포함
                         .build();
             }
             throw e;
         }
+    }
+
+    // 에러 메시지에서 질문 ID 추출 (예: "Waiting for answer to question c0-q-0.")
+    private String extractQuestionIdFromMessage(String message) {
+        try {
+            int start = message.indexOf("question ");
+            if (start != -1) {
+                String sub = message.substring(start + 9);
+                int end = sub.indexOf("."); // 끝 점이 . 이거나 공백일 수 있음
+                if (end == -1) end = sub.length();
+                return sub.substring(0, end).trim();
+            }
+        } catch (Exception e) {
+            log.warn("질문 ID 파싱 실패: {}", message);
+        }
+        return null;
+    }
+
+    // 세션 데이터에서 질문 ID로 질문 내용 찾기
+    private String findQuestionTextInSession(Map<String, Object> sessionData, String questionId) {
+        if (sessionData != null && sessionData.containsKey("questions")) {
+            Object questionsObj = sessionData.get("questions");
+            if (questionsObj instanceof Map) {
+                Map<?, ?> questions = (Map<?, ?>) questionsObj;
+                Object qObj = questions.get(questionId);
+                if (qObj instanceof Map) {
+                    Map<?, ?> qDetail = (Map<?, ?>) qObj;
+                    if (qDetail.containsKey("question")) {
+                        return String.valueOf(qDetail.get("question"));
+                    }
+                }
+            }
+        }
+        return "질문 내용을 불러올 수 없습니다.";
     }
 
 
