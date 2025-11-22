@@ -790,7 +790,7 @@ async def handle_get_session_stage(payload: Dict[str, Any]):
         "lectureId": lecture_id_int,
         "serviceStatus": session.get("status", "unknown"),
         "chapters": session.get("chapters"),
-        "questions": session.get("questions"),
+        "questions": session.get("questions") or session.get("allQuestions"),
         "lastAnswerMeta": session.get("lastAnswerMeta"),
         "createdAt": session.get("createdAt"),
         "updatedAt": session.get("updatedAt"),
