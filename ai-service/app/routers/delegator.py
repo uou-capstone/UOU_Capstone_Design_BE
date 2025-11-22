@@ -251,6 +251,25 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             
             # 대기 중인 질문인지 확인
             if not session.get("waitingForAnswer") or session.get("currentQuestionId") != ai_question_id:
+                # 멱등성 처리: 이미 답변 완료된 질문이면 성공 응답 재반환
+                if question_entry.get("answered"):
+                    _append_log_entry(session, "WARNING", f"answer_question retry detected for {ai_question_id}")
+                    return {
+                        "status": "success",
+                        "lectureId": lecture_id_int,
+                        "aiQuestionId": ai_question_id,
+                        "question": question_entry.get("question"),
+                        "chapterTitle": question_entry.get("chapterTitle"),
+                        "supplementary": question_entry.get("supplementary"),
+                        "validationResult": question_entry.get("validationResult"),
+                        "needsFollowUp": question_entry.get("needsFollowUp"),
+                        "conceptQueue": question_entry.get("conceptQueue"),
+                        "badModeHistory": question_entry.get("badModeHistory"),
+                        "qaState": question_entry.get("qaState"),
+                        "canContinue": True,
+                        "message": "Already answered."
+                    }
+                
                 raise HTTPException(
                     status_code=400,
                     detail=f"Not waiting for answer to question {ai_question_id}"
@@ -706,26 +725,36 @@ async def handle_get_next_content_stage(payload: Dict[str, Any]):
                 "message": "chapter analysis in progress"
             }
 
-        if session.get("waitingForAnswer"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Waiting for answer to question {session.get('currentQuestionId')}. Call 'answer_question' first."
-            )
-
         pending_contents = session.get("pendingContents") or []
         if pending_contents:
             next_payload = pending_contents.pop(0)
             session["pendingContents"] = pending_contents
             session["updatedAt"] = datetime.utcnow().isoformat()
-            if next_payload.get("status") == "question":
-                session["status"] = "waiting_for_answer"
-            elif next_payload.get("status") == "completed":
-                session["status"] = "completed"
+            
+            # 큐에서 꺼낸 후 상태 갱신 로직 (중요!)
+            # 만약 큐가 비었고 마지막 꺼낸 게 질문이면 -> waiting_for_answer 유지
+            # 만약 큐가 비었고 마지막 꺼낸 게 완료면 -> completed 유지
+            # 만약 큐에 아직 남았으면 -> ready 상태로 (계속 뽑아가라고)
+            
+            if not pending_contents:
+                # 큐가 비었을 때만 현재 세션의 최종 상태를 반영
+                # (백그라운드 잡이 설정해둔 waitingForAnswer 등)
+                pass 
             else:
-                session["status"] = "ready"
+                # 큐에 남았으면 아직 대기 상태 아님 (뽑아갈 게 있으니까)
+                # 하지만 session["waitingForAnswer"] 자체를 False로 바꾸면 안 됨 (백그라운드 잡과의 동기화 문제)
+                # 여기서는 단순히 상태 반환만 하고, 에러를 안 내는 게 핵심.
+                pass
+
             _append_log_entry(session, "INFO", f"delivered cached segment ({next_payload.get('status')})")
             pipeline_sessions[lecture_id_int] = session
             return next_payload
+
+        if session.get("waitingForAnswer"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Waiting for answer to question {session.get('currentQuestionId')}. Call 'answer_question' first."
+            )
 
         job_info = session.get("job") or {}
         if job_info.get("type") == "generate_next_content" and job_info.get("status") == "processing":
