@@ -1,7 +1,5 @@
-version: '3.8'
-
 # 하이브리드 모드: MySQL + Redis만 Docker로 실행, Spring Boot는 IDE에서 실행
-# 사용법: docker-compose -f docker-compose.local-hybrid.yml up -d
+# 사용법: docker compose -f docker-compose.local-hybrid.yml up -d
 # → IDE에서 Spring Boot 실행 (Profile: local)
 
 services:

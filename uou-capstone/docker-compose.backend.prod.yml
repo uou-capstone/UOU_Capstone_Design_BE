@@ -1,7 +1,5 @@
-version: '3.8'
-
 # 배포용 Backend Docker Compose (EC2 서버)
-# 사용법: docker-compose -f docker-compose.backend.prod.yml up -d
+# 사용법: docker compose -f docker-compose.backend.prod.yml up -d
 
 services:
   # Backend 전용 Redis (배포용)
