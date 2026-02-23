@@ -2,7 +2,8 @@ FROM eclipse-temurin:21-jdk AS build
 
 WORKDIR /workspace
 
-COPY main-service/uou-capstone/ ./
+# 현재 디렉토리(uou-capstone)의 모든 파일 복사
+COPY . ./
 
 RUN chmod +x gradlew \
     && ./gradlew --no-daemon clean bootJar

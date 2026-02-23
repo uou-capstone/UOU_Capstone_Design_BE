@@ -25,8 +25,8 @@ services:
   # Backend 서비스 (Spring Boot) - 배포용
   backend:
     build:
-      context: ../..  # 프로젝트 루트 (UOU_Capstone_Design_BE)
-      dockerfile: main-service/uou-capstone/Dockerfile
+      context: .  # 현재 디렉토리 (uou-capstone)
+      dockerfile: Dockerfile
     container_name: backend-service
     ports:
       - "${BACKEND_PORT:-8080}:8080"  # 외부 접근 필요
