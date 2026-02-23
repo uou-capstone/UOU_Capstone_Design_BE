@@ -1,0 +1,51 @@
+# 로컬 개발 환경 설정
+# 사용법: SPRING_PROFILES_ACTIVE=local 또는 IDE에서 Active Profile 설정
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/uoucapstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8&allowPublicKeyRetrieval=true
+    username: root
+    password: 1234
+
+  jpa:
+    hibernate:
+      ddl-auto: create  # 로컬 개발: create (테이블 자동 생성)
+    show-sql: true  # SQL 로그 출력
+
+  data:
+    redis:
+      host: localhost  # 로컬 Redis (Docker 또는 로컬 설치)
+      port: 6379
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            redirect-uri: "http://localhost:8080/login/oauth2/code/kakao"  # 로컬 리다이렉트
+
+logging:
+  level:
+    root: INFO
+    org.springdoc: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+    io.github.uou_capstone: DEBUG
+
+# AI 서비스 설정 (로컬 개발)
+ai:
+  service:
+    base-url: ${AI_SERVICE_BASE_URL:https://plutean-clement-apheliotropically.ngrok-free.dev/}
+    secret-key: ${AI_SERVICE_SECRET_KEY:YOUR_SUPER_SECRET_AI_KEY_12345}
+
+# JWT 설정 (로컬 개발용 기본값)
+jwt:
+  secret: ${JWT_SECRET:dW1jLW5hZGFtc3BhY2UtcHJvamVjdC1zcHJpbmctYm9vdC1qd3Qtc2VjcmV0LWtleS1mb3ItZGlhcnktYXBwbGljYXRpb24K}

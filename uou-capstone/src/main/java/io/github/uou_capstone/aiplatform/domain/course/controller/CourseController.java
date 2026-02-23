@@ -1,0 +1,96 @@
+package io.github.uou_capstone.aiplatform.domain.course.controller;
+
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.service.CourseService;
+import io.github.uou_capstone.aiplatform.domain.course.service.EnrollmentService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@Tag(name = "강의실(Course) API", description = "인증된 사용자(특히 선생님과 학생)가 강의실을 생성, 조회, 수정, 삭제하고 수강 신청하는 흐름을 다룸")
+@RestController
+@RequestMapping("/api/courses")
+@RequiredArgsConstructor
+public class CourseController {
+
+    private final CourseService courseService;
+    private final EnrollmentService enrollmentService;
+
+    @Operation(summary = "강의실 생성", description = "선생님이 강의실(Course)을 생성합니다. 인증코드가 자동으로 생성됩니다.")
+    @PostMapping
+    @PreAuthorize("hasAuthority('TEACHER')") // 이 API는 'TEACHER' 역할을 가진 사용자만 호출 가능
+    public ResponseEntity<CourseResponseDto> createCourse(@Valid @RequestBody CourseCreateRequestDto requestDto) {
+        // 1. Service를 호출하여 강의실 생성 로직 수행
+        Course newCourse = courseService.createCourse(requestDto);
+
+        // 2. 생성된 Course Entity를 CourseResponseDto로 변환
+        CourseResponseDto responseDto = new CourseResponseDto(newCourse);
+
+        // 3. HTTP 상태 코드 201(Created)와 함께 응답 본문에 DTO를 담아 반환
+        return ResponseEntity.status(HttpStatus.CREATED).body(responseDto);
+    }
+
+    @Operation(summary = "전체 강의실 목록 조회", description = "생성된 모든 강의실의 목록을 조회합니다. (선생님: 최신순, 학생: 수강중인 목록)")
+    @GetMapping
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<List<CourseResponseDto>> getAllCourses() {
+        List<CourseResponseDto> courses = courseService.getAllCourses();
+        return ResponseEntity.ok(courses);
+    }
+
+    @Operation(summary = "강의실 상세 조회", description = "특정 강의실의 상세 정보와 강의(Lecture) 목록을 조회합니다.")
+    @GetMapping("/{courseId}")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<CourseResponseDto> getCourseById(@PathVariable Long courseId) {
+        Course course = courseService.getCourseById(courseId);
+        return ResponseEntity.ok(new CourseResponseDto(course));
+    }
+
+    // 기존 ID 기반 수강 신청 (유지할지 결정 필요하나, 일단 둠)
+    @Operation(summary = "수강 신청 (ID 기반)", description = "학생이 ID를 통해 강의실에 입장(수강 신청)합니다.")
+    @PostMapping("/{courseId}/enroll")
+    @PreAuthorize("hasAuthority('STUDENT')") // 학생만 호출 가능
+    public ResponseEntity<String> enrollCourse(@PathVariable Long courseId) {
+        enrollmentService.enrollCourse(courseId);
+        return ResponseEntity.status(HttpStatus.CREATED).body("수강 신청이 완료되었습니다.");
+    }
+
+    @Operation(summary = "초대 코드로 강의실 입장", description = "학생이 초대 링크 등을 통해 전달받은 코드로 강의실에 입장(수강 신청)합니다.")
+    @PostMapping("/join")
+    @PreAuthorize("hasAuthority('STUDENT')")
+    public ResponseEntity<String> joinCourse(@RequestParam("code") String invitationCode) {
+        enrollmentService.enrollCourseByCode(invitationCode);
+        return ResponseEntity.status(HttpStatus.CREATED).body("강의실 입장이 완료되었습니다.");
+    }
+
+    @Operation(summary = "강의실 정보 수정", description = "선생님이 자신이 개설한 강의실의 제목 또는 설명을 수정합니다.")
+    @PutMapping("/{courseId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<CourseResponseDto> updateCourse(
+            @PathVariable Long courseId,
+            @Valid @RequestBody CourseUpdateRequestDto requestDto) {
+
+        Course updatedCourse = courseService.updateCourse(courseId, requestDto);
+        return ResponseEntity.ok(new CourseResponseDto(updatedCourse));
+    }
+
+    @Operation(summary = "강의실 삭제", description = "선생님이 자신이 개설한 강의실을 삭제합니다.")
+    @DeleteMapping("/{courseId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteCourse(@PathVariable Long courseId) {
+        courseService.deleteCourse(courseId);
+
+        // 삭제 성공 시 204 No Content 응답 반환
+        return ResponseEntity.noContent().build();
+    }
+}

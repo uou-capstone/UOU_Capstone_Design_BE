@@ -1,0 +1,407 @@
+package io.github.uou_capstone.aiplatform.domain.material.generation.controller;
+
+import io.github.uou_capstone.aiplatform.domain.material.generation.dto.*;
+import io.github.uou_capstone.aiplatform.domain.material.generation.service.MaterialGenerationService;
+import io.github.uou_capstone.aiplatform.domain.task.dto.AsyncTaskResponse;
+import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
+import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 강의 자료 생성 Controller
+ * Version 2의 5단계 파이프라인을 관리하는 REST API
+ * 
+ * API 엔드포인트:
+ * - POST /api/materials/generation/phase1: Phase 1 시작 (DraftPlan 생성)
+ * - POST /api/materials/generation/phase2: Phase 2 처리 (사용자 피드백)
+ * - GET /api/materials/generation/{sessionId}/status: 생성 상태 조회
+ */
+@Tag(name = "강의 자료 생성 API", description = "AI 기반 강의 자료 생성 5단계 파이프라인 API")
+@RestController
+@RequestMapping("/api/materials/generation")
+@RequiredArgsConstructor
+public class MaterialGenerationController {
+
+    private final MaterialGenerationService materialGenerationService;
+    private final AsyncTaskService asyncTaskService;
+    private final SessionRecoveryService sessionRecoveryService;
+
+    /**
+     * Phase 1: 초기 키워드 기반 DraftPlan 생성
+     * 
+     * 엔드포인트: POST /api/materials/generation/phase1
+     * 
+     * 요청 본문:
+     * {
+     *   "lectureId": 1,
+     *   "keyword": "마르코프 체인"
+     * }
+     * 
+     * 응답:
+     * {
+     *   "sessionId": 1,
+     *   "draftPlan": {
+     *     "projectMeta": {...},
+     *     "styleGuide": {...},
+     *     "chapters": [...]
+     *   },
+     *   "progressPercentage": 20,
+     *   "message": "Phase 1 완료: 기획안 초안이 생성되었습니다."
+     * }
+     * 
+     * 로직 흐름:
+     * 1. Controller가 요청을 받아 Service에 전달
+     * 2. Service가 권한 확인, 강의 조회, PDF 조회, 세션 생성, Agent 호출 수행
+     * 3. Service가 생성된 DraftPlan과 sessionId를 반환
+     * 4. Controller가 ResponseEntity로 응답 반환
+     */
+    @Operation(
+            summary = "Phase 1: 기획안 초안 생성", 
+            description = "사용자가 입력한 키워드를 기반으로 강의 자료 기획안 초안(DraftPlan)을 생성합니다."
+    )
+    @PostMapping("/phase1")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationPhase1ResponseDto> startPhase1(
+            @Valid @RequestBody MaterialGenerationPhase1RequestDto requestDto) {
+        
+        // Service 레이어에 요청 전달
+        // Service에서 모든 비즈니스 로직 처리:
+        // - 권한 확인
+        // - 강의 정보 조회
+        // - PDF 경로 조회
+        // - 세션 생성
+        // - PlanningAgent 호출
+        // - 결과 저장
+        MaterialGenerationPhase1ResponseDto response = materialGenerationService.startPhase1(requestDto);
+        
+        // HTTP 200 OK와 함께 응답 반환
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Phase 2: 사용자 피드백 기반 FinalizedBrief 생성
+     * 
+     * 엔드포인트: POST /api/materials/generation/phase2
+     * 
+     * 요청 본문 (확정):
+     * {
+     *   "sessionId": 1,
+     *   "action": "confirm"
+     * }
+     * 
+     * 요청 본문 (수정 요청):
+     * {
+     *   "sessionId": 1,
+     *   "action": "feedback",
+     *   "feedback": "챕터 3의 내용을 더 자세히 설명해주세요"
+     * }
+     * 
+     * 응답 (확정):
+     * {
+     *   "sessionId": 1,
+     *   "finalizedBrief": {
+     *     "projectMeta": {...},
+     *     "styleGuide": {...},
+     *     "chapters": [...]
+     *   },
+     *   "progressPercentage": 40,
+     *   "message": "Phase 2 완료: 기획안이 확정되었습니다."
+     * }
+     * 
+     * 로직 흐름:
+     * 1. Controller가 요청을 받아 Service에 전달
+     * 2. Service가 세션 조회, 권한 확인, Phase 확인, DraftPlan 조회 수행
+     * 3. action에 따라:
+     *    - "confirm": DraftPlan을 FinalizedBrief로 변환
+     *    - "feedback": UpdateAgent를 통해 DraftPlan 수정
+     * 4. Service가 결과를 반환
+     * 5. Controller가 ResponseEntity로 응답 반환
+     */
+    @Operation(
+            summary = "Phase 2: 기획안 확정 또는 수정", 
+            description = "사용자 피드백을 기반으로 기획안을 확정하거나 수정합니다. action='confirm'은 확정, action='feedback'은 수정 요청입니다."
+    )
+    @PostMapping("/phase2")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationPhase2ResponseDto> processPhase2(
+            @Valid @RequestBody MaterialGenerationPhase2RequestDto requestDto) {
+        
+        // Service 레이어에 요청 전달
+        // Service에서 모든 비즈니스 로직 처리:
+        // - 세션 조회
+        // - 권한 확인
+        // - Phase 확인
+        // - DraftPlan 조회
+        // - 사용자 피드백 처리 (확정 또는 수정)
+        // - 결과 저장
+        MaterialGenerationPhase2ResponseDto response = materialGenerationService.processPhase2(requestDto);
+        
+        // HTTP 200 OK와 함께 응답 반환
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 생성 상태 조회
+     * 
+     * 엔드포인트: GET /api/materials/generation/{sessionId}/status
+     * 
+     * 응답:
+     * {
+     *   "sessionId": 1,
+     *   "currentPhase": "PHASE2",
+     *   "progressPercentage": 40,
+     *   "finalDocument": null,
+     *   "errorMessage": null
+     * }
+     * 
+     * 로직 흐름:
+     * 1. Controller가 sessionId를 받아 Service에 전달
+     * 2. Service가 세션 조회, 권한 확인, 상태 정보 구성 수행
+     * 3. Service가 상태 정보를 반환
+     * 4. Controller가 ResponseEntity로 응답 반환
+     */
+    @Operation(
+            summary = "생성 상태 조회", 
+            description = "강의 자료 생성 진행 상태를 조회합니다. currentPhase, progressPercentage, errorMessage 등을 확인할 수 있습니다."
+    )
+    @GetMapping("/{sessionId}/status")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationStatusDto> getStatus(@PathVariable Long sessionId) {
+        
+        // Service 레이어에 sessionId 전달
+        // Service에서 모든 비즈니스 로직 처리:
+        // - 세션 조회
+        // - 권한 확인
+        // - 상태 정보 구성
+        MaterialGenerationStatusDto response = materialGenerationService.getStatus(sessionId);
+        
+        // HTTP 200 OK와 함께 응답 반환
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Phase 3: 콘텐츠 생성 (챕터 분해 및 본문 작성)
+     * 
+     * 엔드포인트: POST /api/materials/generation/phase3
+     * 
+     * 요청 본문:
+     * {
+     *   "sessionId": 1
+     * }
+     * 
+     * 응답:
+     * {
+     *   "sessionId": 1,
+     *   "chapterContentList": {
+     *     "chapters": [
+     *       {
+     *         "chapterTitle": "마르코프 체인의 기본",
+     *         "content": "# 마르코프 체인의 기본\n\n...",
+     *         "summary": "...",
+     *         "keywords": "..."
+     *       }
+     *     ]
+     *   },
+     *   "progressPercentage": 60,
+     *   "message": "Phase 3 완료: 콘텐츠 생성이 완료되었습니다."
+     * }
+     */
+    @Operation(
+            summary = "Phase 3: 콘텐츠 생성", 
+            description = "챕터를 하위 주제로 분해하고 Markdown 본문을 작성합니다."
+    )
+    @PostMapping("/phase3")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationPhase3ResponseDto> processPhase3(
+            @Valid @RequestBody MaterialGenerationPhase3RequestDto requestDto) {
+        
+        MaterialGenerationPhase3ResponseDto response = materialGenerationService.processPhase3(requestDto);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Phase 4: 검증 및 수정
+     * 
+     * 엔드포인트: POST /api/materials/generation/phase4
+     * 
+     * 요청 본문:
+     * {
+     *   "sessionId": 1
+     * }
+     * 
+     * 응답:
+     * {
+     *   "sessionId": 1,
+     *   "verifiedContent": {
+     *     "chapters": [...],
+     *     "qualityChecks": ["정확성", "완전성", "일관성"],
+     *     "verificationMetadata": {...}
+     *   },
+     *   "progressPercentage": 80,
+     *   "message": "Phase 4 완료: 콘텐츠 검증 및 수정이 완료되었습니다."
+     * }
+     */
+    @Operation(
+            summary = "Phase 4: 검증 및 수정", 
+            description = "콘텐츠의 검색 결과 충분성을 검증하고 품질을 검증합니다."
+    )
+    @PostMapping("/phase4")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationPhase4ResponseDto> processPhase4(
+            @Valid @RequestBody MaterialGenerationPhase4RequestDto requestDto) {
+        
+        MaterialGenerationPhase4ResponseDto response = materialGenerationService.processPhase4(requestDto);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Phase 5: 최종 조립
+     * 
+     * 엔드포인트: POST /api/materials/generation/phase5
+     * 
+     * 요청 본문:
+     * {
+     *   "sessionId": 1
+     * }
+     * 
+     * 응답:
+     * {
+     *   "sessionId": 1,
+     *   "finalDocument": "# 강의 자료\n\n...",
+     *   "documentUrl": "/api/materials/generation/1/document",
+     *   "progressPercentage": 100,
+     *   "message": "Phase 5 완료: 최종 문서가 생성되었습니다."
+     * }
+     */
+    @Operation(
+            summary = "Phase 5: 최종 조립", 
+            description = "검증된 콘텐츠를 최종 Markdown 문서로 조립합니다."
+    )
+    @PostMapping("/phase5")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationPhase5ResponseDto> processPhase5(
+            @Valid @RequestBody MaterialGenerationPhase5RequestDto requestDto) {
+        
+        MaterialGenerationPhase5ResponseDto response = materialGenerationService.processPhase5(requestDto);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 최종 문서 다운로드
+     * 
+     * 엔드포인트: GET /api/materials/generation/{sessionId}/document
+     * 
+     * 응답: Markdown 문서 (text/markdown)
+     * 
+     * 로직 흐름:
+     * 1. Controller가 sessionId를 받아 Service에 전달
+     * 2. Service가 세션 조회, 권한 확인, 최종 문서 조회 수행
+     * 3. Service가 Markdown 문서를 반환
+     * 4. Controller가 HTTP 200 OK와 함께 Markdown 문서를 반환
+     */
+    @Operation(
+            summary = "최종 문서 다운로드", 
+            description = "Phase 5에서 생성된 최종 Markdown 문서를 다운로드합니다."
+    )
+    @GetMapping("/{sessionId}/document")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<String> downloadDocument(@PathVariable Long sessionId) {
+        
+        String document = materialGenerationService.getFinalDocument(sessionId);
+        
+        return ResponseEntity.ok()
+                .header("Content-Type", "text/markdown; charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=\"lecture-material-" + sessionId + ".md\"")
+                .body(document);
+    }
+
+    /**
+     * Phase 3-5 비동기 처리 시작
+     * 
+     * 엔드포인트: POST /api/materials/generation/async
+     * 
+     * 요청 본문:
+     * {
+     *   "sessionId": 1
+     * }
+     * 
+     * 응답:
+     * {
+     *   "taskId": "uuid-1234-5678",
+     *   "status": "accepted",
+     *   "message": "강의 자료 생성이 시작되었습니다.",
+     *   "statusUrl": "/api/tasks/uuid-1234-5678/status"
+     * }
+     * 
+     * 로직 흐름:
+     * 1. Controller가 요청을 받아 taskId 생성
+     * 2. AsyncTaskService에 작업 등록
+     * 3. MaterialGenerationService의 비동기 메서드 호출
+     * 4. 즉시 taskId와 statusUrl 반환
+     */
+    @Operation(
+            summary = "Phase 3-5 비동기 처리 시작", 
+            description = "Phase 3-5를 비동기로 처리합니다. 즉시 taskId를 반환하며, 진행 상황은 /api/tasks/{taskId}/status에서 확인할 수 있습니다."
+    )
+    @PostMapping("/async")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<AsyncTaskResponse> startAsyncGeneration(
+            @Valid @RequestBody MaterialGenerationAsyncRequestDto requestDto) {
+        
+        // ========== 1단계: taskId 생성 ==========
+        String taskId = java.util.UUID.randomUUID().toString();
+        
+        // ========== 2단계: 작업 등록 ==========
+        asyncTaskService.createTask(taskId, "강의 자료 생성 대기 중...");
+        
+        // ========== 3단계: 비동기 처리 시작 ==========
+        materialGenerationService.processPhase3To5Async(taskId, requestDto.getSessionId());
+        
+        // ========== 4단계: 즉시 응답 반환 ==========
+        AsyncTaskResponse response = AsyncTaskResponse.builder()
+                .taskId(taskId)
+                .status("accepted")
+                .message("강의 자료 생성이 시작되었습니다.")
+                .statusUrl("/api/tasks/" + taskId + "/status")
+                .build();
+        
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+    }
+
+    /**
+     * 세션 복구
+     * 
+     * 엔드포인트: POST /api/materials/generation/{sessionId}/recover
+     * 
+     * 설명:
+     * - 실패한 GenerationSession의 에러 메시지를 제거하고 재시도 가능한 상태로 복구합니다.
+     * 
+     * 응답:
+     * {
+     *   "message": "세션이 복구되었습니다."
+     * }
+     */
+    @Operation(
+            summary = "세션 복구", 
+            description = "실패한 GenerationSession을 복구하여 재시도 가능한 상태로 만듭니다."
+    )
+    @PostMapping("/{sessionId}/recover")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Map<String, String>> recoverSession(@PathVariable Long sessionId) {
+        sessionRecoveryService.recoverGenerationSession(sessionId);
+        
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "세션이 복구되었습니다. 다시 시도할 수 있습니다.");
+        return ResponseEntity.ok(response);
+    }
+}

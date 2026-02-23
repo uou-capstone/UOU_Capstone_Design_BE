@@ -1,0 +1,51 @@
+# 배포 환경 설정 (EC2)
+# 사용법: SPRING_PROFILES_ACTIVE=prod (Docker 환경 변수로 설정)
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:mysql-db}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:uoucapstone}?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD}  # 환경 변수 필수
+
+  jpa:
+    hibernate:
+      ddl-auto: validate  # 배포: validate (스키마 변경 금지)
+    show-sql: false  # SQL 로그 비활성화 (성능)
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis-backend}  # Docker 컨테이너 이름
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            redirect-uri: ${KAKAO_REDIRECT_URI:http://your-domain.com/login/oauth2/code/kakao}  # 배포 도메인
+
+logging:
+  level:
+    root: INFO
+    org.springdoc: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    io.github.uou_capstone: INFO
+
+# AI 서비스 설정 (배포 환경)
+ai:
+  service:
+    base-url: ${AI_SERVICE_BASE_URL:http://ai-service:8000}  # Docker 네트워크 내부 주소
+    secret-key: ${AI_SERVICE_SECRET_KEY}  # 환경 변수 필수
+
+# JWT 설정 (배포 환경 - 환경 변수 필수)
+jwt:
+  secret: ${JWT_SECRET}  # 환경 변수 필수

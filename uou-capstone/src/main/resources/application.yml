@@ -1,0 +1,55 @@
+﻿# 공통 설정 (모든 환경에서 공통)
+server:
+  port: 8080
+
+jwt:
+  # Access Token 유효 시간 (30분)
+  access-token-expiration-time: 1800000
+  # Refresh Token 유효 시간 (2주)
+  refresh-token-expiration-time: 1209600000
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  jpa:
+    properties:
+      hibernate:
+        format_sql: true
+        default_batch_fetch_size: 100
+
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: 275b2717e98d58ac245a1ba255f57d03
+            client-secret: JChF9Fptvsdkky2Lhp18vEcouYFuOuBv
+            client-authentication-method: client_secret_post
+            authorization-grant-type: authorization_code
+            scope:
+              - profile_nickname
+              - account_email
+
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true
+    display-request-duration: true
+  default-produces-media-type: application/json
+  default-consumes-media-type: application/json
+  info:
+    title: AI튜터
+    description:
+    version: v2.0.0
