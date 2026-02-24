@@ -32,7 +32,7 @@ public class RateLimitService {
 
     // ========== Rate Limit 설정 ==========
     private static final String RATE_LIMIT_PREFIX = "rate_limit:";
-    private static final int DEFAULT_MAX_REQUESTS_PER_MINUTE = 10;  // 기본: 분당 10회
+    private static final int DEFAULT_MAX_REQUESTS_PER_MINUTE = 100;  // 기본: 분당 100회 (개발/테스트 환경)
     private static final Duration RATE_LIMIT_WINDOW = Duration.ofMinutes(1);  // 1분 윈도우
 
     /**
