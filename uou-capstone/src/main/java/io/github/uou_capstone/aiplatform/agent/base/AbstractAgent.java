@@ -9,6 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 /**
  * Abstract Agent
@@ -89,8 +92,89 @@ public abstract class AbstractAgent implements Agent {
                 .uri(getEndpoint() + "/stream") // 스트리밍 엔드포인트
                 .bodyValue(requestBody)
                 .retrieve()
+                .onStatus(status -> status.is5xxServerError() || status.value() == 503 || status.value() == 429, 
+                    response -> {
+                        log.error("[{}] AI service returned error status: {}", agentName, response.statusCode());
+                        return response.bodyToMono(String.class)
+                                .map(body -> {
+                                    log.error("[{}] Error response body: {}", agentName, body);
+                                    String errorMessage = "AI 서비스 오류 (" + response.statusCode() + "): ";
+                                    
+                                    if (response.statusCode().value() == 429) {
+                                        // 429: 할당량 초과 (Rate Limit)
+                                        if (body != null && body.contains("Please retry in")) {
+                                            errorMessage += "API 할당량이 초과되었습니다. 잠시 후 자동으로 재시도합니다.";
+                                        } else if (body != null && body.contains("quota")) {
+                                            errorMessage += "API 할당량이 초과되었습니다. 잠시 후 자동으로 재시도합니다.";
+                                        } else {
+                                            errorMessage += "API 할당량이 초과되었습니다. 잠시 후 자동으로 재시도합니다.";
+                                        }
+                                    } else if (body != null && body.contains("high demand")) {
+                                        errorMessage += "서비스가 일시적으로 사용할 수 없습니다. 잠시 후 자동으로 재시도합니다.";
+                                    } else {
+                                        errorMessage += "AI 서비스 통신 오류가 발생했습니다. 잠시 후 자동으로 재시도합니다.";
+                                    }
+                                    return new RuntimeException(errorMessage);
+                                })
+                                .switchIfEmpty(Mono.just(new RuntimeException(
+                                    "AI 서비스 오류 (" + response.statusCode() + "): 서비스가 일시적으로 사용할 수 없습니다. 잠시 후 자동으로 재시도합니다.")))
+                                .flatMap(Mono::error);
+                    })
                 .bodyToFlux(StreamingEvent.class)
-                .doOnError(error -> log.error("[{}] Agent streaming failed", agentName, error))
-                .doOnComplete(() -> log.info("[{}] Agent streaming completed", agentName));
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // 최대 3회 재시도, 2초 간격으로 시작
+                        .maxBackoff(Duration.ofSeconds(10)) // 최대 10초 대기
+                        .filter(throwable -> {
+                            // 재시도 가능한 에러만 필터링
+                            String message = throwable.getMessage();
+                            if (message == null) {
+                                return false;
+                            }
+                            // 503, 429 에러 또는 관련 메시지가 포함된 경우 재시도
+                            return message.contains("503") || 
+                                   message.contains("429") ||
+                                   message.contains("RESOURCE_EXHAUSTED") ||
+                                   message.contains("quota") ||
+                                   message.contains("high demand") || 
+                                   message.contains("일시적으로 사용할 수 없습니다") ||
+                                   message.contains("할당량이 초과되었습니다") ||
+                                   message.contains("Please retry");
+                        })
+                        .doBeforeRetry(retrySignal -> {
+                            log.warn("[{}] 재시도 중... (시도 횟수: {}/{})", 
+                                    agentName, retrySignal.totalRetries() + 1, 3);
+                        })
+                        .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                            log.error("[{}] 재시도 실패: 최대 재시도 횟수 초과", agentName);
+                            return retrySignal.failure();
+                        }))
+                .doOnError(error -> {
+                    log.error("[{}] Agent streaming failed: {}", agentName, error.getMessage(), error);
+                })
+                .doOnComplete(() -> log.info("[{}] Agent streaming completed", agentName))
+                .onErrorResume(error -> {
+                    // 재시도 실패 또는 재시도 불가능한 에러 발생 시 에러 이벤트를 보내고 스트림 종료
+                    String errorMessage = error.getMessage() != null ? error.getMessage() : "알 수 없는 오류";
+                    
+                    // 재시도 가능한 에러인지 확인
+                    boolean isRetryable = errorMessage.contains("503") || 
+                                         errorMessage.contains("429") ||
+                                         errorMessage.contains("RESOURCE_EXHAUSTED") ||
+                                         errorMessage.contains("quota") ||
+                                         errorMessage.contains("high demand") || 
+                                         errorMessage.contains("일시적으로 사용할 수 없습니다") ||
+                                         errorMessage.contains("할당량이 초과되었습니다") ||
+                                         errorMessage.contains("Please retry");
+                    
+                    if (!isRetryable) {
+                        // 재시도 불가능한 에러는 즉시 종료
+                        log.error("[{}] 재시도 불가능한 에러: {}", agentName, errorMessage);
+                    }
+                    
+                    return Flux.just(StreamingEvent.builder()
+                            .type("error")
+                            .delta("스트리밍 중 오류가 발생했습니다: " + errorMessage)
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 종료
+                });
     }
 }

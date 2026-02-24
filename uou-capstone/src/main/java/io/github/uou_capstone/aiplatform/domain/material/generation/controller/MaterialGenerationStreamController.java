@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.material.generation.service.Mate
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +23,7 @@ import reactor.core.publisher.Flux;
  * - GET /api/materials/generation/phase4/stream: Phase 4 스트리밍
  * - GET /api/materials/generation/phase5/stream: Phase 5 스트리밍
  */
+@Slf4j
 @Tag(name = "강의 자료 생성 스트리밍 API", description = "AI Agent 추론 과정 실시간 스트리밍 API")
 @RestController
 @RequestMapping("/api/materials/generation")
@@ -63,13 +65,17 @@ public class MaterialGenerationStreamController {
                         .data(event)
                         .build())
                 .onErrorResume(error -> {
+                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
+                    // 에러 이벤트를 보내고 스트림을 완전히 종료
                     return Flux.just(ServerSentEvent.<StreamingEvent>builder()
                             .event("error")
                             .data(StreamingEvent.builder()
                                     .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + error.getMessage())
+                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
+                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
                                     .build())
-                            .build());
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 완전 종료
                 });
     }
 
@@ -93,13 +99,17 @@ public class MaterialGenerationStreamController {
                         .data(event)
                         .build())
                 .onErrorResume(error -> {
+                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
+                    // 에러 이벤트를 보내고 스트림을 완전히 종료
                     return Flux.just(ServerSentEvent.<StreamingEvent>builder()
                             .event("error")
                             .data(StreamingEvent.builder()
                                     .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + error.getMessage())
+                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
+                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
                                     .build())
-                            .build());
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 완전 종료
                 });
     }
 
@@ -121,13 +131,17 @@ public class MaterialGenerationStreamController {
                         .data(event)
                         .build())
                 .onErrorResume(error -> {
+                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
+                    // 에러 이벤트를 보내고 스트림을 완전히 종료
                     return Flux.just(ServerSentEvent.<StreamingEvent>builder()
                             .event("error")
                             .data(StreamingEvent.builder()
                                     .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + error.getMessage())
+                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
+                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
                                     .build())
-                            .build());
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 완전 종료
                 });
     }
 
@@ -149,13 +163,17 @@ public class MaterialGenerationStreamController {
                         .data(event)
                         .build())
                 .onErrorResume(error -> {
+                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
+                    // 에러 이벤트를 보내고 스트림을 완전히 종료
                     return Flux.just(ServerSentEvent.<StreamingEvent>builder()
                             .event("error")
                             .data(StreamingEvent.builder()
                                     .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + error.getMessage())
+                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
+                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
                                     .build())
-                            .build());
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 완전 종료
                 });
     }
 
@@ -177,13 +195,17 @@ public class MaterialGenerationStreamController {
                         .data(event)
                         .build())
                 .onErrorResume(error -> {
+                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
+                    // 에러 이벤트를 보내고 스트림을 완전히 종료
                     return Flux.just(ServerSentEvent.<StreamingEvent>builder()
                             .event("error")
                             .data(StreamingEvent.builder()
                                     .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + error.getMessage())
+                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
+                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
                                     .build())
-                            .build());
+                            .build())
+                            .concatWith(Flux.empty()); // 스트림 완전 종료
                 });
     }
 }

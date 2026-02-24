@@ -56,11 +56,30 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleWebClientResponseException(WebClientResponseException ex, HttpServletRequest request) {
         log.error("[WebClient Error] status={}, body={}", ex.getStatusCode(), ex.getResponseBodyAsString());
         
+        int statusCode = ex.getStatusCode().value();
+        
         // 타임아웃 에러인 경우
-        if (ex.getStatusCode().value() == 504 || ex.getStatusCode().value() == 408) {
+        if (statusCode == 504 || statusCode == 408) {
             return ErrorResponse.toResponseEntity(
                     CommonErrorCode.AI_SERVER_TIMEOUT,
                     "AI 서비스 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.",
+                    request.getRequestURI()
+            );
+        }
+        
+        // 503 Service Unavailable: Gemini API 일시적 부하
+        if (statusCode == 503) {
+            String errorBody = ex.getResponseBodyAsString();
+            String message = "AI 서비스가 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해주세요.";
+            
+            // 에러 본문에서 상세 메시지 추출 시도
+            if (errorBody != null && errorBody.contains("high demand")) {
+                message = "AI 서비스가 현재 높은 부하를 받고 있습니다. 잠시 후 다시 시도해주세요.";
+            }
+            
+            return ErrorResponse.toResponseEntity(
+                    CommonErrorCode.AI_SERVER_ERROR,
+                    message,
                     request.getRequestURI()
             );
         }
