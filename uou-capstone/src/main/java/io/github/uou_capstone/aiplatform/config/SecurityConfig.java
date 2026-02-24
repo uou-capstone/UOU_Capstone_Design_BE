@@ -91,21 +91,43 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
 
         // 프론트엔드 개발자에게 받은 주소를 여기에 추가
+        // 주의: 슬래시(/) 없이 정확한 도메인만 입력
         config.setAllowedOrigins(Arrays.asList(
                 "http://localhost:3000",
                 "http://localhost:5173",
                 "http://localhost:8000",
-                "https://ai-lms.netlify.app/",
-                "https://plutean-clement-apheliotropically.ngrok-free.dev/"
+                "https://ai-lms.netlify.app",
+                "https://plutean-clement-apheliotropically.ngrok-free.dev"
                 // (여러 개 등록 가능)
         ));
 
         // 허용할 HTTP 메서드 (전부 허용)
-        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        // 허용할 HTTP 헤더 (전부 허용)
-        config.setAllowedHeaders(Arrays.asList("*"));
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
+        
+        // 허용할 HTTP 헤더 (명시적으로 지정 - 더 안전함)
+        config.setAllowedHeaders(Arrays.asList(
+                "*",  // 모든 헤더 허용
+                "Authorization",
+                "Content-Type",
+                "X-Requested-With",
+                "Accept",
+                "Origin",
+                "Access-Control-Request-Method",
+                "Access-Control-Request-Headers"
+        ));
+        
         // (중요) 쿠키/세션/토큰 인증 정보를 같이 보내려면 true
         config.setAllowCredentials(true);
+        
+        // Preflight 요청 캐싱 시간 (초 단위) - 1시간
+        config.setMaxAge(3600L);
+        
+        // 노출할 응답 헤더 (프론트엔드에서 접근 가능한 헤더)
+        config.setExposedHeaders(Arrays.asList(
+                "Authorization",
+                "Content-Type",
+                "X-Total-Count"
+        ));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         // "/api/**"로 시작하는 모든 경로에 이 CORS 설정을 적용

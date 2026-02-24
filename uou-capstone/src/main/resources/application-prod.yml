@@ -10,7 +10,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate  # 배포: validate (스키마 변경 금지)
+      ddl-auto: update  # 배포: update (스키마 자동 업데이트 - 테이블 생성/수정)
     show-sql: false  # SQL 로그 비활성화 (성능)
 
   data:
@@ -34,11 +34,11 @@ spring:
 
 logging:
   level:
-    root: INFO
-    org.springdoc: INFO
-    org.springframework.web: WARN
-    org.springframework.security: WARN
-    io.github.uou_capstone: INFO
+    root: DEBUG
+    org.springdoc: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+    io.github.uou_capstone: DEBUG
 
 # AI 서비스 설정 (배포 환경)
 ai:
