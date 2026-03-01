@@ -392,9 +392,14 @@ public class LectureService {
         User currentUser = getCurrentUser();
         validateLectureParticipant(lecture, currentUser);
 
+        // pdf_path 가져오기 (FastAPI 요구사항)
+        Material sourceMaterial = getLatestPdfMaterial(lectureId);
+
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lecture.getId());
         payload.put("lectureId", lecture.getId());
+        payload.put("pdf_path", sourceMaterial.getFilePath());
+        payload.put("pdfPath", sourceMaterial.getFilePath());
 
         executeStreamingStage("cancel", payload);
         log.info("Streaming session cancelled for lectureId={}", lectureId);
