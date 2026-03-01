@@ -49,3 +49,9 @@ ai:
 # JWT 설정 (배포 환경 - 환경 변수 필수)
 jwt:
   secret: ${JWT_SECRET}  # 환경 변수 필수
+
+# OAuth2 리다이렉트 설정 (배포 환경)
+oauth2:
+  redirect:
+    frontend-url: ${OAUTH2_FRONTEND_URL:https://ai-lms.netlify.app}
+    path: ${OAUTH2_REDIRECT_PATH:/auth/callback}

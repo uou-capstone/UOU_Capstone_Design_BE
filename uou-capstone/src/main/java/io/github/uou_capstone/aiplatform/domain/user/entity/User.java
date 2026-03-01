@@ -59,6 +59,16 @@ public class User {
         return this;
     }
 
+    // 전화번호 업데이트
+    public void updatePhoneNum(String phoneNum) {
+        this.phoneNum = phoneNum;
+    }
+
+    // 생년월일 업데이트
+    public void updateBirthDate(LocalDate birthDate) {
+        this.birthDate = birthDate;
+    }
+
     // 비밀번호 변경 메서드
     public void changePassword(String newPassword) {
         this.password = newPassword;

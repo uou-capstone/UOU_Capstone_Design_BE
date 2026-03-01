@@ -25,10 +25,12 @@ spring:
       client:
         registration:
           kakao:
-            client-id: 275b2717e98d58ac245a1ba255f57d03
-            client-secret: JChF9Fptvsdkky2Lhp18vEcouYFuOuBv
+            # 보안: 환경 변수로 설정 (기본값 제거)
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
             client-authentication-method: client_secret_post
             authorization-grant-type: authorization_code
+            redirect-uri: ${KAKAO_REDIRECT_URI:http://localhost:8080/login/oauth2/code/kakao}
             scope:
               - profile_nickname
               - account_email
@@ -53,3 +55,11 @@ springdoc:
     title: AI튜터
     description:
     version: v2.0.0
+
+# OAuth2 리다이렉트 설정
+oauth2:
+  redirect:
+    # 프론트엔드 URL (환경 변수로 오버라이드 가능)
+    frontend-url: ${OAUTH2_FRONTEND_URL:http://localhost:3000}
+    # 리다이렉트 경로 (환경 변수로 오버라이드 가능)
+    path: ${OAUTH2_REDIRECT_PATH:/auth/callback}

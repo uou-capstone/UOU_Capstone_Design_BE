@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.security.jwt;
 
+import io.github.uou_capstone.aiplatform.service.TokenBlacklistService;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
@@ -20,6 +21,7 @@ import java.io.IOException;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final TokenBlacklistService tokenBlacklistService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
@@ -29,6 +31,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             // 2. 토큰 유효성 검사
             if (token != null) {
+                // 2-1. 블랙리스트 확인 (로그아웃한 토큰인지 확인)
+                if (tokenBlacklistService.isBlacklisted(token)) {
+                    request.setAttribute("exception", "INVALID_TOKEN");
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
+                // 2-2. 토큰 유효성 검증
                 jwtTokenProvider.validateToken(token);
                 
                 // 토큰이 유효하면 토큰으로부터 유저 정보를 받아옴

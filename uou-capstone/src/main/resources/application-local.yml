@@ -30,6 +30,10 @@ spring:
       client:
         registration:
           kakao:
+            # 보안: 환경 변수로 설정 (기본값 제거)
+            # 로컬 개발 시 .env 파일에 KAKAO_CLIENT_ID, KAKAO_CLIENT_SECRET 설정 필요
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
             redirect-uri: "http://localhost:8080/login/oauth2/code/kakao"  # 로컬 리다이렉트
 
 logging:
@@ -49,3 +53,9 @@ ai:
 # JWT 설정 (로컬 개발용 기본값)
 jwt:
   secret: ${JWT_SECRET:dW1jLW5hZGFtc3BhY2UtcHJvamVjdC1zcHJpbmctYm9vdC1qd3Qtc2VjcmV0LWtleS1mb3ItZGlhcnktYXBwbGljYXRpb24K}
+
+# OAuth2 리다이렉트 설정 (로컬 개발)
+oauth2:
+  redirect:
+    frontend-url: ${OAUTH2_FRONTEND_URL:http://localhost:3000}
+    path: ${OAUTH2_REDIRECT_PATH:/auth/callback}

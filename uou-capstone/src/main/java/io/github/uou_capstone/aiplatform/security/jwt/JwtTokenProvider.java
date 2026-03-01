@@ -122,4 +122,27 @@ public class JwtTokenProvider {
         }
     }
 
+    /**
+     * 토큰에서 이메일 추출
+     */
+    public String getEmailFromToken(String token) {
+        Claims claims = parseClaims(token);
+        return claims.getSubject();
+    }
+
+    /**
+     * 토큰 만료 시간까지 남은 시간 계산 (밀리초)
+     */
+    public long getRemainingExpirationTime(String token) {
+        try {
+            Claims claims = parseClaims(token);
+            Date expiration = claims.getExpiration();
+            Date now = new Date();
+            long remaining = expiration.getTime() - now.getTime();
+            return Math.max(0, remaining); // 음수 방지
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
 }

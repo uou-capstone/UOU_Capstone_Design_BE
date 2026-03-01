@@ -4,6 +4,7 @@ import io.github.uou_capstone.aiplatform.security.exception.JwtAccessDeniedHandl
 import io.github.uou_capstone.aiplatform.security.exception.RestAuthenticationEntryPoint;
 import io.github.uou_capstone.aiplatform.security.jwt.JwtAuthenticationFilter;
 import io.github.uou_capstone.aiplatform.security.oauth.CustomOAuth2UserService;
+import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationFailureHandler;
 import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationSuccessHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -33,6 +34,7 @@ public class SecurityConfig {
 
     private final CustomOAuth2UserService customOAuth2UserService;
     private final OAuth2AuthenticationSuccessHandler oAuth2AuthenticationSuccessHandler;
+    private final OAuth2AuthenticationFailureHandler oAuth2AuthenticationFailureHandler;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final RestAuthenticationEntryPoint restAuthenticationEntryPoint;
     private final JwtAccessDeniedHandler jwtAccessDeniedHandler;
@@ -78,6 +80,7 @@ public class SecurityConfig {
             .oauth2Login(oauth2 -> oauth2
                     .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
                     .successHandler(oAuth2AuthenticationSuccessHandler)
+                    .failureHandler(oAuth2AuthenticationFailureHandler)
             )
 
             // 우리가 만든 JWT 필터를 UsernamePasswordAuthenticationFilter 전에 실행
