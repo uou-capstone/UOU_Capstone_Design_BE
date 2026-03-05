@@ -44,21 +44,18 @@ public class PlanningAgent extends AbstractAgent {
         // audience_level 기본값 설정
         body.put("audience_level", "University Students");
         
-        // pdf_path는 현재 ko 브랜치에서 지원하지 않음 (필요시 FastAPI 팀 확인)
-        // if (context != null && context.containsKey("pdf_path")) {
-        //     body.put("pdf_path", context.get("pdf_path"));
-        // }
-        
         return body;
     }
 
     /**
      * DraftPlan 생성
+     * 
+     * @param keyword 사용자가 입력한 키워드
+     * @return 생성된 DraftPlan
      */
-    public DraftPlanDto generateDraftPlan(String keyword, String pdfPath) {
+    public DraftPlanDto generateDraftPlan(String keyword) {
         Map<String, Object> context = new HashMap<>();
         context.put("keyword", keyword);
-        context.put("pdf_path", pdfPath);
 
         AgentRequest request = new SimpleAgentRequest(keyword, context);
         // ko 브랜치 응답 형식: { "draft_plan": {...} }

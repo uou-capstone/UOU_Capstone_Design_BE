@@ -77,11 +77,10 @@ public class MaterialGenerationService {
      * 로직 설명:
      * 1. 권한 확인: 현재 로그인한 사용자가 해당 강의의 선생님인지 확인
      * 2. 강의 정보 조회: lectureId로 Lecture 엔티티 조회
-     * 3. PDF 경로 조회: 강의에 업로드된 최신 PDF 파일 경로 조회
-     * 4. 세션 생성: GenerationSession 엔티티 생성 (PHASE1 상태로 시작)
-     * 5. Agent 호출: PlanningAgent를 통해 DraftPlan 생성
-     * 6. 결과 저장: 생성된 DraftPlan을 JSON으로 변환하여 세션에 저장
-     * 7. 응답 반환: sessionId와 DraftPlan을 포함한 응답 반환
+     * 3. 세션 생성: GenerationSession 엔티티 생성 (PHASE1 상태로 시작)
+     * 4. Agent 호출: PlanningAgent를 통해 DraftPlan 생성 (키워드 기반)
+     * 5. 결과 저장: 생성된 DraftPlan을 JSON으로 변환하여 세션에 저장
+     * 6. 응답 반환: sessionId와 DraftPlan을 포함한 응답 반환
      * 
      * @param requestDto Phase 1 요청 DTO (lectureId, keyword)
      * @return Phase 1 응답 DTO (sessionId, draftPlan)
@@ -105,24 +104,7 @@ public class MaterialGenerationService {
         // 현재 사용자가 해당 강의의 소유자인지 확인 (선생님 권한 + 강의 소유권 확인)
         AuthorizationUtil.requireLectureOwner(currentUser, lecture);
 
-        // ========== 3단계: PDF 경로 조회 ==========
-        // 강의에 업로드된 최신 PDF 파일 조회
-        // findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc: 
-        // - lectureId와 materialType("PDF")로 필터링
-        // - createdAt 기준 내림차순 정렬
-        // - 첫 번째 결과만 반환 (가장 최신 PDF)
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        requestDto.getLectureId(), 
-                        "PDF"
-                )
-                .orElseThrow(() -> new BusinessException(
-                        CommonErrorCode.FILE_NOT_FOUND, 
-                        "AI 처리에 필요한 PDF 자료를 찾을 수 없습니다."
-                ));
-        String pdfPath = pdfMaterial.getFilePath();
-
-        // ========== 4단계: 세션 생성 ==========
+        // ========== 3단계: 세션 생성 ==========
         // GenerationSession 엔티티 생성
         // - lecture: 강의 정보
         // - user: 현재 로그인한 사용자 (선생님)
@@ -137,14 +119,13 @@ public class MaterialGenerationService {
         session = generationSessionRepository.save(session);
         log.info("GenerationSession 생성 완료: sessionId={}", session.getId());
 
-        // ========== 5단계: Agent 호출 ==========
+        // ========== 4단계: Agent 호출 ==========
         // PlanningAgent를 통해 DraftPlan 생성
         // - keyword: 사용자가 입력한 초기 키워드
-        // - pdfPath: PDF 파일 경로
         // - 반환값: DraftPlanDto (projectMeta, styleGuide, chapters 포함)
         DraftPlanDto draftPlan;
         try {
-            draftPlan = planningAgent.generateDraftPlan(requestDto.getKeyword(), pdfPath);
+            draftPlan = planningAgent.generateDraftPlan(requestDto.getKeyword());
             log.info("PlanningAgent 호출 완료. DraftPlan 생성.");
         } catch (Exception e) {
             log.error("Phase 1 실패: sessionId={}, error={}", session.getId(), e.getMessage(), e);
