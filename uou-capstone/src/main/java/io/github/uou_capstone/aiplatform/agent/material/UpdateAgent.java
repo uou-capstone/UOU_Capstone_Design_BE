@@ -33,9 +33,24 @@ public class UpdateAgent extends AbstractAgent {
 
     @Override
     protected Object buildRequestBody(AgentRequest request) {
+        // ko 브랜치 엔드포인트 형식에 맞게 변환
+        // 요청 형식: { "draft_plan": {...}, "user_feedback": "..." }
         Map<String, Object> body = new HashMap<>();
-        body.put("prompt", request.getPrompt());
-        body.put("context", request.getContext());
+        Map<String, Object> context = request.getContext();
+        
+        if (context != null) {
+            // draft_plan 변환
+            if (context.containsKey("draft_plan")) {
+                body.put("draft_plan", context.get("draft_plan"));
+            }
+            
+            // user_feedback 변환
+            String userFeedback = context.containsKey("user_feedback") 
+                ? (String) context.get("user_feedback") 
+                : "";
+            body.put("user_feedback", userFeedback);
+        }
+        
         return body;
     }
 
@@ -44,15 +59,19 @@ public class UpdateAgent extends AbstractAgent {
      * 
      * @param draftPlan 현재 DraftPlan
      * @param userFeedback 사용자 피드백
-     * @return 수정된 DraftPlan
+     * @return 수정된 FinalizedBrief
      */
-    public DraftPlanDto updateDraftPlan(DraftPlanDto draftPlan, String userFeedback) {
+    public io.github.uou_capstone.aiplatform.domain.material.generation.dto.FinalizedBriefDto updateDraftPlan(
+            DraftPlanDto draftPlan, String userFeedback) {
         Map<String, Object> context = new HashMap<>();
         context.put("draft_plan", draftPlan);
         context.put("user_feedback", userFeedback);
 
         AgentRequest request = new SimpleAgentRequest("Update draft plan based on user feedback", context);
-        return execute(request, DraftPlanDto.class);
+        // ko 브랜치 응답 형식: { "finalized_brief": {...} }
+        io.github.uou_capstone.aiplatform.domain.material.generation.dto.Phase2ResponseWrapper wrapper = 
+            execute(request, io.github.uou_capstone.aiplatform.domain.material.generation.dto.Phase2ResponseWrapper.class);
+        return wrapper != null ? wrapper.getFinalizedBrief() : null;
     }
 
     /**

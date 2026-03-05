@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.agent.AgentRequest;
 import io.github.uou_capstone.aiplatform.agent.base.AbstractAgent;
 import io.github.uou_capstone.aiplatform.domain.material.generation.dto.DraftPlanDto;
+import io.github.uou_capstone.aiplatform.domain.material.generation.dto.Phase1ResponseWrapper;
 import io.github.uou_capstone.aiplatform.service.AgentPerformanceLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -29,9 +30,25 @@ public class PlanningAgent extends AbstractAgent {
 
     @Override
     protected Object buildRequestBody(AgentRequest request) {
+        // ko 브랜치 엔드포인트 형식에 맞게 변환
+        // 요청 형식: { "topic": "...", "audience_level": "..." }
         Map<String, Object> body = new HashMap<>();
-        body.put("prompt", request.getPrompt());
-        body.put("context", request.getContext());
+        Map<String, Object> context = request.getContext();
+        
+        // topic 변환: context의 keyword 또는 prompt 사용
+        String topic = context != null && context.containsKey("keyword") 
+            ? (String) context.get("keyword") 
+            : request.getPrompt();
+        body.put("topic", topic);
+        
+        // audience_level 기본값 설정
+        body.put("audience_level", "University Students");
+        
+        // pdf_path는 현재 ko 브랜치에서 지원하지 않음 (필요시 FastAPI 팀 확인)
+        // if (context != null && context.containsKey("pdf_path")) {
+        //     body.put("pdf_path", context.get("pdf_path"));
+        // }
+        
         return body;
     }
 
@@ -44,7 +61,9 @@ public class PlanningAgent extends AbstractAgent {
         context.put("pdf_path", pdfPath);
 
         AgentRequest request = new SimpleAgentRequest(keyword, context);
-        return execute(request, DraftPlanDto.class);
+        // ko 브랜치 응답 형식: { "draft_plan": {...} }
+        Phase1ResponseWrapper wrapper = execute(request, Phase1ResponseWrapper.class);
+        return wrapper != null ? wrapper.getDraftPlan() : null;
     }
 
     /**

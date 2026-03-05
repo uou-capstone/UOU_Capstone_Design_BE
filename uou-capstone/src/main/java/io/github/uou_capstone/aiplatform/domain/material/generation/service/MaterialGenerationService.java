@@ -1,6 +1,5 @@
 package io.github.uou_capstone.aiplatform.domain.material.generation.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.agent.material.ConfirmAgent;
 import io.github.uou_capstone.aiplatform.agent.material.DecompositionAgent;
@@ -28,9 +27,12 @@ import io.github.uou_capstone.aiplatform.util.AuthorizationUtil;
 import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.BodyInserters;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -61,11 +63,12 @@ public class MaterialGenerationService {
     private final EditorAgent editorAgent;  // Phase 5 Agent
     private final GenerationSessionRepository generationSessionRepository;
     private final LectureRepository lectureRepository;
-        private final MaterialRepository materialRepository;
-        private final UserRepository userRepository;
-        private final ObjectMapper objectMapper;  // JSON 변환용
-        private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
-        private final SessionRecoveryService sessionRecoveryService;  // 세션 복구 서비스
+    private final MaterialRepository materialRepository;
+    private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;  // JSON 변환용
+    private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
+    private final SessionRecoveryService sessionRecoveryService;  // 세션 복구 서비스
+    private final WebClient aiServiceWebClient;  // FastAPI 호출용 WebClient
 
     
     /**
@@ -252,10 +255,14 @@ public class MaterialGenerationService {
                 );
             }
             
-            // UpdateAgent를 통해 DraftPlan 수정
-            DraftPlanDto updatedDraftPlan;
+            // UpdateAgent를 통해 DraftPlan 수정 (FinalizedBrief 반환)
+            FinalizedBriefDto finalizedBrief;
             try {
-                updatedDraftPlan = updateAgent.updateDraftPlan(draftPlan, feedback);
+                finalizedBrief = updateAgent.updateDraftPlan(draftPlan, feedback);
+                if (finalizedBrief == null) {
+                    throw new BusinessException(CommonErrorCode.AGENT_EXECUTION_FAILED, 
+                            "기획안 수정 결과가 null입니다.");
+                }
             } catch (Exception e) {
                 log.error("Phase 2 (Update) 실패: sessionId={}, error={}", requestDto.getSessionId(), e.getMessage(), e);
                 sessionRecoveryService.handleGenerationSessionFailure(
@@ -267,17 +274,18 @@ public class MaterialGenerationService {
                         "기획안 수정에 실패했습니다: " + e.getMessage());
             }
             
-            // 수정된 DraftPlan을 JSON으로 변환하여 세션에 저장
-            Map<String, Object> updatedDraftPlanMap = objectMapper.convertValue(updatedDraftPlan, Map.class);
-            session.updateDraftPlan(updatedDraftPlanMap);
+            // 수정된 FinalizedBrief를 JSON으로 변환하여 세션에 저장
+            Map<String, Object> finalizedBriefMap = objectMapper.convertValue(finalizedBrief, Map.class);
+            session.updateFinalizedBrief(finalizedBriefMap);
+            session.updatePhase(GenerationPhase.PHASE2);
+            session.updateProgress(40);  // Phase 2 완료 = 40% 진행
             generationSessionRepository.save(session);
             
             return MaterialGenerationPhase2ResponseDto.builder()
                     .sessionId(session.getId())
-                    .draftPlan(updatedDraftPlan)
-                    .updatedPlan(updatedDraftPlan)  // 하위 호환성
-                    .progressPercentage(20)  // Phase 1 상태 유지
-                    .message("DraftPlan이 수정되었습니다. 다시 검토해주세요.")
+                    .finalizedBrief(finalizedBrief)
+                    .progressPercentage(40)
+                    .message("기획안이 수정 및 확정되었습니다.")
                     .build();
         }
     }
@@ -654,39 +662,121 @@ public class MaterialGenerationService {
     @org.springframework.scheduling.annotation.Async("materialGenerationExecutor")
     public void processPhase3To5Async(String taskId, Long sessionId) {
         try {
-            // ========== 1단계: Phase 3 시작 ==========
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3 시작: 콘텐츠 생성 중...");
+            // ========== 1단계: 세션 조회 및 FinalizedBrief 확인 ==========
+            GenerationSession session = generationSessionRepository.findById(sessionId)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
             
-            MaterialGenerationPhase3RequestDto phase3Request = new MaterialGenerationPhase3RequestDto();
-            phase3Request.setSessionId(sessionId);
-            processPhase3(phase3Request);
+            Map<String, Object> finalizedBriefMap = session.getFinalizedBriefJson();
+            if (finalizedBriefMap == null) {
+                throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "FinalizedBrief가 없습니다.");
+            }
             
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 60, "Phase 3 완료: 콘텐츠 생성 완료");
-
-            // ========== 2단계: Phase 4 시작 ==========
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 70, "Phase 4 시작: 검증 및 수정 중...");
+            // ========== 2단계: ko 브랜치 통합 엔드포인트 호출 ==========
+            // /api/lecture-gen/phase3-5/auto 엔드포인트 사용
+            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
             
-            MaterialGenerationPhase4RequestDto phase4Request = new MaterialGenerationPhase4RequestDto();
-            phase4Request.setSessionId(sessionId);
-            processPhase4(phase4Request);
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("finalized_brief", finalizedBriefMap);
             
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 80, "Phase 4 완료: 검증 및 수정 완료");
-
-            // ========== 3단계: Phase 5 시작 ==========
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 90, "Phase 5 시작: 최종 조립 중...");
+            // FastAPI 통합 엔드포인트 호출
+            Map<String, Object> response = aiServiceWebClient.post()
+                    .uri("/api/lecture-gen/phase3-5/auto")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(BodyInserters.fromValue(requestBody))
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
             
-            MaterialGenerationPhase5RequestDto phase5Request = new MaterialGenerationPhase5RequestDto();
-            phase5Request.setSessionId(sessionId);
-            MaterialGenerationPhase5ResponseDto phase5Response = processPhase5(phase5Request);
+            if (response == null || !response.containsKey("task_id")) {
+                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "FastAPI 작업 등록 실패");
+            }
             
-            // ========== 4단계: 완료 처리 ==========
-            String resultJson = objectMapper.writeValueAsString(Map.of(
-                "sessionId", sessionId,
-                "documentUrl", phase5Response.getDocumentUrl(),
-                "message", "강의 자료 생성이 완료되었습니다."
-            ));
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 최종 문서 생성 완료", resultJson);
+            String fastApiTaskId = (String) response.get("task_id");
+            String statusUrl = (String) response.get("status_url");
             
+            log.info("FastAPI Phase 3-5 작업 등록 완료: fastApiTaskId={}, statusUrl={}", fastApiTaskId, statusUrl);
+            
+            // ========== 3단계: FastAPI 작업 상태 폴링 ==========
+            // FastAPI의 /api/lecture-gen/status/{task_id}로 진행 상황 확인
+            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
+            
+            // 폴링 로직 (최대 10분 대기, 5초마다 확인)
+            int maxAttempts = 120; // 10분 = 600초 / 5초 = 120회
+            int attempt = 0;
+            boolean completed = false;
+            
+            while (attempt < maxAttempts && !completed) {
+                try {
+                    Thread.sleep(5000); // 5초 대기
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, "작업이 중단되었습니다.");
+                }
+                attempt++;
+                
+                try {
+                    Map<String, Object> statusResponse = aiServiceWebClient.get()
+                            .uri(statusUrl)
+                            .retrieve()
+                            .bodyToMono(Map.class)
+                            .block();
+                    
+                    if (statusResponse != null) {
+                        String status = (String) statusResponse.get("status");
+                        Integer progress = statusResponse.get("progress") != null 
+                            ? ((Number) statusResponse.get("progress")).intValue() 
+                            : 0;
+                        String message = (String) statusResponse.get("message");
+                        
+                        // 백엔드 task 진행률 업데이트 (30% ~ 90%)
+                        int backendProgress = 30 + (progress * 60 / 100); // FastAPI 진행률을 30-90% 범위로 매핑
+                        asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, backendProgress, message);
+                        
+                        if ("completed".equals(status)) {
+                            completed = true;
+                            
+                            // 최종 결과 저장
+                            String finalMarkdown = (String) statusResponse.get("result");
+                            if (finalMarkdown != null) {
+                                session.updateFinalDocument(finalMarkdown);
+                                session.updatePhase(GenerationPhase.PHASE5);
+                                session.updateProgress(100);
+                                generationSessionRepository.save(session);
+                            }
+                            
+                            // 완료 처리
+                            String resultJson = objectMapper.writeValueAsString(Map.of(
+                                "sessionId", sessionId,
+                                "message", "강의 자료 생성이 완료되었습니다.",
+                                "fastApiTaskId", fastApiTaskId
+                            ));
+                            asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 최종 문서 생성 완료", resultJson);
+                            
+                        } else if ("failed".equals(status)) {
+                            String errorMessage = (String) statusResponse.get("error");
+                            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, 
+                                "FastAPI 작업 실패: " + (errorMessage != null ? errorMessage : "알 수 없는 오류"));
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("FastAPI 상태 조회 실패 (시도 {}/{}): {}", attempt, maxAttempts, e.getMessage());
+                    // 계속 재시도
+                }
+            }
+            
+            if (!completed) {
+                throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT, 
+                    "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 10분)");
+            }
+            
+        } catch (BusinessException e) {
+            log.error("Phase 3-5 비동기 처리 실패: taskId={}, sessionId={}, error={}", taskId, sessionId, e.getMessage());
+            asyncTaskService.updateTaskStatus(
+                taskId, 
+                TaskStatus.FAILED, 
+                null, 
+                "오류 발생: " + e.getMessage()
+            );
         } catch (Exception e) {
             log.error("Phase 3-5 비동기 처리 실패: taskId={}, sessionId={}", taskId, sessionId, e);
             asyncTaskService.updateTaskStatus(
