@@ -11,7 +11,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update  # 배포: update (스키마 자동 업데이트 - 테이블 생성/수정)
-    show-sql: false  # SQL 로그 비활성화 (성능)
+    show-sql: true  # SQL 로그 활성화
 
   data:
     redis:
@@ -34,11 +34,21 @@ spring:
 
 logging:
   level:
-    root: DEBUG
-    org.springdoc: DEBUG
-    org.springframework.web: DEBUG
-    org.springframework.security: DEBUG
-    io.github.uou_capstone: DEBUG
+    root: INFO
+    # Spring Framework - 에러만 표시
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    org.springframework.data.redis: WARN
+    # Hibernate/JPA - 에러만 표시
+    org.hibernate: WARN
+    org.hibernate.orm: WARN
+    org.hibernate.SQL: INFO  # SQL 쿼리 로그 활성화
+    # Redis Lettuce - 에러만 표시
+    io.lettuce.core: WARN
+    # 우리 프로젝트 로그는 INFO로 유지 (에러 디버깅용)
+    io.github.uou_capstone: INFO
+    # Swagger는 INFO로 유지
+    org.springdoc: INFO
 
 # AI 서비스 설정 (배포 환경)
 ai:
