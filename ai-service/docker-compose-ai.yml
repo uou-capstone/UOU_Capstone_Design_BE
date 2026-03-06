@@ -14,7 +14,7 @@ services:
 
   ai-service:
     build: .
-    image: golila0611/ai-service:latest
+    # image: golila0611/ai-service:latest
     env_file:
       - .env
     ports:
