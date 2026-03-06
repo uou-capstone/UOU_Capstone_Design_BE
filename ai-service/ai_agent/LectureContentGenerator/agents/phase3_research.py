@@ -14,7 +14,7 @@ from ..schemas import (
 
 
 class DecompositionAgent:
-        def __init__(self, model_name=DEFAULT_MODEL):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
