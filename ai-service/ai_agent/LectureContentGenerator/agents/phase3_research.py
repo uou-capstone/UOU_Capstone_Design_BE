@@ -1,9 +1,7 @@
 import json
 import asyncio
-import google.generativeai as genai
-from google import genai as client_genai
 from google.genai import types
-from . import MODEL_SMART, GEMINI_API_KEY
+from . import MODEL_SMART, gemini_client
 from ..prompts import (
     DECOMPOSITION_SYSTEM_PROMPT,
     VALIDATION_SYSTEM_PROMPT,
@@ -17,14 +15,8 @@ from ..schemas import (
 
 class DecompositionAgent:
     def __init__(self, model_name=MODEL_SMART):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": DECOMPOSITION_SCHEMA
-            },
-            system_instruction=DECOMPOSITION_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     async def decompose_async(self, chapter_info, finalized_brief):
         """비동기 분해 작업"""
@@ -36,7 +28,16 @@ class DecompositionAgent:
         {json.dumps(finalized_brief, ensure_ascii=False)}
         """
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=DECOMPOSITION_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=DECOMPOSITION_SCHEMA,
+            )
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             return json.loads(response.text)
         except Exception as e:
             print(f"[Decompose Error] {e}")
@@ -45,14 +46,8 @@ class DecompositionAgent:
 
 class ValidationAgent:
     def __init__(self, model_name=MODEL_SMART):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": VALIDATION_SCHEMA
-            },
-            system_instruction=VALIDATION_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     async def validate_async(self, full_chapter_plan, current_target_id, search_results_text, finalized_brief):
         """비동기 검증 작업"""
@@ -70,7 +65,16 @@ class ValidationAgent:
         {json.dumps(finalized_brief, ensure_ascii=False)}
         """
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=VALIDATION_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=VALIDATION_SCHEMA,
+            )
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             return json.loads(response.text)
         except Exception as e:
             print(f"[Validate Error] {e}")
@@ -79,10 +83,8 @@ class ValidationAgent:
 
 class WriteAgent:
     def __init__(self, model_name=MODEL_SMART):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=WRITE_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     async def draft_section_async(self, topic_info, search_results_text, style_guide):
         """비동기 작성 작업"""
@@ -96,7 +98,15 @@ class WriteAgent:
         {json.dumps(input_data, ensure_ascii=False)}
         """
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=WRITE_SYSTEM_PROMPT,
+            )
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             return response.text
         except Exception as e:
             print(f"[Write Error] {e}")
@@ -106,14 +116,13 @@ class WriteAgent:
 class SearchAgent:
     """Gemini 모델의 Built-in Google Search 기능을 사용하여 검색을 수행하는 Agent"""
     def __init__(self, model_name=MODEL_SMART):
-        self.client = client_genai.Client(api_key=GEMINI_API_KEY)
+        self.client = gemini_client
         self.model_name = model_name
 
     async def search_async(self, query):
         """비동기 검색 작업"""
         try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=query,
                 config=types.GenerateContentConfig(

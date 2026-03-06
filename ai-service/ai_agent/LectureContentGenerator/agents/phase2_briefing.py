@@ -1,22 +1,16 @@
 import json
 import sys
 import time
-import google.generativeai as genai
-from . import MODEL_FAST
+from google.genai import types
+from . import MODEL_FAST, gemini_client
 from ..prompts import CONFIRM_SYSTEM_PROMPT, UPDATE_SYSTEM_PROMPT
 from ..schemas import CONFIRM_SCHEMA, UPDATE_SCHEMA
 
 
 class ConfirmAgent:
     def __init__(self, model_name=MODEL_FAST):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": CONFIRM_SCHEMA
-            },
-            system_instruction=CONFIRM_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     def analyze(self, user_feedback, current_plan):
         prompt = f"""
@@ -28,20 +22,23 @@ class ConfirmAgent:
         """
         
         print("\n[Confirm Agent] Analyzing user feedback...")
-        response = self.model.generate_content(prompt)
+        config = types.GenerateContentConfig(
+            system_instruction=CONFIRM_SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=CONFIRM_SCHEMA,
+        )
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
+        )
         return json.loads(response.text)
 
 
 class UpdateAgent:
     def __init__(self, model_name=MODEL_FAST):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": UPDATE_SCHEMA
-            },
-            system_instruction=UPDATE_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     def modify_plan(self, current_plan, feedback_analysis):
         prompt = f"""
@@ -53,7 +50,16 @@ class UpdateAgent:
         """
         
         print("\n[Update Agent] Modifying the plan based on feedback...")
-        response = self.model.generate_content(prompt)
+        config = types.GenerateContentConfig(
+            system_instruction=UPDATE_SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=UPDATE_SCHEMA,
+        )
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=config,
+        )
         return json.loads(response.text)["draft_plan"]
 
 

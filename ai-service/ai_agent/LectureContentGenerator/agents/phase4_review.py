@@ -1,21 +1,15 @@
 import json
 import asyncio
-import google.generativeai as genai
-from . import MODEL_SMART
+from google.genai import types
+from . import MODEL_SMART, gemini_client
 from ..prompts import REVIEW_SYSTEM_PROMPT, EDITOR_SYSTEM_PROMPT
 from ..schemas import REVIEW_SCHEMA
 
 
 class ReviewerAgent:
     def __init__(self, model_name=MODEL_SMART):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": REVIEW_SCHEMA
-            },
-            system_instruction=REVIEW_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     async def review_async(self, chapter_content, finalized_brief):
         """비동기 검토 작업"""
@@ -27,7 +21,16 @@ class ReviewerAgent:
         {json.dumps(finalized_brief, ensure_ascii=False)}
         """
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=REVIEW_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=REVIEW_SCHEMA,
+            )
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             return json.loads(response.text)
         except Exception as e:
             print(f"[Review Error] {e}")
@@ -36,10 +39,8 @@ class ReviewerAgent:
 
 class EditorAgent:
     def __init__(self, model_name=MODEL_SMART):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=EDITOR_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
 
     async def rewrite_async(self, original_markdown, editor_prompt):
         """비동기 수정 작업"""
@@ -52,7 +53,14 @@ class EditorAgent:
         {json.dumps(input_data, ensure_ascii=False)}
         """
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=EDITOR_SYSTEM_PROMPT,
+            )
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             return response.text
         except Exception as e:
             print(f"[Editor Error] {e}")

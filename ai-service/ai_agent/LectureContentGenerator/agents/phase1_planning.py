@@ -1,22 +1,16 @@
 import json
 import sys
 import time
-import google.generativeai as genai
-from . import MODEL_FAST
+from google.genai import types
+from . import MODEL_FAST, gemini_client
 from ..prompts import PLANNING_SYSTEM_PROMPT
 from ..schemas import PLANNING_SCHEMA
 
 
 class PlanningAgent:
     def __init__(self, model_name=MODEL_FAST):
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": PLANNING_SCHEMA
-            },
-            system_instruction=PLANNING_SYSTEM_PROMPT
-        )
+        self.client = gemini_client
+        self.model_name = model_name
         self.current_draft = None
 
     def generate_plan(self, user_input, force_completion=False):
@@ -42,7 +36,16 @@ class PlanningAgent:
 
         print(f"\n[Agent] Gemini에게 요청을 보냅니다... (Force Mode: {force_completion})")
         try:
-            response = self.model.generate_content(prompt)
+            config = types.GenerateContentConfig(
+                system_instruction=PLANNING_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=PLANNING_SCHEMA,
+            )
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
             response_json = json.loads(response.text)
             
             if "draft_plan" in response_json:
