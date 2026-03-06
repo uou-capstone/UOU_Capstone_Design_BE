@@ -61,8 +61,8 @@ public class GenerationSession extends BaseTimeEntity {
     private Map<String, Object> verifiedContentJson;  // Phase4 산출물
 
     @Lob
-    @Column(name = "final_document", columnDefinition = "TEXT")
-    private String finalDocument;  // Phase5 산출물 (Markdown)
+    @Column(name = "final_document", columnDefinition = "LONGTEXT")
+    private String finalDocument;  // Phase5 산출물 (Markdown) - 8개 챕터의 상세한 내용을 저장하기 위해 LONGTEXT 사용
 
     @Column(name = "progress_percentage")
     private Integer progressPercentage = 0;  // 진행률 (0-100)

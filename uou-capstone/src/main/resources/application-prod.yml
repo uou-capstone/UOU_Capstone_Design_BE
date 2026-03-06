@@ -45,6 +45,9 @@ logging:
     org.hibernate.SQL: INFO  # SQL 쿼리 로그 활성화
     # Redis Lettuce - 에러만 표시
     io.lettuce.core: WARN
+    # Tomcat HTTP 파싱 에러 로그 줄이기 (HTTPS 요청을 HTTP로 받는 경우 등)
+    org.apache.coyote: WARN
+    org.apache.tomcat: WARN
     # 우리 프로젝트 로그는 INFO로 유지 (에러 디버깅용)
     io.github.uou_capstone: INFO
     # Swagger는 INFO로 유지
