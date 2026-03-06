@@ -13,6 +13,7 @@ services:
       - app-network  # 추가
 
   ai-service:
+    build: .
     image: golila0611/ai-service:latest
     env_file:
       - .env
