@@ -71,7 +71,20 @@ public abstract class AbstractAgent implements Agent {
                 .uri(getEndpoint())
                 .bodyValue(requestBody)
                 .retrieve()
-                .bodyToMono(responseType)
+                .bodyToMono(String.class)  // 먼저 String으로 받아서 로깅
+                .doOnNext(rawResponse -> {
+                    log.info("[{}] FastAPI Raw Response: {}", agentName, rawResponse);
+                })
+                .map(rawResponse -> {
+                    try {
+                        T result = objectMapper.readValue(rawResponse, responseType);
+                        log.info("[{}] Parsed Response: {}", agentName, objectMapper.writeValueAsString(result));
+                        return result;
+                    } catch (Exception e) {
+                        log.error("[{}] Failed to parse response: {}", agentName, e.getMessage(), e);
+                        throw new RuntimeException("Failed to parse FastAPI response", e);
+                    }
+                })
                 .doOnError(error -> {
                     log.error("[{}] Agent execution failed", agentName, error);
                     performanceLogger.endExecution(agentName, startTime, false);
