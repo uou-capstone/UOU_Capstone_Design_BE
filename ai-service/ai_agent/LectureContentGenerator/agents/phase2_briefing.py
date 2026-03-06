@@ -2,13 +2,13 @@ import json
 import sys
 import time
 from google.genai import types
-from . import MODEL_FAST, gemini_client
+from . import DEFAULT_MODEL, gemini_client
 from ..prompts import CONFIRM_SYSTEM_PROMPT, UPDATE_SYSTEM_PROMPT
 from ..schemas import CONFIRM_SCHEMA, UPDATE_SCHEMA
 
 
 class ConfirmAgent:
-    def __init__(self, model_name=MODEL_FAST):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
@@ -36,7 +36,7 @@ class ConfirmAgent:
 
 
 class UpdateAgent:
-    def __init__(self, model_name=MODEL_FAST):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 

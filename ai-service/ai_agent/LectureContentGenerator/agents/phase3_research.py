@@ -1,7 +1,7 @@
 import json
 import asyncio
 from google.genai import types
-from . import MODEL_SMART, gemini_client
+from . import DEFAULT_MODEL, gemini_client
 from ..prompts import (
     DECOMPOSITION_SYSTEM_PROMPT,
     VALIDATION_SYSTEM_PROMPT,
@@ -14,7 +14,7 @@ from ..schemas import (
 
 
 class DecompositionAgent:
-    def __init__(self, model_name=MODEL_SMART):
+        def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
@@ -45,7 +45,7 @@ class DecompositionAgent:
 
 
 class ValidationAgent:
-    def __init__(self, model_name=MODEL_SMART):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
@@ -82,7 +82,7 @@ class ValidationAgent:
 
 
 class WriteAgent:
-    def __init__(self, model_name=MODEL_SMART):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
@@ -115,7 +115,7 @@ class WriteAgent:
 
 class SearchAgent:
     """Gemini 모델의 Built-in Google Search 기능을 사용하여 검색을 수행하는 Agent"""
-    def __init__(self, model_name=MODEL_SMART):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 

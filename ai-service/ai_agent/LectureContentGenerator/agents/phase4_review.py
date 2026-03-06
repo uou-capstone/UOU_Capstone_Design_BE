@@ -1,13 +1,13 @@
 import json
 import asyncio
 from google.genai import types
-from . import MODEL_SMART, gemini_client
+from . import DEFAULT_MODEL, gemini_client
 from ..prompts import REVIEW_SYSTEM_PROMPT, EDITOR_SYSTEM_PROMPT
 from ..schemas import REVIEW_SCHEMA
 
 
 class ReviewerAgent:
-    def __init__(self, model_name=MODEL_SMART):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 
@@ -38,7 +38,7 @@ class ReviewerAgent:
 
 
 class EditorAgent:
-    def __init__(self, model_name=MODEL_SMART):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
 

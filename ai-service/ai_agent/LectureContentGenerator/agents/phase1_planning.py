@@ -2,13 +2,13 @@ import json
 import sys
 import time
 from google.genai import types
-from . import MODEL_FAST, gemini_client
+from . import DEFAULT_MODEL, gemini_client
 from ..prompts import PLANNING_SYSTEM_PROMPT
 from ..schemas import PLANNING_SCHEMA
 
 
 class PlanningAgent:
-    def __init__(self, model_name=MODEL_FAST):
+    def __init__(self, model_name=DEFAULT_MODEL):
         self.client = gemini_client
         self.model_name = model_name
         self.current_draft = None
@@ -68,7 +68,7 @@ class AgentResponse:
         self.draft_plan = draft_plan
 
 
-def execute_phase1(model_name=MODEL_FAST, topic: str = None, auto_mode: bool = False):
+def execute_phase1(model_name=DEFAULT_MODEL, topic: str = None, auto_mode: bool = False):
     """
     Phase 1 실행 로직
     

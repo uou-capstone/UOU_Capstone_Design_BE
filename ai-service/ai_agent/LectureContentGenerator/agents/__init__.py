@@ -21,7 +21,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY or "") if GEMINI_API_KEY els
 
 # 3. 모델명 상수
 MODEL_FAST = "gemini-2.5-flash"
-MODEL_SMART = "gemini-2.0-flash-exp"
+MODEL_SMART = "gemini-2.5-flash"
 
 GOOGLE_API_KEY = GEMINI_API_KEY
 DEFAULT_MODEL = MODEL_SMART
