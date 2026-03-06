@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
@@ -32,9 +33,16 @@ public class WebClientConfig {
                                 .addHandlerLast(new WriteTimeoutHandler(300, TimeUnit.SECONDS)) // 쓰기 타임아웃
                 );
 
+        // ✅ 버퍼 크기 설정 (기본 256KB → 10MB로 증가)
+        // FastAPI 상태 응답에 최종 마크다운 문서가 포함되어 있어 큰 응답을 처리할 수 있도록 설정
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(10 * 1024 * 1024)) // 10MB
+                .build();
+
         return WebClient.builder()
                 .baseUrl(aiServiceBaseUrl)
-                .clientConnector(new ReactorClientHttpConnector(httpClient)) // ✅ 타임아웃 설정 적용
+                .exchangeStrategies(strategies) //  버퍼 크기 설정 적용
+                .clientConnector(new ReactorClientHttpConnector(httpClient)) //  타임아웃 설정 적용
                 .build();
     }
 }
