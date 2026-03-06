@@ -113,7 +113,7 @@ async def execute_phase4_async(chapter_content_list, finalized_brief):
 
     # 🚦 Phase 4 세마포어 (API Rate Limit 방어)
     # 유료 플랜 사용 시 10-15 정도로 설정 가능
-    semaphore = asyncio.Semaphore(12)
+    semaphore = asyncio.Semaphore(3)
 
     print(f"🚀 [Phase 4] {len(chapter_content_list)}개 챕터 병렬 검증 시작 (최대 12개 동시 실행)...")
     
