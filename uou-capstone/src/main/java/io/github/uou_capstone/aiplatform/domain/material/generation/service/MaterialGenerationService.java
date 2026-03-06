@@ -224,6 +224,8 @@ public class MaterialGenerationService {
             return MaterialGenerationPhase2ResponseDto.builder()
                     .sessionId(session.getId())
                     .finalizedBrief(finalizedBrief)
+                    .progressPercentage(40)
+                    .message("Phase 2 완료: 기획안이 확정되었습니다.")
                     .build();
         } else {
             // 사용자가 수정 요청한 경우
@@ -681,8 +683,8 @@ public class MaterialGenerationService {
             // FastAPI의 /api/lecture-gen/status/{task_id}로 진행 상황 확인
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
             
-            // 폴링 로직 (최대 10분 대기, 5초마다 확인)
-            int maxAttempts = 120; // 10분 = 600초 / 5초 = 120회
+            // 폴링 로직 (최대 20분 대기, 5초마다 확인)
+            int maxAttempts = 240; // 20분 = 1200초 / 5초 = 240회
             int attempt = 0;
             boolean completed = false;
             
@@ -747,7 +749,7 @@ public class MaterialGenerationService {
             
             if (!completed) {
                 throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT, 
-                    "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 10분)");
+                    "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 20분)");
             }
             
         } catch (BusinessException e) {
