@@ -45,6 +45,124 @@ def extract_questions(text: str) -> List[Tuple[int, int, str]]:
     return questions
 
 
+# =============================================================================
+# [FastAPI / Delegator 연동을 위한 API 인터페이스 함수들]
+# delegator.py에서 호출하는 함수들입니다.
+# =============================================================================
+
+def initialize_lecture(pdf_path: str):
+    """PDF를 분석하여 챕터 정보를 반환합니다."""
+    chapters_info = pdf_analysis_main(pdf_path)
+    return chapters_info, pdf_path
+
+
+def prepare_lecture_content(pdf_path: str):
+    """초기 세션 구성을 위해 챕터 기본 구조를 반환합니다."""
+    chapters_info, _ = initialize_lecture(pdf_path)
+    chapters = []
+    for title, path in chapters_info:
+        chapters.append({
+            "chapterTitle": title,
+            "pdfPath": path,
+            "questions": {}
+        })
+    return {"chapters": chapters}
+
+
+def build_segments_from_explanation(explanation: str, prefix: str = ""):
+    """설명 텍스트를 질문과 일반 스크립트 세그먼트로 분리합니다."""
+    questions = extract_questions(explanation)
+    segments = []
+    question_meta = {}
+
+    current_pos = 0
+    q_idx = 0
+
+    for start_pos, end_pos, q_text in questions:
+        # 질문 이전의 일반 텍스트 (스크립트)
+        if start_pos > current_pos:
+            script_text = explanation[current_pos:start_pos].strip()
+            if script_text:
+                segments.append({"type": "script", "content": script_text})
+
+        # 질문 텍스트
+        q_id = f"{prefix}q{q_idx}"
+        segments.append({"type": "question", "question": q_text, "questionId": q_id})
+        question_meta[q_id] = {
+            "question": q_text,
+            "questionIndex": q_idx
+        }
+        q_idx += 1
+        current_pos = end_pos
+
+    # 남은 일반 텍스트
+    if current_pos < len(explanation):
+        script_text = explanation[current_pos:].strip()
+        if script_text:
+            segments.append({"type": "script", "content": script_text})
+
+    return segments, question_meta
+
+
+def generate_single_chapter(pdf_path: str, chapter_info: tuple, current_chapter_idx: int):
+    """단일 챕터의 스크립트를 생성하고 세그먼트로 파싱합니다."""
+    chapter_title, chapter_pdf_path = chapter_info
+    result_dict = lecture_agent_main(chapter_title, chapter_pdf_path)
+    explanation = result_dict.get(chapter_title, "")
+
+    segments, question_meta = build_segments_from_explanation(explanation, prefix=f"c{current_chapter_idx}-")
+
+    return {
+        "chapterTitle": chapter_title,
+        "explanation": explanation,
+        "segments": segments,
+        "questions": question_meta,
+        "pdfPath": chapter_pdf_path
+    }
+
+
+def get_next_segment(chapter_data: dict, current_segment_idx: int):
+    """다음 세그먼트(스크립트 또는 질문)를 반환합니다."""
+    segments = chapter_data.get("segments", [])
+    if current_segment_idx < len(segments):
+        return segments[current_segment_idx], current_segment_idx + 1
+    return None, current_segment_idx
+
+
+def generate_supplementary_explanation(question_text: str, user_answer: str, pdf_path: str):
+    """사용자의 답변을 평가하고 보충 설명을 생성합니다."""
+    qa_input = [(question_text, user_answer), pdf_path]
+    explanation_result = qa_agent_main(qa_input)
+
+    return {
+        "supplementary_explanation": explanation_result,
+        "validation_result": "평가 완료",
+        "concept_queue": [],
+        "bad_mode_history": [],
+        "needs_follow_up": False,
+        "state": "GOOD"
+    }
+
+
+def run_full_pipeline(pdf_path: str, skip_qa: bool = True, cancellation_callback=None):
+    """백그라운드에서 전체 파이프라인을 실행하고 결과를 반환합니다."""
+    chapters_info = pdf_analysis_main(pdf_path)
+    lecture_results = []
+
+    for i, (chapter_title, chapter_pdf_path) in enumerate(chapters_info):
+        if cancellation_callback:
+            cancellation_callback()
+
+        result_dict = lecture_agent_main(chapter_title, chapter_pdf_path)
+        lecture_results.append(result_dict)
+
+    return chapters_info, lecture_results
+
+
+# =============================================================================
+# [로컬 테스트용 비동기 파이프라인]
+# =============================================================================
+
 async def process_explanation_with_qa_async(explanation: str, chapter_title: str, pdf_path: str):
     """
     질문을 띄우자마자 모범답안 생성을 Prefetch로 시작하고,

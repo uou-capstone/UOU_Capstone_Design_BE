@@ -12,12 +12,13 @@ from datetime import datetime
 from typing import Dict, Any
 import copy
 from ai_agent.Lecture_Agent.integration import (
-    main as run_full_pipeline,
+    run_full_pipeline,
     prepare_lecture_content,
     generate_supplementary_explanation,
     initialize_lecture,
     generate_single_chapter,
     get_next_segment,
+    build_segments_from_explanation,
 )
 
 # .env 파일 로드
@@ -75,8 +76,6 @@ def convert_to_ai_response_dto(chapters_info, lecture_results):
     Returns:
         List[Dict] - AiResponseDto 형식의 리스트 (질문 포함 세그먼트)
     """
-    from ai_agent.Lecture_Agent.integration import build_segments_from_explanation
-    
     ai_responses = []
     
     for chapter_idx, ((chapter_title, pdf_path), lecture_dict) in enumerate(zip(chapters_info, lecture_results)):

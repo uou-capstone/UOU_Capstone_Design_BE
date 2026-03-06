@@ -85,10 +85,11 @@ async def generate_lecture_note(topic: str, audience: str = "University Students
 async def run_phase1(topic: str, audience_level: str) -> Dict[str, Any]:
     """
     Phase 1: 기획안 생성 (API용 래퍼)
+    execute_phase1은 동기 LLM 호출이므로 스레드 풀에서 실행해 이벤트 루프 차단 방지.
     """
     print(f"[NoteGen] Phase 1: Planning... topic={topic}, audience={audience_level}")
     user_input = f"주제: {topic}\n대상 독자: {audience_level}"
-    draft_plan = execute_phase1(topic=user_input, auto_mode=True)
+    draft_plan = await asyncio.to_thread(execute_phase1, topic=user_input, auto_mode=True)
 
     if not draft_plan:
         raise RuntimeError("Phase 1 실패: 기획안을 생성할 수 없습니다.")
@@ -99,9 +100,12 @@ async def run_phase1(topic: str, audience_level: str) -> Dict[str, Any]:
 async def run_phase2(draft_plan: Dict[str, Any], user_feedback: str) -> Dict[str, Any]:
     """
     Phase 2: 피드백 반영 및 기획안 확정 (API용 래퍼)
+    execute_phase2는 동기 LLM 호출이므로 스레드 풀에서 실행해 이벤트 루프 차단 방지.
     """
     print("[NoteGen] Phase 2: Briefing with user feedback...")
-    finalized_brief = execute_phase2(draft_plan, auto_mode=True, user_feedback=user_feedback)
+    finalized_brief = await asyncio.to_thread(
+        execute_phase2, draft_plan, True, user_feedback
+    )
 
     if not finalized_brief:
         raise RuntimeError("Phase 2 실패: 기획안 확정에 실패했습니다.")
