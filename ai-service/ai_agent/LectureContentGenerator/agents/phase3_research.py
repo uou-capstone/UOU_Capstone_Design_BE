@@ -169,7 +169,7 @@ async def run_deep_research_async(chapter_info, finalized_brief, semaphore):
                 current_query = sub_topic['search_action']['query_prompt']
                 is_satisfied = False
                 loop_count = 0
-                MAX_LOOP = 3
+                MAX_LOOP = 2
                 
                 final_search_result = ""
                 
@@ -197,6 +197,7 @@ async def run_deep_research_async(chapter_info, finalized_brief, semaphore):
                                 if suggested_queries:
                                     current_query = suggested_queries[0]
                                     print(f"    [Fail] Retrying with new query: {current_query}")
+                                    await asyncio.sleep(3)
                                 else:
                                     final_search_result = search_result_text
                                     break
@@ -250,7 +251,7 @@ async def execute_phase3_async(finalized_brief):
     # 유료 플랜 사용 시 10-15 정도로 설정 가능
     semaphore = asyncio.Semaphore(3)
     
-    print(f"🚀 [Phase 3] {len(chapters)}개 챕터 동시 집필 시작 (최대 12개 동시 실행)...")
+    print(f"🚀 [Phase 3] {len(chapters)}개 챕터 동시 집필 시작 (최대 3개 동시 실행)...")
     
     # 모든 챕터에 대한 Task 생성 및 동시 실행
     tasks = [run_deep_research_async(chapter, finalized_brief, semaphore) for chapter in chapters]

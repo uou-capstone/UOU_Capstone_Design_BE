@@ -73,7 +73,7 @@ async def _process_single_chapter_review(chapter_content, chapter_index, total_c
     async with semaphore:
         try:
             # 약간의 딜레이를 주어 API 호출 폭주를 분산시킴
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(2)
             
             reviewer = ReviewerAgent()
             editor = EditorAgent()
