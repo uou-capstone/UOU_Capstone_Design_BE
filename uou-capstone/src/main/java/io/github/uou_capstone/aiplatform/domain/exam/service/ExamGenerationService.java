@@ -359,6 +359,9 @@ public class ExamGenerationService {
         // ========== 8단계: 응답 반환 ==========
         // 사용자가 Profile을 제공하지 않은 경우, 생성된 Profile을 응답에 포함
         TestProfileDto usedProfile = profile;
+        if (fiveChoiceProblems != null) {
+            fillFiveChoiceOptionCorrectFlags(fiveChoiceProblems);
+        }
 
         return ExamGenerationResponseDto.builder()
                 .examSessionId(session.getId())
@@ -451,6 +454,10 @@ public class ExamGenerationService {
                         (fiveChoiceProblems != null ? fiveChoiceProblems.size() : 
                         (shortAnswerProblems != null ? shortAnswerProblems.size() : 
                         (debateTopics != null ? debateTopics.size() : 0))));
+
+        if (fiveChoiceProblems != null) {
+            fillFiveChoiceOptionCorrectFlags(fiveChoiceProblems);
+        }
 
         return ExamGenerationResponseDto.builder()
                 .examSessionId(session.getId())
@@ -723,6 +730,22 @@ public class ExamGenerationService {
         } catch (JsonProcessingException e) {
             log.warn("통합 generate 응답 파싱 실패(debate): {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * 5지선다: 문서 예시처럼 정답은 문제 단위 correct_answer(1~5)만 옴. 옵션별 is_correct는 없으므로
+     * correct_answer와 options[].id를 비교해 각 옵션의 isCorrect를 채움. (id/correct_answer가 숫자로 올 수 있어 문자열로 통일 비교)
+     */
+    private void fillFiveChoiceOptionCorrectFlags(List<FiveChoiceProblemDto> problems) {
+        if (problems == null) return;
+        for (FiveChoiceProblemDto problem : problems) {
+            String correct = problem.getCorrectAnswer() != null ? String.valueOf(problem.getCorrectAnswer()) : null;
+            if (correct == null || problem.getOptions() == null) continue;
+            for (FiveChoiceOptionDto opt : problem.getOptions()) {
+                String optId = opt.getId() != null ? String.valueOf(opt.getId()) : null;
+                opt.setIsCorrect(correct.equals(optId));
+            }
         }
     }
 }
