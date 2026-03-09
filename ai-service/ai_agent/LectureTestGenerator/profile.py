@@ -77,26 +77,44 @@ async def generate_profile_async(
             LanguagePreference, Strictness, ExplanationDepth
         )
         
-        return TestProfile(
-            learning_goal=LearningGoal(
-                focus_areas=[],
-                target_depth=TargetDepth.CONCEPT,
-                question_modality=QuestionModality.BALANCE
-            ),
-            user_status=UserStatus(
-                proficiency_level=ProficiencyLevel.INTERMEDIATE,
-                weakness_focus=False
-            ),
-            interaction_style=InteractionStyle(
-                language_preference=LanguagePreference.KOREAN_WITH_ENGLISH_TERMS,
-                scenario_based=False
-            ),
-            feedback_preference=FeedbackPreference(
-                strictness=Strictness.MODERATE,
-                explanation_depth=ExplanationDepth.DETAILED_WITH_EXAMPLES
-            ),
-            scope_boundary=ScopeBoundary.LECTURE_MATERIAL_ONLY
-        )
+        return get_default_test_profile()
+
+
+def get_default_test_profile() -> TestProfile:
+    """빈/초기 프로필용 기본 TestProfile (프로필 대화 첫 턴 등)."""
+    from .schemas import (
+        LearningGoal,
+        UserStatus,
+        InteractionStyle,
+        FeedbackPreference,
+        ScopeBoundary,
+        TargetDepth,
+        QuestionModality,
+        ProficiencyLevel,
+        LanguagePreference,
+        Strictness,
+        ExplanationDepth,
+    )
+    return TestProfile(
+        learning_goal=LearningGoal(
+            focus_areas=[],
+            target_depth=TargetDepth.CONCEPT,
+            question_modality=QuestionModality.BALANCE,
+        ),
+        user_status=UserStatus(
+            proficiency_level=ProficiencyLevel.INTERMEDIATE,
+            weakness_focus=False,
+        ),
+        interaction_style=InteractionStyle(
+            language_preference=LanguagePreference.KOREAN_WITH_ENGLISH_TERMS,
+            scenario_based=False,
+        ),
+        feedback_preference=FeedbackPreference(
+            strictness=Strictness.MODERATE,
+            explanation_depth=ExplanationDepth.DETAILED_WITH_EXAMPLES,
+        ),
+        scope_boundary=ScopeBoundary.LECTURE_MATERIAL_ONLY,
+    )
 
 
 async def analyze_profile_async(

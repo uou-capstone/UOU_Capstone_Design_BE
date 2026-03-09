@@ -6,8 +6,8 @@ LectureTestGenerator를 사용하여 다양한 유형의 시험 문제를 생성
 import hashlib
 import json
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
 from redis.asyncio import Redis
 
 from app.core.redis_client import get_redis
@@ -16,9 +16,14 @@ from ai_agent.LectureTestGenerator.schemas import (
     ProblemRequest,
     TestGenerationResponse,
     TestProfile,
-    ExamType
+    ExamType,
 )
-from ai_agent.LectureTestGenerator.profile import generate_profile_async
+from ai_agent.LectureTestGenerator.profile import (
+    generate_profile_async,
+    update_profile_async,
+    analyze_profile_async,
+    get_default_test_profile,
+)
 
 
 router = APIRouter(prefix="/api/test-gen", tags=["Test Generator"])
@@ -36,6 +41,87 @@ def get_generator() -> LectureTestGenerator:
     if generator is None:
         generator = LectureTestGenerator()
     return generator
+
+
+# --- [1] Profile Request / Response 스키마 ---
+class ProfileContext(BaseModel):
+    lecture_content: str
+    exam_type: Optional[str] = None
+    existing_profile: Optional[Dict[str, Any]] = None
+    user_message: Optional[str] = None
+
+
+class ProfileRequest(BaseModel):
+    prompt: str = Field(default="Generate or validate test profile")
+    context: ProfileContext
+
+
+class ProfileResponse(BaseModel):
+    status: str  # "INCOMPLETE" or "COMPLETE"
+    agent_message: str
+    missing_info: List[str] = []
+    updated_profile: Dict[str, Any]
+
+
+@router.post("/profile", response_model=ProfileResponse)
+async def chat_and_update_profile(request: ProfileRequest):
+    """
+    사용자와 대화하며 시험 생성용 프로필을 완성하는 엔드포인트.
+    Gemini AI(UpdateAgent -> AnalyzeAgent)가 동작합니다.
+    """
+    generator_instance = get_generator()
+    if not generator_instance:
+        raise HTTPException(status_code=503, detail="AI Service Not Initialized")
+
+    ctx = request.context
+    current_profile_raw = ctx.existing_profile or {}
+    user_msg = (ctx.user_message or "").strip()
+    exam_type_str = ctx.exam_type or "Flash_Card"
+
+    # dict -> TestProfile (빈 객체면 기본 프로필 사용)
+    try:
+        current_profile_obj = (
+            TestProfile.model_validate(current_profile_raw)
+            if current_profile_raw
+            else get_default_test_profile()
+        )
+    except Exception:
+        current_profile_obj = get_default_test_profile()
+
+    try:
+        # Step 1: 사용자 메시지가 있으면 프로필 업데이트 (Update Agent)
+        if user_msg:
+            updated_profile_obj = await update_profile_async(
+                current_profile=current_profile_obj,
+                user_input=user_msg,
+                client=generator_instance.client,
+            )
+        else:
+            updated_profile_obj = current_profile_obj
+
+        # Step 2: 업데이트된 프로필 분석 → 다음 질문 또는 COMPLETE (Analyze Agent)
+        try:
+            exam_type_enum = ExamType(exam_type_str)
+        except ValueError:
+            exam_type_enum = ExamType.FLASH_CARD
+        analysis_result = await analyze_profile_async(
+            current_profile=updated_profile_obj,
+            exam_type=exam_type_enum,
+            client=generator_instance.client,
+        )
+
+        # Step 3: 백엔드 명세에 맞춰 응답 (snake_case -> camelCase는 Spring에서 처리 가능)
+        return ProfileResponse(
+            status=analysis_result.status,
+            agent_message=analysis_result.missing_info_queries,
+            missing_info=analysis_result.missing_info,
+            updated_profile=updated_profile_obj.model_dump(),
+        )
+    except Exception as e:
+        print(f"[Profile Chat Error] {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="프로필 연동 중 오류가 발생했습니다.")
 
 
 @router.post("/generate", response_model=TestGenerationResponse)
