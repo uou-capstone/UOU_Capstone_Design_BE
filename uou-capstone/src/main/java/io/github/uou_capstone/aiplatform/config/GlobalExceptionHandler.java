@@ -16,6 +16,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -127,6 +128,22 @@ public class GlobalExceptionHandler {
         return ErrorResponse.toResponseEntity(
                 CommonErrorCode.INVALID_PARAMETER,
                 String.format("필수 파라미터 '%s'가 누락되었습니다.", ex.getParameterName()),
+                request.getRequestURI()
+        );
+    }
+
+    /**
+     * 6-1. 정적 리소스/매핑 없는 경로 요청 (예: GET /login) -> 404로 처리
+     *
+     * - 브라우저/봇이 /login, /favicon.ico 같은 경로를 두드릴 때 발생 가능
+     * - 기존에는 catch-all(Exception)에서 500으로 로깅되어 운영 로그를 오염시킴
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFoundException(NoResourceFoundException ex, HttpServletRequest request) {
+        log.info("[Resource Not Found] path={}", request.getRequestURI());
+        return ErrorResponse.toResponseEntity(
+                CommonErrorCode.RESOURCE_NOT_FOUND,
+                "요청한 리소스를 찾을 수 없습니다.",
                 request.getRequestURI()
         );
     }

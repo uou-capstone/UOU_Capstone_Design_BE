@@ -225,4 +225,60 @@ public class CacheService {
     public CacheMetrics.CacheMetricsInfo getExamSessionMetrics() {
         return examSessionMetrics.getInfo();
     }
+
+    // ========== 범용 캐시 메서드 (Material Generation용) ==========
+    
+    /**
+     * 범용 캐시 저장
+     * 
+     * @param key 캐시 키
+     * @param value 저장할 객체
+     * @param ttlSeconds TTL (초)
+     */
+    public <T> void set(String key, T value, long ttlSeconds) {
+        try {
+            String json = objectMapper.writeValueAsString(value);
+            redisTemplate.opsForValue().set(key, json, ttlSeconds, TimeUnit.SECONDS);
+            log.debug("Cache set: key={}, ttl={}s", key, ttlSeconds);
+        } catch (Exception e) {
+            log.warn("Redis connection failed while setting cache: key={}", key, e);
+        }
+    }
+
+    /**
+     * 범용 캐시 조회
+     * 
+     * @param key 캐시 키
+     * @param clazz 반환 타입
+     * @return 캐시된 객체 (Optional)
+     */
+    public <T> Optional<T> get(String key, Class<T> clazz) {
+        try {
+            String json = redisTemplate.opsForValue().get(key);
+            if (json != null) {
+                T value = objectMapper.readValue(json, clazz);
+                log.debug("Cache hit: key={}", key);
+                return Optional.of(value);
+            }
+            log.debug("Cache miss: key={}", key);
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn("Redis connection failed while getting cache: key={}", key, e);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 범용 캐시 삭제
+     * 
+     * @param key 캐시 키
+     */
+    public void delete(String key) {
+        try {
+            redisTemplate.delete(key);
+            log.debug("Cache deleted: key={}", key);
+        } catch (Exception e) {
+            log.warn("Redis connection failed while deleting cache: key={}", key, e);
+        }
+    }
 }

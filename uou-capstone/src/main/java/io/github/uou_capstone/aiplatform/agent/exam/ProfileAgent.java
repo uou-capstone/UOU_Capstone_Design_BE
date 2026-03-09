@@ -1,14 +1,19 @@
 package io.github.uou_capstone.aiplatform.agent.exam;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.uou_capstone.aiplatform.agent.AgentRequest;
 import io.github.uou_capstone.aiplatform.agent.base.AbstractAgent;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.ProfileConversationResponseDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.TestProfileDto;
 import io.github.uou_capstone.aiplatform.service.AgentPerformanceLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -37,10 +42,13 @@ public class ProfileAgent extends AbstractAgent {
 
     /**
      * Profile 생성 또는 검증
+     * FastAPI POST /api/test-gen/profile 응답에서 updated_profile만 추출해 반환합니다.
+     *
      * @param lectureContent 강의 자료 내용
      * @param existingProfile 기존 Profile (선택적)
-     * @return 생성/검증된 Profile
+     * @return 생성/검증된 Profile (updated_profile)
      */
+    @SuppressWarnings("unchecked")
     public TestProfileDto generateOrValidateProfile(String lectureContent, TestProfileDto existingProfile) {
         Map<String, Object> context = new HashMap<>();
         context.put("lecture_content", lectureContent);
@@ -49,7 +57,69 @@ public class ProfileAgent extends AbstractAgent {
         }
 
         AgentRequest request = new SimpleAgentRequest("Generate or validate test profile", context);
-        return execute(request, TestProfileDto.class);
+        Map<String, Object> response = execute(request, (Class<Map<String, Object>>) (Class<?>) Map.class);
+
+        Object updated = response != null ? response.get("updated_profile") : null;
+        if (updated == null || !(updated instanceof Map)) {
+            throw new IllegalStateException("FastAPI profile response missing updated_profile");
+        }
+
+        // FastAPI는 snake_case로 반환하므로 snake_case → TestProfileDto 변환
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        return snakeMapper.convertValue(updated, TestProfileDto.class);
+    }
+
+    /**
+     * 프로필 대화 1턴 (문서: ai-service-endpoint-request.md §2)
+     * context에 lecture_content, exam_type, existing_profile(snake_case), user_message 전달 후
+     * 전체 응답(status, agent_message, missing_info, updated_profile) 반환.
+     */
+    @SuppressWarnings("unchecked")
+    public ProfileConversationResponseDto chatTurn(String lectureContent, String examType,
+                                                   TestProfileDto existingProfile, String userMessage) {
+        Map<String, Object> context = new HashMap<>();
+        context.put("lecture_content", lectureContent);
+        if (examType != null && !examType.isBlank()) {
+            context.put("exam_type", examType);
+        }
+        if (existingProfile != null) {
+            // FastAPI는 snake_case 기대
+            ObjectMapper snakeMapper = objectMapper.copy()
+                    .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+            Map<String, Object> profileMap = snakeMapper.convertValue(existingProfile, new TypeReference<Map<String, Object>>() {});
+            context.put("existing_profile", profileMap);
+        }
+        if (userMessage != null && !userMessage.isBlank()) {
+            context.put("user_message", userMessage);
+        }
+
+        AgentRequest request = new SimpleAgentRequest("Generate or validate test profile", context);
+        Map<String, Object> response = execute(request, (Class<Map<String, Object>>) (Class<?>) Map.class);
+        if (response == null) {
+            throw new IllegalStateException("FastAPI profile response is null");
+        }
+
+        String status = (String) response.get("status");
+        String agentMessage = (String) response.get("agent_message");
+        List<String> missingInfo = response.get("missing_info") instanceof List
+                ? (List<String>) response.get("missing_info")
+                : new ArrayList<>();
+        Object updated = response.get("updated_profile");
+
+        TestProfileDto updatedProfileDto = null;
+        if (updated instanceof Map) {
+            ObjectMapper snakeMapper = objectMapper.copy()
+                    .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+            updatedProfileDto = snakeMapper.convertValue(updated, TestProfileDto.class);
+        }
+
+        return ProfileConversationResponseDto.builder()
+                .status(status != null ? status : "INCOMPLETE")
+                .agentMessage(agentMessage != null ? agentMessage : "")
+                .missingInfo(missingInfo != null ? missingInfo : new ArrayList<>())
+                .updatedProfile(updatedProfileDto)
+                .build();
     }
 
     private static class SimpleAgentRequest implements AgentRequest {

@@ -22,11 +22,13 @@ import io.github.uou_capstone.aiplatform.domain.material.generation.dto.*;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
+import io.github.uou_capstone.aiplatform.service.CacheService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
 import io.github.uou_capstone.aiplatform.util.AuthorizationUtil;
 import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -69,6 +71,8 @@ public class MaterialGenerationService {
     private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
     private final SessionRecoveryService sessionRecoveryService;  // 세션 복구 서비스
     private final WebClient aiServiceWebClient;  // FastAPI 호출용 WebClient
+    private final CacheService cacheService;  // Redis 캐싱 서비스
+    private final StringRedisTemplate redisTemplate;  // Redis Pub/Sub 발행용
 
     
     /**
@@ -148,6 +152,10 @@ public class MaterialGenerationService {
         session.updateProgress(20);  // Phase 1 완료 = 20% 진행
         generationSessionRepository.save(session);
 
+        // ✅ Redis에 DraftPlan 캐싱 (FastAPI와 공유, 24시간 TTL)
+        String draftPlanCacheKey = "draft_plan:" + session.getId();
+        cacheService.set(draftPlanCacheKey, draftPlan, 86400); // 24시간
+
         // ========== 7단계: 응답 반환 ==========
         return MaterialGenerationPhase1ResponseDto.builder()
                 .sessionId(session.getId())
@@ -221,6 +229,10 @@ public class MaterialGenerationService {
             session.updateProgress(40);  // Phase 2 완료 = 40% 진행
             generationSessionRepository.save(session);
 
+            // ✅ Redis에 FinalizedBrief 캐싱 (FastAPI와 공유, 24시간 TTL)
+            String finalizedBriefCacheKey = "finalized_brief:" + session.getId();
+            cacheService.set(finalizedBriefCacheKey, finalizedBrief, 86400); // 24시간
+
             return MaterialGenerationPhase2ResponseDto.builder()
                     .sessionId(session.getId())
                     .finalizedBrief(finalizedBrief)
@@ -263,6 +275,10 @@ public class MaterialGenerationService {
             session.updatePhase(GenerationPhase.PHASE2);
             session.updateProgress(40);  // Phase 2 완료 = 40% 진행
             generationSessionRepository.save(session);
+
+            // ✅ Redis에 FinalizedBrief 캐싱 (FastAPI와 공유, 24시간 TTL)
+            String finalizedBriefCacheKey = "finalized_brief:" + session.getId();
+            cacheService.set(finalizedBriefCacheKey, finalizedBrief, 86400); // 24시간
             
             return MaterialGenerationPhase2ResponseDto.builder()
                     .sessionId(session.getId())
@@ -658,6 +674,9 @@ public class MaterialGenerationService {
             // /api/lecture-gen/phase3-5/auto 엔드포인트 사용
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
             
+            // ✅ Redis Pub/Sub으로 진행 상황 발행
+            publishProgress(sessionId, 20, "Phase 3-5 시작: 콘텐츠 생성 중...", "PHASE3");
+            
             Map<String, Object> requestBody = new HashMap<>();
             requestBody.put("finalized_brief", finalizedBriefMap);
             
@@ -682,6 +701,9 @@ public class MaterialGenerationService {
             // ========== 3단계: FastAPI 작업 상태 폴링 ==========
             // FastAPI의 /api/lecture-gen/status/{task_id}로 진행 상황 확인
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
+            
+            // ✅ Redis Pub/Sub으로 진행 상황 발행
+            publishProgress(sessionId, 30, "FastAPI에서 콘텐츠 생성 중...", "PHASE3");
             
             // 폴링 로직 (최대 20분 대기, 5초마다 확인)
             int maxAttempts = 240; // 20분 = 1200초 / 5초 = 240회
@@ -715,6 +737,9 @@ public class MaterialGenerationService {
                         int backendProgress = 30 + (progress * 60 / 100); // FastAPI 진행률을 30-90% 범위로 매핑
                         asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, backendProgress, message);
                         
+                        // ✅ Redis Pub/Sub으로 진행 상황 발행
+                        publishProgress(sessionId, backendProgress, message, "PHASE3-5");
+                        
                         if ("completed".equals(status)) {
                             completed = true;
                             
@@ -727,6 +752,9 @@ public class MaterialGenerationService {
                                 generationSessionRepository.save(session);
                             }
                             
+                            // ✅ 완료 진행 상황 발행
+                            publishProgress(sessionId, 100, "완료: 최종 문서 생성 완료", "PHASE5");
+                            
                             // 완료 처리
                             String resultJson = objectMapper.writeValueAsString(Map.of(
                                 "sessionId", sessionId,
@@ -737,6 +765,10 @@ public class MaterialGenerationService {
                             
                         } else if ("failed".equals(status)) {
                             String errorMessage = (String) statusResponse.get("error");
+                            
+                            // ✅ 실패 진행 상황 발행
+                            publishProgress(sessionId, backendProgress, "오류 발생: " + errorMessage, "ERROR");
+                            
                             throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, 
                                 "FastAPI 작업 실패: " + (errorMessage != null ? errorMessage : "알 수 없는 오류"));
                         }
@@ -768,6 +800,33 @@ public class MaterialGenerationService {
                 null, 
                 "오류 발생: " + e.getMessage()
             );
+        }
+    }
+
+    /**
+     * Redis Pub/Sub으로 진행 상황 발행
+     * 
+     * @param sessionId 세션 ID
+     * @param progress 진행률 (0-100)
+     * @param message 진행 상황 메시지
+     * @param phase 현재 Phase
+     */
+    private void publishProgress(Long sessionId, int progress, String message, String phase) {
+        try {
+            String channel = "progress:session:" + sessionId;
+            Map<String, Object> progressData = new HashMap<>();
+            progressData.put("progress", progress);
+            progressData.put("message", message);
+            progressData.put("phase", phase);
+            progressData.put("timestamp", System.currentTimeMillis());
+            
+            String progressJson = objectMapper.writeValueAsString(progressData);
+            redisTemplate.convertAndSend(channel, progressJson);
+            
+            log.debug("진행 상황 발행: sessionId={}, progress={}%, message={}", sessionId, progress, message);
+        } catch (Exception e) {
+            log.warn("진행 상황 발행 실패: sessionId={}", sessionId, e);
+            // 발행 실패해도 작업은 계속 진행
         }
     }
 }

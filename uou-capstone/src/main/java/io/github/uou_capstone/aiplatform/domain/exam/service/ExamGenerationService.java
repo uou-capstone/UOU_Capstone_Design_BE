@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import io.github.uou_capstone.aiplatform.agent.exam.DebateGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FlashCardGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FiveChoiceGeneratorAgent;
@@ -27,9 +28,11 @@ import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
 import io.github.uou_capstone.aiplatform.util.HashUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 
@@ -166,30 +169,35 @@ public class ExamGenerationService {
         log.info("ExamSession 생성 완료: examSessionId={}", session.getId());
 
         // ========== 5단계: Profile 생성/검증 (캐싱 적용) ==========
+        // 설계: 프로필이 없으면 반드시 생성함 (문서: user_profile 선택, 없으면 자동 생성)
+        // 순서: 1) 사용자 제공 프로필 사용 2) 캐시 Hit 시 캐시 사용 3) ProfileAgent로 생성 4) API 404 시 기본 프로필
         // 5-1. 캐시 키 생성: 강의 내용의 MD5 해시
         String contentHash = HashUtil.generateMD5Hash(lectureContent);
         
-        // 5-2. Redis에서 Profile 조회
+        // 5-2. Redis에서 Profile 조회 (프로필 없을 때만)
         TestProfileDto profile;
         Optional<String> cachedProfileJson = cacheService.getProfile(contentHash);
         
         if (cachedProfileJson.isPresent() && requestDto.getUserProfile() == null) {
-            // Cache Hit: 캐시된 Profile 사용
+            // Cache Hit: 캐시된 Profile 사용 (Spring=camelCase, FastAPI(ko)=snake_case 공유 캐시 대응)
             log.info("Profile cache hit: contentHash={}", contentHash);
             try {
                 profile = objectMapper.readValue(cachedProfileJson.get(), TestProfileDto.class);
+                // FastAPI(ko)가 쓴 snake_case 캐시면 learningGoal 등이 null일 수 있음 → snake_case로 재시도
+                if (profile.getLearningGoal() == null) {
+                    ObjectMapper snakeMapper = objectMapper.copy()
+                            .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+                    profile = snakeMapper.readValue(cachedProfileJson.get(), TestProfileDto.class);
+                }
             } catch (JsonProcessingException e) {
                 log.warn("Failed to parse cached profile, generating new one", e);
-                profile = profileAgent.generateOrValidateProfile(lectureContent, null);
+                profile = callProfileAgentOrDefault(lectureContent, requestDto.getUserProfile());
             }
         } else {
-            // Cache Miss 또는 사용자가 Profile 제공: ProfileAgent를 통해 생성/검증
+            // 프로필 없음 → 생성: ProfileAgent(/api/test-gen/profile) 호출, 404 시 기본 프로필 사용
             log.info("Profile cache miss or user profile provided: contentHash={}", contentHash);
-            profile = profileAgent.generateOrValidateProfile(
-                    lectureContent, 
-                    requestDto.getUserProfile()
-            );
-            
+            profile = callProfileAgentOrDefault(lectureContent, requestDto.getUserProfile());
+
             // 5-3. 생성된 Profile을 Redis에 캐싱 (사용자가 Profile을 제공하지 않은 경우만)
             if (requestDto.getUserProfile() == null) {
                 try {
@@ -489,5 +497,64 @@ public class ExamGenerationService {
                 "오류 발생: " + e.getMessage()
             );
         }
+    }
+
+    /**
+     * 프로필 없을 때 생성: ProfileAgent(/api/test-gen/profile) 호출.
+     * 404(엔드포인트 미구현) 시 기본 프로필로 폴백하여 "프로필 없으면 생성"을 보장하고 502 방지.
+     */
+    private TestProfileDto callProfileAgentOrDefault(String lectureContent, TestProfileDto existingProfile) {
+        try {
+            return profileAgent.generateOrValidateProfile(lectureContent, existingProfile);
+        } catch (WebClientResponseException e) {
+            if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                log.warn("[ProfileAgent] POST /api/test-gen/profile 404 - ai-service에 해당 엔드포인트가 없습니다. 기본 프로필로 생성하여 진행합니다.");
+                return getDefaultProfile();
+            }
+            throw e;
+        }
+    }
+
+    /** 프로필 없을 때 사용하는 기본 프로필 (문서: user_profile 없으면 자동 생성. FastAPI get_default_test_profile과 동일 의미) */
+    private TestProfileDto getDefaultProfile() {
+        LearningGoalDto learningGoal = new LearningGoalDto();
+        learningGoal.setFocusAreas(List.of());
+        learningGoal.setTargetDepth("Concept");
+        learningGoal.setQuestionModality("Balance");
+
+        UserStatusDto userStatus = new UserStatusDto();
+        userStatus.setProficiencyLevel("Intermediate");
+        userStatus.setWeaknessFocus(List.of());
+
+        InteractionStyleDto interactionStyle = new InteractionStyleDto();
+        interactionStyle.setLanguagePreference("Korean_with_English_Terms");
+        interactionStyle.setScenarioBased(false);
+
+        FeedbackPreferenceDto feedbackPreference = new FeedbackPreferenceDto();
+        feedbackPreference.setStrictness("Moderate");
+        feedbackPreference.setExplanationDepth("Detailed_with_Examples");
+
+        TestProfileDto profile = new TestProfileDto();
+        profile.setLearningGoal(learningGoal);
+        profile.setUserStatus(userStatus);
+        profile.setInteractionStyle(interactionStyle);
+        profile.setFeedbackPreference(feedbackPreference);
+        profile.setScopeBoundary(ScopeBoundary.LECTURE_MATERIAL_ONLY);
+        return profile;
+    }
+
+    /**
+     * 프로필 대화 1턴 (문서: ai-service-endpoint-request.md §2, §4)
+     * 사용자가 에이전트와 대화로 프로필을 채울 때, 턴마다 이 메서드를 호출.
+     * status가 COMPLETE가 될 때까지 반복한 뒤, updatedProfile을 시험 생성 요청의 userProfile로 전달.
+     */
+    @Transactional(readOnly = true)
+    public ProfileConversationResponseDto chatProfileTurn(ProfileConversationRequestDto request) {
+        return profileAgent.chatTurn(
+                request.getLectureContent(),
+                request.getExamType(),
+                request.getExistingProfile(),
+                request.getUserMessage()
+        );
     }
 }

@@ -1,18 +1,22 @@
 package io.github.uou_capstone.aiplatform.domain.material.generation.controller;
 
 import io.github.uou_capstone.aiplatform.domain.material.generation.dto.*;
+        import io.github.uou_capstone.aiplatform.domain.material.generation.listener.MaterialGenerationProgressListener;
 import io.github.uou_capstone.aiplatform.domain.material.generation.service.MaterialGenerationService;
 import io.github.uou_capstone.aiplatform.domain.task.dto.AsyncTaskResponse;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
+import io.github.uou_capstone.aiplatform.service.DistributedLockService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,6 +39,8 @@ public class MaterialGenerationController {
     private final MaterialGenerationService materialGenerationService;
     private final AsyncTaskService asyncTaskService;
     private final SessionRecoveryService sessionRecoveryService;
+    private final DistributedLockService distributedLockService;
+    private final MaterialGenerationProgressListener progressListener;
 
     /**
      * Phase 1: 초기 키워드 기반 DraftPlan 생성
@@ -358,24 +364,32 @@ public class MaterialGenerationController {
     public ResponseEntity<AsyncTaskResponse> startAsyncGeneration(
             @Valid @RequestBody MaterialGenerationAsyncRequestDto requestDto) {
         
-        // ========== 1단계: taskId 생성 ==========
-        String taskId = java.util.UUID.randomUUID().toString();
+        // ✅ 분산 락 적용: sessionId 기반으로 중복 실행 방지
+        // - 락 키: "phase3-5:{sessionId}"
+        // - 대기 시간: 5초 (이미 진행 중이면 즉시 실패)
+        // - 락 유지 시간: 1200초 (20분, Phase 3-5 최대 소요 시간)
+        String lockKey = "phase3-5:" + requestDto.getSessionId();
         
-        // ========== 2단계: 작업 등록 ==========
-        asyncTaskService.createTask(taskId, "강의 자료 생성 대기 중...");
-        
-        // ========== 3단계: 비동기 처리 시작 ==========
-        materialGenerationService.processPhase3To5Async(taskId, requestDto.getSessionId());
-        
-        // ========== 4단계: 즉시 응답 반환 ==========
-        AsyncTaskResponse response = AsyncTaskResponse.builder()
-                .taskId(taskId)
-                .status("accepted")
-                .message("강의 자료 생성이 시작되었습니다.")
-                .statusUrl("/api/tasks/" + taskId + "/status")
-                .build();
-        
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+        return distributedLockService.executeWithLock(lockKey, 5, 1200, () -> {
+            // ========== 1단계: taskId 생성 ==========
+            String taskId = java.util.UUID.randomUUID().toString();
+            
+            // ========== 2단계: 작업 등록 ==========
+            asyncTaskService.createTask(taskId, "강의 자료 생성 대기 중...");
+            
+            // ========== 3단계: 비동기 처리 시작 ==========
+            materialGenerationService.processPhase3To5Async(taskId, requestDto.getSessionId());
+            
+            // ========== 4단계: 즉시 응답 반환 ==========
+            AsyncTaskResponse response = AsyncTaskResponse.builder()
+                    .taskId(taskId)
+                    .status("accepted")
+                    .message("강의 자료 생성이 시작되었습니다.")
+                    .statusUrl("/api/tasks/" + taskId + "/status")
+                    .build();
+            
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+        });
     }
 
     /**
@@ -403,5 +417,35 @@ public class MaterialGenerationController {
         Map<String, String> response = new HashMap<>();
         response.put("message", "세션이 복구되었습니다. 다시 시도할 수 있습니다.");
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 실시간 진행 상황 스트리밍 (SSE)
+     * 
+     * 엔드포인트: GET /api/materials/generation/{sessionId}/progress
+     * 
+     * 설명:
+     * - Server-Sent Events (SSE)를 통해 실시간으로 진행 상황을 전달합니다.
+     * - Redis Pub/Sub을 통해 MaterialGenerationService에서 발행한 진행 상황을 수신합니다.
+     * 
+     * 응답 형식 (SSE):
+     * event: progress
+     * data: {"progress": 50, "message": "콘텐츠 생성 중...", "phase": "PHASE3"}
+     */
+    @Operation(
+            summary = "실시간 진행 상황 스트리밍",
+            description = "SSE를 통해 강의 자료 생성 진행 상황을 실시간으로 수신합니다."
+    )
+    @GetMapping(value = "/{sessionId}/progress", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public SseEmitter streamProgress(@PathVariable Long sessionId) {
+        // SSE Emitter 생성 (1시간 타임아웃)
+        SseEmitter emitter = new SseEmitter(3600000L);
+        
+        // 리스너에 등록
+        progressListener.registerEmitter(sessionId.toString(), emitter);
+        log.info("SSE 연결 생성: sessionId={}", sessionId);
+        
+        return emitter;
     }
 }

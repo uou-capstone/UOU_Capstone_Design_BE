@@ -14,6 +14,13 @@ spring:
       max-file-size: 100MB
       max-request-size: 100MB
 
+  # RedisRepository(JpaRepository와 혼재) 스캔 비활성화
+  # - spring-boot-starter-data-redis를 사용하지만 Redis Repository는 쓰지 않는 경우 로그 노이즈 제거 목적
+  data:
+    redis:
+      repositories:
+        enabled: false
+
   jpa:
     properties:
       hibernate:

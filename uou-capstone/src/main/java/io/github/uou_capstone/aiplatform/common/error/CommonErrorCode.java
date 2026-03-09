@@ -46,6 +46,7 @@ public enum CommonErrorCode implements ErrorCode {
     // 409 Conflict
     DUPLICATE_EMAIL(HttpStatus.CONFLICT, "4090", "이미 존재하는 이메일입니다."),
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "4091", "이미 존재하는 리소스입니다."),
+    OPERATION_IN_PROGRESS(HttpStatus.CONFLICT, "4092", "작업이 이미 진행 중입니다."),
     
     // 429 Too Many Requests
     RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "4290", "요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요."),

@@ -20,6 +20,11 @@ configurations {
 	}
 }
 
+configurations.configureEach {
+	// spring-jcl 경고 제거 목적: commons-logging.jar가 classpath에 있으면 충돌 가능
+	exclude group: 'commons-logging', module: 'commons-logging'
+}
+
 repositories {
 	mavenCentral()
 }
@@ -48,6 +53,9 @@ dependencies {
 	
 	// PDF 텍스트 추출을 위한 Apache PDFBox
 	implementation 'org.apache.pdfbox:pdfbox:3.0.3'
+	
+	// Redisson 분산 락 라이브러리
+	implementation 'org.redisson:redisson-spring-boot-starter:3.24.3'
 }
 
 tasks.named('test') {
