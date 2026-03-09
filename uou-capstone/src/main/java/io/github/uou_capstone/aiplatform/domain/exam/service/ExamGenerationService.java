@@ -146,28 +146,34 @@ public class ExamGenerationService {
             // PDF 텍스트가 성공적으로 추출된 경우 텍스트 사용, 실패한 경우 파일 경로 사용
             lectureContent = (pdfText != null && !pdfText.trim().isEmpty()) ? pdfText : pdfPath;
         } else {
-            // PDF가 없는 경우, requestDto에서 제공된 lectureContent 사용
-            if (requestDto.getLectureContent() == null || requestDto.getLectureContent().isEmpty()) {
-                throw new BusinessException(
-                        CommonErrorCode.FILE_NOT_FOUND, 
-                        "강의 자료를 찾을 수 없습니다. PDF를 업로드하거나 강의 내용을 제공해주세요."
-                );
+            // PDF가 없는 경우: 요청의 lectureContent → 강의 제목·설명 순으로 사용 (PDF 없이도 시험 생성 가능)
+            if (requestDto.getLectureContent() != null && !requestDto.getLectureContent().isBlank()) {
+                lectureContent = requestDto.getLectureContent();
+            } else {
+                String title = lecture.getTitle() != null ? lecture.getTitle() : "";
+                String desc = lecture.getDescription() != null ? lecture.getDescription() : "";
+                lectureContent = (title + "\n\n" + desc).trim();
+                if (lectureContent.isEmpty()) {
+                    throw new BusinessException(
+                            CommonErrorCode.FILE_NOT_FOUND,
+                            "강의 자료를 찾을 수 없습니다. PDF를 업로드하거나, 요청에 lectureContent를 넣거나, 강의에 제목/설명을 입력해주세요."
+                    );
+                }
             }
-            lectureContent = requestDto.getLectureContent();
         }
 
         // ========== 4단계: 세션 생성 ==========
         // ExamSession 엔티티 생성
-        // - lecture: 강의 정보
-        // - user: 현재 로그인한 사용자 (선생님)
-        // - examType: 시험 유형 (FLASH_CARD, OX_PROBLEM, 등)
-        // - targetCount: 생성할 문제/카드 수
-        // - status: GENERATING으로 초기화
+        // - targetCount: 5지선다 스펙은 target_problem_count ≤ 15 (나머지 유형은 공통 기본값/요청값 사용)
+        int requestedCount = requestDto.getTargetCount() != null ? requestDto.getTargetCount() : 10;
+        int targetCount = (requestDto.getExamType() == ExamType.FIVE_CHOICE && requestedCount > 15)
+                ? 15
+                : requestedCount;
         ExamSession session = ExamSession.builder()
                 .lecture(lecture)
                 .user(currentUser)
                 .examType(requestDto.getExamType())
-                .targetCount(requestDto.getTargetCount() != null ? requestDto.getTargetCount() : 10)
+                .targetCount(targetCount)
                 .build();
         session = examSessionRepository.save(session);
         log.info("ExamSession 생성 완료: examSessionId={}", session.getId());
@@ -259,45 +265,39 @@ public class ExamGenerationService {
                 break;
 
             case FIVE_CHOICE:
-                // 5지선다 문제 생성
-                // FiveChoiceGeneratorAgent.generateFiveChoiceProblems() 호출
-                // - lectureContent: 강의 자료 내용
-                // - profile: 생성/검증된 Profile
-                // - targetCount: 생성할 문제 수
-                // - 반환값: List<FiveChoiceProblemDto>
-                fiveChoiceProblems = fiveChoiceGeneratorAgent.generateFiveChoiceProblems(
-                        lectureContent, 
-                        profile, 
-                        session.getTargetCount()
-                );
+                try {
+                    fiveChoiceProblems = fiveChoiceGeneratorAgent.generateFiveChoiceProblems(
+                            lectureContent, profile, session.getTargetCount());
+                } catch (WebClientResponseException e) {
+                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                        log.warn("[FiveChoice] POST /api/test-gen/five-choice 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
+                        fiveChoiceProblems = callUnifiedGenerateFiveChoice(lectureContent, profile, session.getTargetCount());
+                    } else throw e;
+                }
                 break;
 
             case SHORT_ANSWER:
-                // 단답형/서술형 문제 생성
-                // ShortAnswerGeneratorAgent.generateShortAnswerProblems() 호출
-                // - lectureContent: 강의 자료 내용
-                // - profile: 생성/검증된 Profile
-                // - targetCount: 생성할 문제 수
-                // - 반환값: List<ShortAnswerProblemDto>
-                shortAnswerProblems = shortAnswerGeneratorAgent.generateShortAnswerProblems(
-                        lectureContent, 
-                        profile, 
-                        session.getTargetCount()
-                );
+                try {
+                    shortAnswerProblems = shortAnswerGeneratorAgent.generateShortAnswerProblems(
+                            lectureContent, profile, session.getTargetCount());
+                } catch (WebClientResponseException e) {
+                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                        log.warn("[ShortAnswer] POST /api/test-gen/short-answer 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
+                        shortAnswerProblems = callUnifiedGenerateShortAnswer(lectureContent, profile, session.getTargetCount());
+                    } else throw e;
+                }
                 break;
 
             case DEBATE:
-                // 토론형 문제 생성
-                // DebateGeneratorAgent.generateDebateTopics() 호출
-                // - lectureContent: 강의 자료 내용
-                // - profile: 생성/검증된 Profile
-                // - targetCount: 생성할 문제 수
-                // - 반환값: List<DebateTopicDto>
-                debateTopics = debateGeneratorAgent.generateDebateTopics(
-                        lectureContent, 
-                        profile, 
-                        session.getTargetCount()
-                );
+                try {
+                    debateTopics = debateGeneratorAgent.generateDebateTopics(
+                            lectureContent, profile, session.getTargetCount());
+                } catch (WebClientResponseException e) {
+                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                        log.warn("[Debate] POST /api/test-gen/debate 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
+                        debateTopics = callUnifiedGenerateDebate(lectureContent, profile, session.getTargetCount());
+                    } else throw e;
+                }
                 break;
 
                 default:
@@ -638,6 +638,90 @@ public class ExamGenerationService {
             return snakeMapper.convertValue(list, new TypeReference<List<OxProblemDto>>() {});
         } catch (JsonProcessingException e) {
             log.warn("통합 generate 응답 파싱 실패(ox_problems): {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<FiveChoiceProblemDto> callUnifiedGenerateFiveChoice(String lectureContent, TestProfileDto profile, Integer targetCount) {
+        Map<String, Object> body = buildUnifiedGenerateBody("Five_Choice", lectureContent, profile, targetCount);
+        String raw = aiServiceWebClient.post()
+                .uri("/api/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        return parseUnifiedGenerateFiveChoice(raw);
+    }
+
+    private List<ShortAnswerProblemDto> callUnifiedGenerateShortAnswer(String lectureContent, TestProfileDto profile, Integer targetCount) {
+        Map<String, Object> body = buildUnifiedGenerateBody("Short_Answer", lectureContent, profile, targetCount);
+        String raw = aiServiceWebClient.post()
+                .uri("/api/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        return parseUnifiedGenerateShortAnswer(raw);
+    }
+
+    private List<DebateTopicDto> callUnifiedGenerateDebate(String lectureContent, TestProfileDto profile, Integer targetCount) {
+        Map<String, Object> body = buildUnifiedGenerateBody("Debate", lectureContent, profile, targetCount);
+        String raw = aiServiceWebClient.post()
+                .uri("/api/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        return parseUnifiedGenerateDebate(raw);
+    }
+
+    /** ko 브랜치 TestGenerationResponse: problems.mcq_problems 배열 */
+    private List<FiveChoiceProblemDto> parseUnifiedGenerateFiveChoice(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode problems = root.get("problems");
+            JsonNode list = (problems != null && problems.has("mcq_problems")) ? problems.get("mcq_problems") : (root.has("mcq_problems") ? root.get("mcq_problems") : null);
+            if (list == null || !list.isArray()) return List.of();
+            return snakeMapper.convertValue(list, new TypeReference<List<FiveChoiceProblemDto>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("통합 generate 응답 파싱 실패(mcq_problems): {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** ko 브랜치 TestGenerationResponse: problems.short_answer_problems 배열 */
+    private List<ShortAnswerProblemDto> parseUnifiedGenerateShortAnswer(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode problems = root.get("problems");
+            JsonNode list = (problems != null && problems.has("short_answer_problems")) ? problems.get("short_answer_problems") : (root.has("short_answer_problems") ? root.get("short_answer_problems") : null);
+            if (list == null || !list.isArray()) return List.of();
+            return snakeMapper.convertValue(list, new TypeReference<List<ShortAnswerProblemDto>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("통합 generate 응답 파싱 실패(short_answer_problems): {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** ko 브랜치 TestGenerationResponse: problems는 단일 DebateTopic 객체 */
+    private List<DebateTopicDto> parseUnifiedGenerateDebate(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode problems = root.get("problems");
+            if (problems == null || !problems.isObject()) return List.of();
+            DebateTopicDto one = snakeMapper.convertValue(problems, DebateTopicDto.class);
+            return List.of(one);
+        } catch (JsonProcessingException e) {
+            log.warn("통합 generate 응답 파싱 실패(debate): {}", e.getMessage());
             return List.of();
         }
     }
