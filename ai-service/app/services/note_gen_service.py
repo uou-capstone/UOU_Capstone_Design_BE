@@ -13,6 +13,30 @@ from ai_agent.LectureContentGenerator.agents.phase5_assembly import execute_phas
 from app.core.redis_client import redis_manager
 
 
+async def get_finalized_brief_from_cache(session_id: str) -> Dict[str, Any]:
+    """백엔드가 넣어둔 기획안(finalized_brief)을 Redis에서 직접 꺼내옴."""
+    redis = redis_manager.get_client()
+    cache_key = f"finalized_brief:{session_id}"
+    cached = await redis.get(cache_key)
+
+    if cached:
+        return json.loads(cached)
+    raise ValueError(f"Redis에서 session_id {session_id}의 기획안을 찾을 수 없습니다.")
+
+
+async def publish_progress(session_id: str, progress: int, message: str, phase: str) -> None:
+    """진행 상황을 Redis Pub/Sub 채널로 실시간 방송."""
+    redis = redis_manager.get_client()
+    channel = f"progress:session:{session_id}"
+
+    progress_data = {
+        "progress": progress,
+        "message": message,
+        "phase": phase,
+    }
+    await redis.publish(channel, json.dumps(progress_data, ensure_ascii=False))
+
+
 async def generate_lecture_note(topic: str, audience: str = "University Students") -> str:
     """
     LectureContentGenerator의 전체 파이프라인을 실행합니다.
@@ -113,7 +137,7 @@ async def run_phase2(draft_plan: Dict[str, Any], user_feedback: str) -> Dict[str
     return finalized_brief
 
 
-async def run_phase3_to_5_task(task_id: str, finalized_brief: Dict[str, Any]):
+async def run_phase3_to_5_task(session_id: str):
     """
     Phase 3~5: 비동기 집필 및 조립 태스크
 
@@ -121,19 +145,16 @@ async def run_phase3_to_5_task(task_id: str, finalized_brief: Dict[str, Any]):
     - Phase 4: Review
     - Phase 5: Assembly
     """
-    redis = redis_manager.get_client()
-    key = f"task:{task_id}"
-
     try:
+        # 1. API 요청 바디 대신 Redis에서 기획안 읽어오기
+        finalized_brief = await get_finalized_brief_from_cache(session_id)
+
         # Phase 3: 집필 (가장 오래 걸림)
-        await redis.set(
-            key,
-            json.dumps({
-                "status": "processing",
-                "progress": 30,
-                "message": "본문 집필 중 (AI 병렬 처리)...",
-                "topic": finalized_brief.get("project_meta", {}).get("title")
-            }, ensure_ascii=False)
+        await publish_progress(
+            session_id,
+            30,
+            "본문 집필 중 (AI 병렬 처리)...",
+            "Phase 3",
         )
         chapter_contents = await execute_phase3_async(finalized_brief)
         
@@ -141,14 +162,11 @@ async def run_phase3_to_5_task(task_id: str, finalized_brief: Dict[str, Any]):
             raise RuntimeError("Phase 3 실패: 챕터 내용을 생성할 수 없습니다.")
 
         # Phase 4: 검토
-        await redis.set(
-            key,
-            json.dumps({
-                "status": "processing",
-                "progress": 80,
-                "message": "내용 검증 및 수정 중...",
-                "topic": finalized_brief.get("project_meta", {}).get("title")
-            }, ensure_ascii=False)
+        await publish_progress(
+            session_id,
+            80,
+            "내용 검증 및 수정 중...",
+            "Phase 4",
         )
         verified_contents = await execute_phase4_async(chapter_contents, finalized_brief)
         
@@ -156,48 +174,39 @@ async def run_phase3_to_5_task(task_id: str, finalized_brief: Dict[str, Any]):
             raise RuntimeError("Phase 4 실패: 검증에 실패했습니다.")
 
         # Phase 5: 조립
-        await redis.set(
-            key,
-            json.dumps({
-                "status": "processing",
-                "progress": 90,
-                "message": "최종 문서 생성 중...",
-                "topic": finalized_brief.get("project_meta", {}).get("title")
-            }, ensure_ascii=False)
+        await publish_progress(
+            session_id,
+            90,
+            "최종 문서 생성 중...",
+            "Phase 5",
         )
         final_md = execute_phase5(verified_contents)
         
         if not final_md:
             raise RuntimeError("Phase 5 실패: 최종 문서 조립에 실패했습니다.")
 
-        # 완료
-        await redis.set(
-            key,
-            json.dumps({
-                "status": "completed",
-                "progress": 100,
-                "result": final_md,
-                "message": "완료됨",
-                "topic": finalized_brief.get("project_meta", {}).get("title")
-            }, ensure_ascii=False),
-            ex=86400  # 24시간 TTL
+        # 완료 방송
+        await publish_progress(
+            session_id,
+            100,
+            "모든 작업 완료!",
+            "Completed",
         )
-        print(f"[NoteGen] Task {task_id} completed successfully (Phase 3~5)")
+
+        # 최종 결과는 별도 키로 저장해 백엔드가 조회할 수 있게 함
+        redis = redis_manager.get_client()
+        await redis.set(f"final_result:{session_id}", final_md, ex=86400)
+        print(f"[NoteGen] Session {session_id} completed successfully (Phase 3~5)")
 
     except Exception as e:
-        print(f"[Task Error] {task_id}: {e}")
+        print(f"[Task Error] session {session_id}: {e}")
         traceback.print_exc()
         try:
-            await redis.set(
-                key,
-                json.dumps({
-                    "status": "failed",
-                    "progress": 0,
-                    "error": str(e),
-                    "message": f"작업 실패: {str(e)}",
-                    "topic": finalized_brief.get("project_meta", {}).get("title")
-                }, ensure_ascii=False),
-                ex=86400  # 24시간 TTL
+            await publish_progress(
+                session_id,
+                0,
+                f"작업 실패: {str(e)}",
+                "Error",
             )
         except Exception as redis_error:
-            print(f"[Redis] Failed to save error status: {redis_error}")
+            print(f"[Redis] Failed to publish error status: {redis_error}")

@@ -30,8 +30,8 @@ class Phase2Request(BaseModel):
 
 
 class Phase3Request(BaseModel):
-    finalized_brief: Dict[str, Any] = Field(
-        ..., description="Phase 2에서 확정된 기획안(브리프)"
+    session_id: str = Field(
+        ..., description="백엔드 세션 ID (finalized_brief:{sessionId} 조회용)"
     )
 
 
@@ -73,44 +73,25 @@ async def phase2_update_endpoint(req: Phase2Request):
 async def phase3_to_5_auto_endpoint(
     req: Phase3Request,
     background_tasks: BackgroundTasks,
-    redis: Redis = Depends(get_redis),
 ):
     """
     Phase 3~5: 집필/검토/조립 비동기 실행
-    - BackgroundTasks로 작업을 넘기고 Task ID를 반환합니다.
+    - 백엔드는 finalized_brief를 미리 Redis에 저장하고, 여기에는 sessionId만 전달합니다.
+    - 진행 상황은 Redis Pub/Sub 채널(progress:session:{sessionId})로 방송됩니다.
     """
-    task_id = str(uuid.uuid4())
+    session_id = req.session_id
 
     try:
-        title = (
-            req.finalized_brief.get("project_meta", {}).get("title")
-            if isinstance(req.finalized_brief, dict)
-            else None
-        )
-
-        initial_status = {
-            "status": "queued",
-            "progress": 0,
-            "message": "Phase 3~5 작업 대기 중...",
-            "topic": title,
-        }
-        await redis.set(
-            f"task:{task_id}",
-            json.dumps(initial_status, ensure_ascii=False),
-            ex=86400,  # 24시간 TTL
-        )
-
         background_tasks.add_task(
             run_phase3_to_5_task,
-            task_id,
-            req.finalized_brief,
+            session_id,
         )
 
         return {
-            "task_id": task_id,
+            "session_id": session_id,
             "status": "accepted",
             "message": "Phase 3~5 강의 노트 생성이 시작되었습니다.",
-            "status_url": f"/api/lecture-gen/status/{task_id}",
+            "progress_channel": f"progress:session:{session_id}",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Phase 3~5 작업 등록 실패: {str(e)}")
