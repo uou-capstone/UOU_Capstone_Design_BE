@@ -1,7 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.uou_capstone.aiplatform.agent.exam.DebateGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FlashCardGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FiveChoiceGeneratorAgent;
@@ -32,6 +34,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -77,6 +80,7 @@ public class ExamGenerationService {
     private final CacheService cacheService;  // Redis 캐싱 서비스
     private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
     private final SessionRecoveryService sessionRecoveryService; // 세션 복구 서비스
+    private final WebClient aiServiceWebClient;  // 404 시 /api/test-gen/generate 폴백용
 
     /**
      * 시험 생성 요청 처리
@@ -225,31 +229,33 @@ public class ExamGenerationService {
         try {
             switch (requestDto.getExamType()) {
             case FLASH_CARD:
-                // 플래시카드 생성
-                // FlashCardGeneratorAgent.generateFlashCards() 호출
-                // - lectureContent: 강의 자료 내용
-                // - profile: 생성/검증된 Profile
-                // - targetCount: 생성할 카드 수
-                // - 반환값: List<FlashCardDto>
-                flashCards = flashCardGeneratorAgent.generateFlashCards(
-                        lectureContent, 
-                        profile, 
-                        session.getTargetCount()
-                );
+                // 플래시카드 생성. /api/test-gen/flash-card 404 시 /api/test-gen/generate 폴백
+                try {
+                    flashCards = flashCardGeneratorAgent.generateFlashCards(
+                            lectureContent, profile, session.getTargetCount());
+                } catch (WebClientResponseException e) {
+                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                        log.warn("[FlashCard] POST /api/test-gen/flash-card 404 - ai-service(ko) 통합 엔드포인트 /api/test-gen/generate로 폴백합니다.");
+                        flashCards = callUnifiedGenerateFlashCards(lectureContent, profile, session.getTargetCount());
+                    } else {
+                        throw e;
+                    }
+                }
                 break;
 
             case OX_PROBLEM:
-                // OX 문제 생성
-                // OxProblemGeneratorAgent.generateOxProblems() 호출
-                // - lectureContent: 강의 자료 내용
-                // - profile: 생성/검증된 Profile
-                // - targetCount: 생성할 문제 수
-                // - 반환값: List<OxProblemDto>
-                oxProblems = oxProblemGeneratorAgent.generateOxProblems(
-                        lectureContent, 
-                        profile, 
-                        session.getTargetCount()
-                );
+                // OX 문제 생성. /api/test-gen/ox-problem 404 시 /api/test-gen/generate 폴백
+                try {
+                    oxProblems = oxProblemGeneratorAgent.generateOxProblems(
+                            lectureContent, profile, session.getTargetCount());
+                } catch (WebClientResponseException e) {
+                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
+                        log.warn("[OxProblem] POST /api/test-gen/ox-problem 404 - ai-service(ko) 통합 엔드포인트 /api/test-gen/generate로 폴백합니다.");
+                        oxProblems = callUnifiedGenerateOxProblems(lectureContent, profile, session.getTargetCount());
+                    } else {
+                        throw e;
+                    }
+                }
                 break;
 
             case FIVE_CHOICE:
@@ -556,5 +562,83 @@ public class ExamGenerationService {
                 request.getExistingProfile(),
                 request.getUserMessage()
         );
+    }
+
+    /**
+     * ai-service(ko) 통합 엔드포인트 POST /api/test-gen/generate 호출.
+     * ko 브랜치: ProblemRequest(exam_type, target_count, lecture_content, user_profile), TestGenerationResponse(problems.flash_cards).
+     */
+    private List<FlashCardDto> callUnifiedGenerateFlashCards(String lectureContent, TestProfileDto profile, Integer targetCount) {
+        Map<String, Object> body = buildUnifiedGenerateBody("Flash_Card", lectureContent, profile, targetCount);
+        String raw = aiServiceWebClient.post()
+                .uri("/api/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        return parseUnifiedGenerateFlashCards(raw);
+    }
+
+    /**
+     * ai-service(ko) POST /api/test-gen/generate (exam_type=OX_Problem).
+     */
+    private List<OxProblemDto> callUnifiedGenerateOxProblems(String lectureContent, TestProfileDto profile, Integer targetCount) {
+        Map<String, Object> body = buildUnifiedGenerateBody("OX_Problem", lectureContent, profile, targetCount);
+        String raw = aiServiceWebClient.post()
+                .uri("/api/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+        return parseUnifiedGenerateOxProblems(raw);
+    }
+
+    /** ko 브랜치 ai-service ProblemRequest: exam_type, target_count, lecture_content, user_profile(Optional[TestProfile]). */
+    private Map<String, Object> buildUnifiedGenerateBody(String examType, String lectureContent, TestProfileDto profile, Integer targetCount) {
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        Map<String, Object> profileMap = profile != null
+                ? snakeMapper.convertValue(profile, new TypeReference<Map<String, Object>>() {})
+                : null;
+        Map<String, Object> body = new HashMap<>();
+        body.put("exam_type", examType);
+        body.put("target_count", targetCount != null ? targetCount : 10);
+        body.put("lecture_content", lectureContent);
+        body.put("user_profile", profileMap);
+        return body;
+    }
+
+    /** ko 브랜치 TestGenerationResponse: problems.flash_cards 배열 */
+    private List<FlashCardDto> parseUnifiedGenerateFlashCards(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode problems = root.get("problems");
+            JsonNode list = (problems != null && problems.has("flash_cards")) ? problems.get("flash_cards") : (root.has("flash_cards") ? root.get("flash_cards") : null);
+            if (list == null || !list.isArray()) return List.of();
+            return snakeMapper.convertValue(list, new TypeReference<List<FlashCardDto>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("통합 generate 응답 파싱 실패(flash_cards): {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** ko 브랜치 TestGenerationResponse: problems.ox_problems 배열 */
+    private List<OxProblemDto> parseUnifiedGenerateOxProblems(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        ObjectMapper snakeMapper = objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode problems = root.get("problems");
+            JsonNode list = (problems != null && problems.has("ox_problems")) ? problems.get("ox_problems") : (root.has("ox_problems") ? root.get("ox_problems") : null);
+            if (list == null || !list.isArray()) return List.of();
+            return snakeMapper.convertValue(list, new TypeReference<List<OxProblemDto>>() {});
+        } catch (JsonProcessingException e) {
+            log.warn("통합 generate 응답 파싱 실패(ox_problems): {}", e.getMessage());
+            return List.of();
+        }
     }
 }
