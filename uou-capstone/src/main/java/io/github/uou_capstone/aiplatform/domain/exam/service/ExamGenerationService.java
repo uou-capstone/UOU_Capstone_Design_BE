@@ -524,7 +524,7 @@ public class ExamGenerationService {
 
         UserStatusDto userStatus = new UserStatusDto();
         userStatus.setProficiencyLevel("Intermediate");
-        userStatus.setWeaknessFocus(List.of());
+        userStatus.setWeaknessFocus(false);
 
         InteractionStyleDto interactionStyle = new InteractionStyleDto();
         interactionStyle.setLanguagePreference("Korean_with_English_Terms");
