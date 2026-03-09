@@ -2,6 +2,8 @@ package io.github.uou_capstone.aiplatform.domain.exam.controller;
 
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ExamGenerationRequestDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ExamGenerationResponseDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.ProfileConversationRequestDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.ProfileConversationResponseDto;
 import io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationService;
 import io.github.uou_capstone.aiplatform.domain.task.dto.AsyncTaskResponse;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
@@ -23,6 +25,7 @@ import java.util.Map;
  * Version 2의 5가지 시험 유형 생성을 관리하는 REST API
  * 
  * API 엔드포인트:
+ * - POST /api/exams/generation/profile: 프로필 대화 1턴 (에이전트와 대화로 프로필 채우기)
  * - POST /api/exams/generation: 시험 생성
  * - GET /api/exams/generation/{examSessionId}: 시험 세션 조회
  * 
@@ -171,6 +174,37 @@ public class ExamGenerationController {
         ExamGenerationResponseDto response = examGenerationService.getExamSession(examSessionId);
         
         // HTTP 200 OK와 함께 응답 반환
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 프로필 대화 1턴 (문서: ai-service-endpoint-request.md §2, §4)
+     *
+     * 엔드포인트: POST /api/exams/generation/profile
+     *
+     * 사용자가 에이전트와 대화로 프로필을 채울 때, 턴마다 호출.
+     * - 첫 턴: lectureContent, examType(선택), userMessage는 빈 문자열 또는 생략
+     * - 2턴부터: 이전 응답의 updatedProfile을 existingProfile로, 사용자 입력을 userMessage로 전달
+     * - status가 "COMPLETE"가 되면 updatedProfile을 시험 생성 요청(POST /api/exams/generation)의 userProfile로 전달
+     *
+     * 요청 예시:
+     * { "lectureContent": "강의 내용...", "examType": "FLASH_CARD", "userMessage": "" }
+     *
+     * 응답 예시 (INCOMPLETE):
+     * { "status": "INCOMPLETE", "agentMessage": "어떤 주제 위주로...?", "missingInfo": ["learning_goal"], "updatedProfile": {...} }
+     *
+     * 응답 예시 (COMPLETE):
+     * { "status": "COMPLETE", "agentMessage": "프로필이 확정되었습니다.", "missingInfo": [], "updatedProfile": {...} }
+     */
+    @Operation(
+            summary = "프로필 대화 1턴",
+            description = "에이전트와 대화로 시험 프로필을 채웁니다. status가 COMPLETE가 될 때까지 반복 호출한 뒤, updatedProfile을 시험 생성 요청의 userProfile로 넣어주세요."
+    )
+    @PostMapping("/profile")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<ProfileConversationResponseDto> chatProfileTurn(
+            @Valid @RequestBody ProfileConversationRequestDto request) {
+        ProfileConversationResponseDto response = examGenerationService.chatProfileTurn(request);
         return ResponseEntity.ok(response);
     }
 
