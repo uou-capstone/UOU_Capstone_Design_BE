@@ -1,5 +1,6 @@
 import json
 import asyncio
+from typing import Awaitable, Callable, Optional
 from google.genai import types
 from . import DEFAULT_MODEL, gemini_client
 from ..prompts import (
@@ -101,8 +102,7 @@ class WriteAgent:
             config = types.GenerateContentConfig(
                 system_instruction=WRITE_SYSTEM_PROMPT,
             )
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=config,
@@ -136,12 +136,33 @@ class SearchAgent:
             return "(Search Failed)"
 
 
-async def run_deep_research_async(chapter_info, finalized_brief, semaphore):
+async def run_deep_research_async(
+    chapter_info,
+    finalized_brief,
+    semaphore,
+    *,
+    chapter_index: int,
+    total_chapters: int,
+    progress_hook: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
+):
     """하나의 챕터에 대해: 분해 -> (검색 -> 검증 -> 재검색) -> 작성 과정을 수행 (비동기)"""
     # 🚦 세마포어 적용: 동시 실행 제한
     async with semaphore:
         try:
-            print(f"▶ Starting Research for Chapter {chapter_info['id']}: {chapter_info['title']}")
+            chapter_title = chapter_info.get("title", f"Chapter {chapter_index + 1}")
+            print(f"▶ Starting Research for Chapter {chapter_info['id']}: {chapter_title}")
+
+            # Phase 3 내부 상세 진행 방송 (챕터 단위)
+            if progress_hook:
+                # 30~79 범위에서 챕터별로 찔끔 증가
+                denom = max(total_chapters, 1)
+                per_chapter = 49 / denom
+                progress = min(79, int(30 + (chapter_index + 1) * per_chapter))
+                await progress_hook(
+                    progress,
+                    f"Chapter {chapter_index + 1} ({chapter_title}) 연구 및 집필 중...",
+                    "Phase 3",
+                )
             
             # 약간의 딜레이를 주어 API 호출 폭주를 분산시킴
             await asyncio.sleep(0.3)
@@ -231,6 +252,15 @@ async def run_deep_research_async(chapter_info, finalized_brief, semaphore):
                     full_chapter_content.append(error_draft)
             
             print(f"◀ Chapter {chapter_info['id']} Complete.")
+            if progress_hook:
+                denom = max(total_chapters, 1)
+                per_chapter = 49 / denom
+                progress = min(79, int(30 + (chapter_index + 1) * per_chapter))
+                await progress_hook(
+                    progress,
+                    f"Chapter {chapter_index + 1} ({chapter_title}) 집필 완료",
+                    "Phase 3",
+                )
             return "\n\n".join(full_chapter_content) if full_chapter_content else f"### Chapter {chapter_info['id']}: {chapter_info['title']}\n\n> ⚠️ 내용 생성 실패"
             
         except Exception as e:
@@ -239,7 +269,11 @@ async def run_deep_research_async(chapter_info, finalized_brief, semaphore):
             return error_msg
 
 
-async def execute_phase3_async(finalized_brief):
+async def execute_phase3_async(
+    finalized_brief,
+    *,
+    progress_hook: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
+):
     """Phase 3 실행: 모든 챕터에 대해 병렬로 심층 연구 수행 (비동기)"""
     if not isinstance(finalized_brief, dict) or 'chapters' not in finalized_brief:
         print("Error: Valid Finalized Brief dictionary is required.")
@@ -254,7 +288,18 @@ async def execute_phase3_async(finalized_brief):
     print(f"🚀 [Phase 3] {len(chapters)}개 챕터 동시 집필 시작 (최대 3개 동시 실행)...")
     
     # 모든 챕터에 대한 Task 생성 및 동시 실행
-    tasks = [run_deep_research_async(chapter, finalized_brief, semaphore) for chapter in chapters]
+    total = len(chapters)
+    tasks = [
+        run_deep_research_async(
+            chapter,
+            finalized_brief,
+            semaphore,
+            chapter_index=i,
+            total_chapters=total,
+            progress_hook=progress_hook,
+        )
+        for i, chapter in enumerate(chapters)
+    ]
     
     # 🛡️ 하나가 죽어도 나머지는 살린다 (return_exceptions=True)
     results = await asyncio.gather(*tasks, return_exceptions=True)

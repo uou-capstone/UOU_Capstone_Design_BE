@@ -149,6 +149,9 @@ async def run_phase3_to_5_task(session_id: str):
         # 1. API 요청 바디 대신 Redis에서 기획안 읽어오기
         finalized_brief = await get_finalized_brief_from_cache(session_id)
 
+        async def _progress_hook(progress: int, message: str, phase: str) -> None:
+            await publish_progress(session_id, progress, message, phase)
+
         # Phase 3: 집필 (가장 오래 걸림)
         await publish_progress(
             session_id,
@@ -156,7 +159,7 @@ async def run_phase3_to_5_task(session_id: str):
             "본문 집필 중 (AI 병렬 처리)...",
             "Phase 3",
         )
-        chapter_contents = await execute_phase3_async(finalized_brief)
+        chapter_contents = await execute_phase3_async(finalized_brief, progress_hook=_progress_hook)
         
         if not chapter_contents:
             raise RuntimeError("Phase 3 실패: 챕터 내용을 생성할 수 없습니다.")
@@ -168,7 +171,11 @@ async def run_phase3_to_5_task(session_id: str):
             "내용 검증 및 수정 중...",
             "Phase 4",
         )
-        verified_contents = await execute_phase4_async(chapter_contents, finalized_brief)
+        verified_contents = await execute_phase4_async(
+            chapter_contents,
+            finalized_brief,
+            progress_hook=_progress_hook,
+        )
         
         if not verified_contents:
             raise RuntimeError("Phase 4 실패: 검증에 실패했습니다.")

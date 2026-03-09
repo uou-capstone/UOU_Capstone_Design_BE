@@ -1,5 +1,6 @@
 import json
 import asyncio
+from typing import Awaitable, Callable, Optional
 from google.genai import types
 from . import DEFAULT_MODEL, gemini_client
 from ..prompts import REVIEW_SYSTEM_PROMPT, EDITOR_SYSTEM_PROMPT
@@ -67,7 +68,15 @@ class EditorAgent:
             return original_markdown  # Fail-safe: return original if edit fails
 
 
-async def _process_single_chapter_review(chapter_content, chapter_index, total_chapters, finalized_brief, semaphore):
+async def _process_single_chapter_review(
+    chapter_content,
+    chapter_index,
+    total_chapters,
+    finalized_brief,
+    semaphore,
+    *,
+    progress_hook: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
+):
     """단일 챕터 검증 및 수정 (비동기)"""
     # 🚦 세마포어 적용: 동시 실행 제한
     async with semaphore:
@@ -78,6 +87,16 @@ async def _process_single_chapter_review(chapter_content, chapter_index, total_c
             reviewer = ReviewerAgent()
             editor = EditorAgent()
             
+            if progress_hook:
+                denom = max(total_chapters, 1)
+                per_chapter = 9 / denom  # 80~89
+                progress = min(89, int(80 + (chapter_index + 1) * per_chapter))
+                await progress_hook(
+                    progress,
+                    f"Chapter {chapter_index + 1} 검증/수정 중...",
+                    "Phase 4",
+                )
+
             print(f"\n[Checking Chapter {chapter_index + 1} / {total_chapters}]...")
             
             review_result = await reviewer.review_async(chapter_content, finalized_brief)
@@ -97,6 +116,15 @@ async def _process_single_chapter_review(chapter_content, chapter_index, total_c
 
                 revised_chapter = await editor.rewrite_async(chapter_content, edit_prompt)
                 print("  > Rewrite Complete.")
+                if progress_hook:
+                    denom = max(total_chapters, 1)
+                    per_chapter = 9 / denom
+                    progress = min(89, int(80 + (chapter_index + 1) * per_chapter))
+                    await progress_hook(
+                        progress,
+                        f"Chapter {chapter_index + 1} 검증/수정 완료",
+                        "Phase 4",
+                    )
                 return revised_chapter
                 
         except Exception as e:
@@ -105,7 +133,12 @@ async def _process_single_chapter_review(chapter_content, chapter_index, total_c
             return chapter_content
 
 
-async def execute_phase4_async(chapter_content_list, finalized_brief):
+async def execute_phase4_async(
+    chapter_content_list,
+    finalized_brief,
+    *,
+    progress_hook: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
+):
     """Phase 4 실행: 챕터별 검증 및 수정 (병렬 처리)"""
     if not chapter_content_list or not finalized_brief:
         print("Error: Missing input data.")
@@ -118,13 +151,15 @@ async def execute_phase4_async(chapter_content_list, finalized_brief):
     print(f"🚀 [Phase 4] {len(chapter_content_list)}개 챕터 병렬 검증 시작 (최대 12개 동시 실행)...")
     
     # 모든 챕터에 대한 Task 생성 및 동시 실행
+    total = len(chapter_content_list)
     tasks = [
         _process_single_chapter_review(
             chapter_content, 
             i, 
-            len(chapter_content_list), 
+            total,
             finalized_brief,
-            semaphore
+            semaphore,
+            progress_hook=progress_hook,
         )
         for i, chapter_content in enumerate(chapter_content_list)
     ]
