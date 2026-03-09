@@ -187,8 +187,26 @@ public class ExamGenerationController {
      * - 2턴부터: 이전 응답의 updatedProfile을 existingProfile로, 사용자 입력을 userMessage로 전달
      * - status가 "COMPLETE"가 되면 updatedProfile을 시험 생성 요청(POST /api/exams/generation)의 userProfile로 전달
      *
-     * 요청 예시:
-     * { "lectureContent": "강의 내용...", "examType": "FLASH_CARD", "userMessage": "" }
+     * 요청 예시 (첫 턴):
+     * {
+     *   "lectureContent": "강의 내용 또는 본문 텍스트",
+     *   "examType": "FLASH_CARD",
+     *   "userMessage": ""
+     * }
+     *
+     * 요청 예시 (2턴 이후, existingProfile 포함):
+     * {
+     *   "lectureContent": "string",
+     *   "examType": "string",
+     *   "existingProfile": {
+     *     "learningGoal": { "focusAreas": ["string"], "targetDepth": "string", "questionModality": "string" },
+     *     "userStatus": { "proficiencyLevel": "string", "weaknessFocus": true },
+     *     "interactionStyle": { "languagePreference": "string", "scenarioBased": true },
+     *     "feedbackPreference": { "strictness": "string", "explanationDepth": "string" },
+     *     "scopeBoundary": "LECTURE_MATERIAL_ONLY"
+     *   },
+     *   "userMessage": "string"
+     * }
      *
      * 응답 예시 (INCOMPLETE):
      * { "status": "INCOMPLETE", "agentMessage": "어떤 주제 위주로...?", "missingInfo": ["learning_goal"], "updatedProfile": {...} }
