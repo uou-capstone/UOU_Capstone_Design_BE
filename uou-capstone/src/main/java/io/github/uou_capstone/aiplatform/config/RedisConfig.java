@@ -62,29 +62,18 @@ public class RedisConfig {
 
     /**
      * RedissonClient Bean 등록
-     * 분산 락(Distributed Lock)에 사용
+     * 분산 락(Distributed Lock)에 사용.
+     * RedisConnectionFactory 대신 properties 사용으로 Redisson 스타터와의 순환 참조 방지.
      */
     @Bean
-    public RedissonClient redissonClient(RedisConnectionFactory connectionFactory) {
+    public RedissonClient redissonClient(
+            @Value("${spring.data.redis.host:localhost}") String host,
+            @Value("${spring.data.redis.port:6379}") int port,
+            @Value("${spring.data.redis.database:0}") int database) {
         Config config = new Config();
-        
-        // Redis 연결 정보 가져오기
-        if (connectionFactory instanceof org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory) {
-            org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory lettuceFactory = 
-                (org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory) connectionFactory;
-            String host = lettuceFactory.getHostName();
-            int port = lettuceFactory.getPort();
-            int database = lettuceFactory.getDatabase();
-            
-            config.useSingleServer()
+        config.useSingleServer()
                 .setAddress("redis://" + host + ":" + port)
                 .setDatabase(database);
-        } else {
-            // 기본값 (localhost:6379)
-            config.useSingleServer()
-                .setAddress("redis://localhost:6379");
-        }
-        
         return Redisson.create(config);
     }
 
