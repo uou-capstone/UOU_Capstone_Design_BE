@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -30,6 +31,7 @@ import java.util.Map;
  * - POST /api/materials/generation/phase2: Phase 2 처리 (사용자 피드백)
  * - GET /api/materials/generation/{sessionId}/status: 생성 상태 조회
  */
+@Slf4j
 @Tag(name = "강의 자료 생성 API", description = "AI 기반 강의 자료 생성 5단계 파이프라인 API")
 @RestController
 @RequestMapping("/api/materials/generation")
