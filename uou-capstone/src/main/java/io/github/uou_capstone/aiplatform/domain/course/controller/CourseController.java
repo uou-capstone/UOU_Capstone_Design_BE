@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.controller;
 
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
@@ -54,6 +55,14 @@ public class CourseController {
     public ResponseEntity<CourseResponseDto> getCourseById(@PathVariable Long courseId) {
         Course course = courseService.getCourseById(courseId);
         return ResponseEntity.ok(new CourseResponseDto(course));
+    }
+
+    @Operation(summary = "강의실 n주차 자료 조회", description = "강의실 내 주차별로 생성해둔 강의자료·시험 목록을 조회합니다. (강의실/강의 조회와 동일 권한)")
+    @GetMapping("/{courseId}/contents")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
+    public ResponseEntity<CourseContentsResponseDto> getCourseContents(@PathVariable Long courseId) {
+        CourseContentsResponseDto contents = courseService.getCourseContents(courseId);
+        return ResponseEntity.ok(contents);
     }
 
     // 기존 ID 기반 수강 신청 (유지할지 결정 필요하나, 일단 둠)

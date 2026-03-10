@@ -2,13 +2,20 @@ package io.github.uou_capstone.aiplatform.domain.course.service;
 
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.ExamSessionSummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.LectureContentsDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.MaterialSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Role;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
@@ -35,6 +42,8 @@ public class CourseService {
     private final TeacherRepository teacherRepository;
     private final StudentRepository studentRepository;
     private final EnrollmentRepository enrollmentRepository;
+    private final MaterialRepository materialRepository;
+    private final ExamSessionRepository examSessionRepository;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
@@ -99,6 +108,58 @@ public class CourseService {
     public Course getCourseById(Long courseId) { //강의실 id 상세 조회
         return courseRepository.findById(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
+    }
+
+    /**
+     * 강의실 내 n주차별로 생성해둔 강의자료·시험 목록 조회 (강의실 조회 / 강의 조회 API와 동일한 권한)
+     */
+    @Transactional(readOnly = true)
+    public CourseContentsResponseDto getCourseContents(Long courseId) {
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+
+        if (currentUser.getRole() == Role.TEACHER) {
+            Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+            if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
+                throw new BusinessException(CommonErrorCode.FORBIDDEN);
+            }
+        } else if (currentUser.getRole() == Role.STUDENT) {
+            Student student = studentRepository.findById(currentUser.getId())
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+            if (!enrollmentRepository.existsByStudentAndCourse(student, course)) {
+                throw new BusinessException(CommonErrorCode.FORBIDDEN);
+            }
+        } else {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+
+        List<LectureContentsDto> lectureContents = course.getLectures().stream()
+                .sorted(Comparator.comparingInt(Lecture::getWeekNumber))
+                .map(lecture -> {
+                    List<MaterialSummaryDto> materials = materialRepository
+                            .findByLecture_IdOrderByCreatedAtDesc(lecture.getId()).stream()
+                            .map(MaterialSummaryDto::new)
+                            .collect(Collectors.toList());
+                    List<ExamSessionSummaryDto> examSessions = examSessionRepository
+                            .findByLecture(lecture).stream()
+                            .map(ExamSessionSummaryDto::new)
+                            .collect(Collectors.toList());
+                    return new LectureContentsDto(
+                            lecture.getId(),
+                            lecture.getTitle(),
+                            lecture.getWeekNumber(),
+                            materials,
+                            examSessions
+                    );
+                })
+                .collect(Collectors.toList());
+
+        return new CourseContentsResponseDto(course.getId(), course.getTitle(), lectureContents);
     }
 
     @Transactional
