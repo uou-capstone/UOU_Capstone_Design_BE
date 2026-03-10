@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.exam.controller;
 
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ExamGenerationRequestDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ExamGenerationResponseDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.ExamSessionListItemDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ProfileConversationRequestDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.ProfileConversationResponseDto;
 import io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationService;
@@ -18,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -132,6 +134,24 @@ public class ExamGenerationController {
         
         // HTTP 201 CREATED와 함께 응답 반환 (새로운 리소스 생성)
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * 강의별 시험 세션 목록 조회
+     *
+     * 엔드포인트: GET /api/exams/generation/lectures/{lectureId}
+     *
+     * 강의 진입 시 호출해 로컬 상태를 서버 응답으로 채우면 새로고침/재로그인 후에도 목록이 복원됩니다.
+     */
+    @Operation(
+            summary = "강의별 시험 세션 목록 조회",
+            description = "해당 강의에 대한 시험 생성 세션 목록을 반환합니다. 강의 진입 시 호출해 목록을 복원할 수 있습니다."
+    )
+    @GetMapping("/lectures/{lectureId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<List<ExamSessionListItemDto>> listExamSessionsByLecture(@PathVariable Long lectureId) {
+        List<ExamSessionListItemDto> list = examGenerationService.getExamSessionsByLectureId(lectureId);
+        return ResponseEntity.ok(list);
     }
 
     /**

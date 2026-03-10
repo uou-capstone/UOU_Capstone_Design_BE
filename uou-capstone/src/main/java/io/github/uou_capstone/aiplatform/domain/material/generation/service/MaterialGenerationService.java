@@ -36,6 +36,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import org.springframework.web.reactive.function.BodyInserters;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -408,6 +409,32 @@ public class MaterialGenerationService {
                 .finalDocument(session.getFinalDocument())
                 .errorMessage(session.getErrorMessage())
                 .build();
+    }
+
+    /**
+     * 강의별 강의자료 생성 세션 목록 조회. 해당 강의 소유(교사)만 접근 가능.
+     * FE: 강의 진입 시 호출해 목록을 서버에서 불러오면, 기존 세션을 선택해 재개할 수 있어 불필요한 새 세션 생성(토큰 낭비)을 줄일 수 있음.
+     */
+    @Transactional(readOnly = true)
+    public List<MaterialGenerationSessionSummaryDto> findGenerationSessionsByLectureId(Long lectureId) {
+        Lecture lecture = lectureRepository.findById(lectureId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        AuthorizationUtil.requireLectureOwner(currentUser, lecture);
+
+        return generationSessionRepository.findByLectureIdOrderByCreatedAtDesc(lectureId).stream()
+                .map(gs -> MaterialGenerationSessionSummaryDto.builder()
+                        .sessionId(gs.getId())
+                        .lectureId(gs.getLecture().getId())
+                        .currentPhase(gs.getCurrentPhase())
+                        .progressPercentage(gs.getProgressPercentage())
+                        .userPrompt(gs.getUserPrompt())
+                        .createdAt(gs.getCreatedAt())
+                        .errorMessage(gs.getErrorMessage())
+                        .build())
+                .toList();
     }
 
     /**

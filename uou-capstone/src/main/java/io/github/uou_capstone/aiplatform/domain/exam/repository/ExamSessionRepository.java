@@ -30,4 +30,7 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
     
     @Query("SELECT es FROM ExamSession es WHERE es.lecture.id = :lectureId AND es.examType = :examType")
     List<ExamSession> findByLectureIdAndExamType(@Param("lectureId") Long lectureId, @Param("examType") ExamType examType);
+
+    @Query("SELECT es FROM ExamSession es WHERE es.lecture.id = :lectureId ORDER BY es.createdAt DESC")
+    List<ExamSession> findByLecture_IdOrderByCreatedAtDesc(@Param("lectureId") Long lectureId);
 }
