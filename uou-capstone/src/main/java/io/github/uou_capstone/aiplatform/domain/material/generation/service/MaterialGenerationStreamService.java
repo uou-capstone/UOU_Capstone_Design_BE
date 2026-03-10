@@ -9,8 +9,6 @@ import io.github.uou_capstone.aiplatform.common.error.exception.BusinessExceptio
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationPhase;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
-import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
-import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -41,7 +39,6 @@ public class MaterialGenerationStreamService {
     private final ReviewAgent reviewAgent;
     private final EditorAgent editorAgent;
     private final GenerationSessionRepository generationSessionRepository;
-    private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
@@ -61,19 +58,10 @@ public class MaterialGenerationStreamService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
         validateSessionOwner(session);
 
-        // ========== 2단계: AgentRequest 구성 ==========
+        // ========== 2단계: AgentRequest 구성 (키워드만 사용, PDF 미사용) ==========
         String keyword = session.getUserPrompt();
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        session.getLecture().getId(),
-                        "PDF"
-                )
-                .orElse(null);
-        String pdfPath = pdfMaterial != null ? pdfMaterial.getFilePath() : null;
-
         Map<String, Object> context = new HashMap<>();
         context.put("keyword", keyword);
-        context.put("pdf_path", pdfPath);
 
         AgentRequest request = new SimpleAgentRequest(keyword, context);
 
@@ -136,23 +124,14 @@ public class MaterialGenerationStreamService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
         validateSessionOwner(session);
 
-        // ========== 2단계: AgentRequest 구성 ==========
+        // ========== 2단계: AgentRequest 구성 (키워드/기획안만 사용, PDF 미사용) ==========
         Map<String, Object> finalizedBriefMap = session.getFinalizedBriefJson();
         if (finalizedBriefMap == null) {
             throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "FinalizedBrief가 없습니다.");
         }
 
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        session.getLecture().getId(),
-                        "PDF"
-                )
-                .orElse(null);
-        String pdfPath = pdfMaterial != null ? pdfMaterial.getFilePath() : null;
-
         Map<String, Object> context = new HashMap<>();
         context.put("finalized_brief", finalizedBriefMap);
-        context.put("pdf_path", pdfPath);
 
         AgentRequest request = new SimpleAgentRequest("Decompose chapters and write content", context);
 

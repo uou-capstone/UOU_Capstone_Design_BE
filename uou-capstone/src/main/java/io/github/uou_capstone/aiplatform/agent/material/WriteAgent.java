@@ -36,15 +36,17 @@ public class WriteAgent extends AbstractAgent {
     }
 
     /**
-     * Markdown 본문 작성
+     * Markdown 본문 작성 (키워드/기획안 기반, PDF 미사용)
      * @param chapterContentList 분해된 챕터 리스트
-     * @param pdfPath PDF 파일 경로
+     * @param pdfPath PDF 파일 경로 (미사용, null 전달)
      * @return 작성된 챕터 콘텐츠 리스트
      */
     public ChapterContentListDto writeContent(ChapterContentListDto chapterContentList, String pdfPath) {
         Map<String, Object> context = new HashMap<>();
         context.put("chapter_content_list", chapterContentList);
-        context.put("pdf_path", pdfPath);
+        if (pdfPath != null) {
+            context.put("pdf_path", pdfPath);
+        }
 
         AgentRequest request = new SimpleAgentRequest("Write Markdown content for chapters", context);
         return execute(request, ChapterContentListDto.class);

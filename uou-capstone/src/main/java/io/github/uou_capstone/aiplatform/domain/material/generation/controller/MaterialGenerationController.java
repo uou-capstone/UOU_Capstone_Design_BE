@@ -69,7 +69,7 @@ public class MaterialGenerationController {
      * 
      * 로직 흐름:
      * 1. Controller가 요청을 받아 Service에 전달
-     * 2. Service가 권한 확인, 강의 조회, PDF 조회, 세션 생성, Agent 호출 수행
+     * 2. Service가 권한 확인, 강의 조회, 세션 생성, Agent 호출 수행
      * 3. Service가 생성된 DraftPlan과 sessionId를 반환
      * 4. Controller가 ResponseEntity로 응답 반환
      */
@@ -86,7 +86,6 @@ public class MaterialGenerationController {
         // Service에서 모든 비즈니스 로직 처리:
         // - 권한 확인
         // - 강의 정보 조회
-        // - PDF 경로 조회
         // - 세션 생성
         // - PlanningAgent 호출
         // - 결과 저장

@@ -17,6 +17,4 @@ public class MaterialGenerationPhase1RequestDto {
     
     @NotBlank(message = "키워드는 필수입니다.")
     private String keyword; // 초기 키워드 입력
-    
-    private String pdfPath; // 참고할 PDF 파일 경로 (선택적)
 }

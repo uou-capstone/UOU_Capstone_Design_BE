@@ -13,7 +13,6 @@ public class FastApiMaterialRequestDto {
     private Long sessionId;
     private String phase; // "phase1", "phase2", "phase3", "phase4", "phase5"
     private String keyword; // Phase 1용
-    private String pdfPath; // Phase 1용
     private DraftPlanDto draftPlan; // Phase 2용
     private String feedback; // Phase 2용
     private FinalizedBriefDto finalizedBrief; // Phase 3용

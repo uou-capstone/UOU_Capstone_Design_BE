@@ -37,15 +37,17 @@ public class DecompositionAgent extends AbstractAgent {
     }
 
     /**
-     * 챕터를 하위 주제로 분해
+     * 챕터를 하위 주제로 분해 (키워드/기획안 기반, PDF 미사용)
      * @param finalizedBrief 확정된 기획안
-     * @param pdfPath PDF 파일 경로
+     * @param pdfPath PDF 파일 경로 (미사용, null 전달)
      * @return 분해된 챕터 리스트
      */
     public ChapterContentListDto decomposeChapters(FinalizedBriefDto finalizedBrief, String pdfPath) {
         Map<String, Object> context = new HashMap<>();
         context.put("finalized_brief", finalizedBrief);
-        context.put("pdf_path", pdfPath);
+        if (pdfPath != null) {
+            context.put("pdf_path", pdfPath);
+        }
 
         AgentRequest request = new SimpleAgentRequest("Decompose chapters into subtopics", context);
         return execute(request, ChapterContentListDto.class);

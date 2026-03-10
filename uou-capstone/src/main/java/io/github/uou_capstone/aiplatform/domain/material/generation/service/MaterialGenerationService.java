@@ -13,8 +13,6 @@ import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
-import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
-import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationPhase;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
@@ -66,7 +64,6 @@ public class MaterialGenerationService {
     private final EditorAgent editorAgent;  // Phase 5 Agent
     private final GenerationSessionRepository generationSessionRepository;
     private final LectureRepository lectureRepository;
-    private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;  // JSON 변환용
     private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
@@ -420,11 +417,10 @@ public class MaterialGenerationService {
      * 1. 세션 조회 및 권한 확인
      * 2. Phase 확인 (PHASE2 완료 여부)
      * 3. FinalizedBrief 조회
-     * 4. PDF 경로 조회
-     * 5. DecompositionAgent 호출: 챕터를 하위 주제로 분해
-     * 6. WriteAgent 호출: Markdown 본문 작성
-     * 7. 결과 저장: ChapterContentList를 JSON으로 변환하여 세션에 저장
-     * 8. 응답 반환
+     * 4. DecompositionAgent 호출: 챕터를 하위 주제로 분해 (키워드/기획안 기반, PDF 미사용)
+     * 5. WriteAgent 호출: Markdown 본문 작성
+     * 6. 결과 저장: ChapterContentList를 JSON으로 변환하여 세션에 저장
+     * 7. 응답 반환
      * 
      * @param requestDto Phase 3 요청 DTO (sessionId)
      * @return Phase 3 응답 DTO (sessionId, chapterContentList)
@@ -461,23 +457,10 @@ public class MaterialGenerationService {
         }
         FinalizedBriefDto finalizedBrief = objectMapper.convertValue(finalizedBriefMap, FinalizedBriefDto.class);
 
-        // ========== 5단계: PDF 경로 조회 ==========
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        session.getLecture().getId(), 
-                        "PDF"
-                )
-                .orElseThrow(() -> new BusinessException(
-                        CommonErrorCode.FILE_NOT_FOUND, 
-                        "AI 처리에 필요한 PDF 자료를 찾을 수 없습니다."
-                ));
-        String pdfPath = pdfMaterial.getFilePath();
-
-        // ========== 6단계: DecompositionAgent 호출 ==========
-        // 챕터를 하위 주제로 분해
+        // ========== 5단계: DecompositionAgent 호출 (PDF 없이 키워드/기획안만 사용) ==========
         ChapterContentListDto chapterContentList;
         try {
-            chapterContentList = decompositionAgent.decomposeChapters(finalizedBrief, pdfPath);
+            chapterContentList = decompositionAgent.decomposeChapters(finalizedBrief, null);
         } catch (Exception e) {
             log.error("Phase 3 (Decomposition) 실패: sessionId={}, error={}", requestDto.getSessionId(), e.getMessage(), e);
             sessionRecoveryService.handleGenerationSessionFailure(
@@ -489,10 +472,9 @@ public class MaterialGenerationService {
                     "챕터 분해에 실패했습니다: " + e.getMessage());
         }
 
-        // ========== 7단계: WriteAgent 호출 ==========
-        // Markdown 본문 작성
+        // ========== 6단계: WriteAgent 호출 (PDF 없이) ==========
         try {
-            chapterContentList = writeAgent.writeContent(chapterContentList, pdfPath);
+            chapterContentList = writeAgent.writeContent(chapterContentList, null);
         } catch (Exception e) {
             log.error("Phase 3 (Write) 실패: sessionId={}, error={}", requestDto.getSessionId(), e.getMessage(), e);
             sessionRecoveryService.handleGenerationSessionFailure(
@@ -768,13 +750,31 @@ public class MaterialGenerationService {
             requestBody.put("finalized_brief", finalizedBriefMap);
             
             // FastAPI 통합 엔드포인트 호출
-            Map<String, Object> response = aiServiceWebClient.post()
-                    .uri("/api/lecture-gen/phase3-5/auto")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(BodyInserters.fromValue(requestBody))
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
+            Map<String, Object> response;
+            try {
+                response = aiServiceWebClient.post()
+                        .uri("/api/lecture-gen/phase3-5/auto")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(BodyInserters.fromValue(requestBody))
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
+            } catch (WebClientResponseException wce) {
+                // 400/500 등 FastAPI가 내려준 상세 에러를 그대로 남겨서 원인 파악이 가능하게 한다.
+                String body = null;
+                try {
+                    body = wce.getResponseBodyAsString();
+                } catch (Exception ignored) {}
+                String detail = (body != null && !body.isBlank()) ? body : wce.getMessage();
+                String msg = "FastAPI /api/lecture-gen/phase3-5/auto 호출 실패 (status=" + wce.getStatusCode().value() + "): " + detail;
+                log.error(msg, wce);
+
+                // ✅ Redis Pub/Sub으로 실패 진행 상황 발행
+                publishProgress(sessionId, 0, msg, "ERROR");
+                // Task에도 상세 메시지 저장
+                asyncTaskService.updateTaskStatus(taskId, TaskStatus.FAILED, null, msg);
+                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, msg);
+            }
             
             if (response == null || !response.containsKey("task_id")) {
                 throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "FastAPI 작업 등록 실패");
