@@ -198,6 +198,26 @@ public class MaterialGenerationController {
     }
 
     /**
+     * [조회 전용] 세션 재개용 — 강의 기준 최근 세션 조회
+     *
+     * 사용 시점: 창을 닫았다가 다시 열었을 때, 또는 새로고침 후 sessionId를 모를 때.
+     * 입력: lectureId만 필요 (sessionId 불필요).
+     * 동작: 해당 강의 + 현재 로그인한 교사가 만든 가장 최근 세션을 조회하여
+     *       sessionId, currentPhase, draftPlan, finalizedBrief 등 재개에 필요한 데이터만 반환 (DB 수정 없음).
+     * recover와의 차이: recover는 "sessionId를 알고 있을 때, 그 세션의 에러를 지워 재시도"용.
+     */
+    @Operation(
+            summary = "[조회] 세션 재개 — 최근 세션 조회",
+            description = "창 닫힘/새로고침 후 sessionId를 모를 때 사용. lectureId만으로 해당 강의의 가장 최근 생성 세션(sessionId, 단계, 기획안 등)을 조회합니다. DB는 수정하지 않습니다. (에러 해제·재시도는 recover API 사용)"
+    )
+    @GetMapping("/lectures/{lectureId}/latest-session")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<MaterialGenerationResumeDto> getLatestSession(@PathVariable Long lectureId) {
+        MaterialGenerationResumeDto response = materialGenerationService.findLatestGenerationSessionByLectureId(lectureId);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * Phase 3: 콘텐츠 생성 (챕터 분해 및 본문 작성)
      * 
      * 엔드포인트: POST /api/materials/generation/phase3
@@ -395,21 +415,19 @@ public class MaterialGenerationController {
     }
 
     /**
-     * 세션 복구
-     * 
+     * [상태 수정] 세션 복구 — 에러 해제 후 재시도 가능하게
+     *
+     * 사용 시점: Phase 3~5 실행 중 에러가 났을 때, 사용자가 "다시 시도" 버튼을 누를 때.
+     * 입력: sessionId 필요 (화면에 이미 세션 정보가 있을 때).
+     * 동작: 해당 세션의 errorMessage를 제거하여 재시도 가능 상태로 만듦 (Phase/진행률은 유지).
+     * latest-session과의 차이: latest-session은 sessionId를 모를 때 lectureId로 최근 세션을 "조회"만 하는 API.
+     *
      * 엔드포인트: POST /api/materials/generation/{sessionId}/recover
-     * 
-     * 설명:
-     * - 실패한 GenerationSession의 에러 메시지를 제거하고 재시도 가능한 상태로 복구합니다.
-     * 
-     * 응답:
-     * {
-     *   "message": "세션이 복구되었습니다."
-     * }
+     * 응답: { "message": "세션이 복구되었습니다. 다시 시도할 수 있습니다." }
      */
     @Operation(
-            summary = "세션 복구", 
-            description = "실패한 GenerationSession을 복구하여 재시도 가능한 상태로 만듭니다."
+            summary = "[수정] 세션 복구 — 에러 해제 후 재시도",
+            description = "이미 sessionId를 알고 있을 때 사용. 실패한 세션의 에러 메시지를 제거해 재시도 가능 상태로 만듭니다. (sessionId를 모를 때는 GET .../lectures/{lectureId}/latest-session 으로 최근 세션 조회)"
     )
     @PostMapping("/{sessionId}/recover")
     @PreAuthorize("hasAuthority('TEACHER')")

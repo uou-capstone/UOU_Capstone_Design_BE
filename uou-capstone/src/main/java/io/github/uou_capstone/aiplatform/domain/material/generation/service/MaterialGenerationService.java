@@ -182,7 +182,10 @@ public class MaterialGenerationService {
      */
     @Transactional
     public MaterialGenerationPhase2ResponseDto processPhase2(MaterialGenerationPhase2RequestDto requestDto) {
-        log.info("Phase 2 처리: sessionId={}, action={}", requestDto.getSessionId(), requestDto.getAction());
+        // action은 프론트에서 누락/대문자 등으로 올 수 있어 서버에서 보정한다.
+        String normalizedAction = normalizePhase2Action(requestDto.getAction(), requestDto.getFeedback());
+        log.info("Phase 2 처리: sessionId={}, action={} (normalized={})",
+                requestDto.getSessionId(), requestDto.getAction(), normalizedAction);
 
         // ========== 1단계: 세션 조회 ==========
         GenerationSession session = generationSessionRepository.findById(requestDto.getSessionId())
@@ -215,7 +218,7 @@ public class MaterialGenerationService {
 
         // ========== 5단계: 사용자 피드백 처리 ==========
         // 사용자가 최종 확정(action="confirm")한 경우
-        if ("confirm".equals(requestDto.getAction())) {
+        if ("confirm".equals(normalizedAction)) {
             // DraftPlan을 그대로 FinalizedBrief로 사용
             FinalizedBriefDto finalizedBrief = new FinalizedBriefDto();
             finalizedBrief.setProjectMeta(draftPlan.getProjectMeta());
@@ -289,6 +292,17 @@ public class MaterialGenerationService {
         }
     }
 
+    private String normalizePhase2Action(String action, String feedback) {
+        String trimmed = action == null ? "" : action.trim();
+        if (trimmed.isEmpty()) {
+            if (feedback != null && !feedback.trim().isEmpty()) {
+                return "feedback";
+            }
+            return "confirm";
+        }
+        return trimmed.toLowerCase();
+    }
+
     /**
      * 생성 상태 조회
      * 
@@ -323,6 +337,49 @@ public class MaterialGenerationService {
                 .progressPercentage(session.getProgressPercentage())
                 .errorMessage(session.getErrorMessage())
                 .finalDocument(session.getFinalDocument())
+                .build();
+    }
+
+    /**
+     * 강의(lectureId) 기준으로 현재 사용자(교사)가 마지막으로 진행하던 생성 세션을 조회한다.
+     * - 창이 의도치 않게 닫히는 경우 프론트가 sessionId를 잃어버릴 수 있어 재개용으로 제공한다.
+     */
+    @Transactional(readOnly = true)
+    public MaterialGenerationResumeDto findLatestGenerationSessionByLectureId(Long lectureId) {
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+
+        GenerationSession session = generationSessionRepository
+                .findTopByLecture_IdAndUser_IdOrderByCreatedAtDesc(lectureId, currentUser.getId())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND, "해당 강의의 생성 세션이 없습니다."));
+
+        AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
+
+        DraftPlanDto draftPlan = session.getDraftPlanJson() == null
+                ? null
+                : objectMapper.convertValue(session.getDraftPlanJson(), DraftPlanDto.class);
+        FinalizedBriefDto finalizedBrief = session.getFinalizedBriefJson() == null
+                ? null
+                : objectMapper.convertValue(session.getFinalizedBriefJson(), FinalizedBriefDto.class);
+        ChapterContentListDto chapterContentList = session.getChapterContentListJson() == null
+                ? null
+                : objectMapper.convertValue(session.getChapterContentListJson(), ChapterContentListDto.class);
+        VerifiedContentDto verifiedContent = session.getVerifiedContentJson() == null
+                ? null
+                : objectMapper.convertValue(session.getVerifiedContentJson(), VerifiedContentDto.class);
+
+        return MaterialGenerationResumeDto.builder()
+                .sessionId(session.getId())
+                .lectureId(session.getLecture().getId())
+                .currentPhase(session.getCurrentPhase())
+                .progressPercentage(session.getProgressPercentage())
+                .draftPlan(draftPlan)
+                .finalizedBrief(finalizedBrief)
+                .chapterContentList(chapterContentList)
+                .verifiedContent(verifiedContent)
+                .finalDocument(session.getFinalDocument())
+                .errorMessage(session.getErrorMessage())
                 .build();
     }
 

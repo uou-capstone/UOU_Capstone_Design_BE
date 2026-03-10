@@ -31,4 +31,6 @@ public interface GenerationSessionRepository extends JpaRepository<GenerationSes
     
     @Query("SELECT gs FROM GenerationSession gs WHERE gs.lecture.id = :lectureId AND gs.currentPhase = :phase")
     Optional<GenerationSession> findByLectureIdAndPhase(@Param("lectureId") Long lectureId, @Param("phase") GenerationPhase phase);
+
+    Optional<GenerationSession> findTopByLecture_IdAndUser_IdOrderByCreatedAtDesc(Long lectureId, Long userId);
 }
