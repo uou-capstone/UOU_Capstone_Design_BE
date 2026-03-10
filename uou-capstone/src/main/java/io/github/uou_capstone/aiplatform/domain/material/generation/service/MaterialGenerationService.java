@@ -34,6 +34,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.reactive.function.BodyInserters;
 
 import java.util.HashMap;
@@ -133,13 +134,14 @@ public class MaterialGenerationService {
             log.info("PlanningAgent 호출 완료. DraftPlan 생성.");
         } catch (Exception e) {
             log.error("Phase 1 실패: sessionId={}, error={}", session.getId(), e.getMessage(), e);
+            String failureDetail = "Phase 1 실패: " + e.getMessage();
             sessionRecoveryService.handleGenerationSessionFailure(
                     session.getId(), 
                     GenerationPhase.PHASE1, 
-                    "Phase 1 실패: " + e.getMessage()
+                    failureDetail
             );
-            throw new BusinessException(CommonErrorCode.AGENT_EXECUTION_FAILED, 
-                    "기획안 생성에 실패했습니다: " + e.getMessage());
+            String userMessage = mapAgentErrorToUserMessage(e);
+            throw new BusinessException(CommonErrorCode.AGENT_EXECUTION_FAILED, userMessage);
         }
 
         // ========== 6단계: 결과 저장 ==========
@@ -290,6 +292,34 @@ public class MaterialGenerationService {
                     .message("기획안이 수정 및 확정되었습니다.")
                     .build();
         }
+    }
+
+    /**
+     * AI 서비스(또는 Gemini) 오류 시 사용자에게 보여줄 메시지로 변환.
+     * 503/429, high demand, quota 등은 "잠시 후 재시도" 안내로 통일.
+     */
+    private String mapAgentErrorToUserMessage(Exception e) {
+        String body = null;
+        int status = 0;
+        if (e instanceof WebClientResponseException wce) {
+            status = wce.getStatusCode().value();
+            try {
+                body = wce.getResponseBodyAsString();
+            } catch (Exception ignored) {}
+        }
+        String combined = (body != null && !body.isBlank()) ? body : e.getMessage();
+        if (combined != null) {
+            if (combined.contains("high demand") || combined.contains("Please try again later") || combined.contains("UNAVAILABLE")) {
+                return "기획안 생성에 실패했습니다. AI 모델이 일시적으로 사용량이 많습니다. 잠시 후 다시 시도해 주세요.";
+            }
+            if (status == 429 || combined.contains("429") || combined.contains("quota") || combined.contains("RESOURCE_EXHAUSTED")) {
+                return "기획안 생성에 실패했습니다. API 사용 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.";
+            }
+            if (status == 503 || combined.contains("503")) {
+                return "기획안 생성에 실패했습니다. AI 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+            }
+        }
+        return "기획안 생성에 실패했습니다: " + (e.getMessage() != null ? e.getMessage() : "알 수 없는 오류");
     }
 
     private String normalizePhase2Action(String action, String feedback) {

@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.material.service;
 
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
@@ -104,5 +105,50 @@ public class MaterialService {
 
         // 3. 자료 삭제
         materialRepository.delete(material);
+    }
+
+    /**
+     * PDF 미리보기·채팅용: materialId에 해당하는 파일 바이트를 ai-service에서 가져와 반환.
+     * 해당 강의의 선생님 또는 수강생만 접근 가능.
+     */
+    @Transactional(readOnly = true)
+    public byte[] getFileBytes(Long materialId) {
+        Material material = materialRepository.findById(materialId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+
+        validateLectureParticipant(material.getLecture(), currentUser);
+
+        String filePath = material.getFilePath();
+        if (filePath == null || filePath.isBlank()) {
+            throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "파일 경로가 없습니다.");
+        }
+
+        byte[] body = aiServiceWebClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/files/serve").queryParam("path", filePath).build())
+                .retrieve()
+                .bodyToMono(byte[].class)
+                .block();
+
+        if (body == null) {
+            throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED, "파일을 불러올 수 없습니다.");
+        }
+        return body;
+    }
+
+    private void validateLectureParticipant(Lecture lecture, User currentUser) {
+        Course course = lecture.getCourse();
+        boolean isTeacher = teacherRepository.findByUser_Id(currentUser.getId())
+                .map(t -> t.getId().equals(course.getTeacher().getId()))
+                .orElse(false);
+        boolean isEnrolled = studentRepository.findByUser_Id(currentUser.getId())
+                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, course))
+                .orElse(false);
+        if (!isTeacher && !isEnrolled) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
     }
 }
