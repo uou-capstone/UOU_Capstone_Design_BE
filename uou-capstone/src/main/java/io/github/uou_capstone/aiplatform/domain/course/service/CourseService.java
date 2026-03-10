@@ -12,9 +12,12 @@ import io.github.uou_capstone.aiplatform.domain.course.dto.MaterialSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.GeneratedContentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Role;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
@@ -44,6 +47,9 @@ public class CourseService {
     private final EnrollmentRepository enrollmentRepository;
     private final MaterialRepository materialRepository;
     private final ExamSessionRepository examSessionRepository;
+    private final GenerationSessionRepository generationSessionRepository;
+    private final ExamProfileRepository examProfileRepository;
+    private final GeneratedContentRepository generatedContentRepository;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
@@ -202,7 +208,13 @@ public class CourseService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // 3. 강의실 삭제
+        // 3. 강의(lecture)를 참조하는 자식 테이블 먼저 삭제 (FK 제약으로 인한 삭제 실패 방지)
+        generatedContentRepository.clearSessionByCourseId(courseId);  // generated_content.session_id 참조 해제
+        generationSessionRepository.deleteByLectureCourseId(courseId);
+        examSessionRepository.deleteByLectureCourseId(courseId);
+        examProfileRepository.deleteByLectureCourseId(courseId);
+
+        // 4. 강의실 삭제 (cascade: lectures -> materials, generated_contents, student_inquiries 등)
         courseRepository.delete(course);
     }
 }

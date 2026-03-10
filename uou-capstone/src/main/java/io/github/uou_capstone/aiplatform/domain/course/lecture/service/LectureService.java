@@ -13,6 +13,9 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.*;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.exception.StreamingApiException;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.GeneratedContentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.user.entity.*;
@@ -61,6 +64,9 @@ public class LectureService {
     private final EnrollmentRepository enrollmentRepository;
     private final StudentRepository studentRepository;
     private final MaterialRepository materialRepository;
+    private final GenerationSessionRepository generationSessionRepository;
+    private final ExamSessionRepository examSessionRepository;
+    private final ExamProfileRepository examProfileRepository;
 
     @Transactional
     public Lecture createLecture(Long courseId, LectureCreateRequestDto requestDto) {
@@ -167,7 +173,13 @@ public class LectureService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // 3. 강의 삭제
+        // 3. 강의(lecture)를 참조하는 자식 테이블 먼저 삭제/참조 해제 (FK 제약 방지)
+        generatedContentRepository.clearSessionByLectureId(lectureId);
+        generationSessionRepository.deleteByLectureId(lectureId);
+        examSessionRepository.deleteByLectureId(lectureId);
+        examProfileRepository.deleteByLectureId(lectureId);
+
+        // 4. 강의 삭제 (cascade: materials, generated_contents, student_inquiries)
         lectureRepository.delete(lecture);
     }
 
