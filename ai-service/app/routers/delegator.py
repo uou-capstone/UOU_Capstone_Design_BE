@@ -46,6 +46,36 @@ def _append_log_entry(session: Dict[str, Any], level: str, message: str):
         session["logs"] = logs
 
 
+def _normalize_chapter_info(ch) -> Dict[str, Any]:
+    """
+    PdfAnalysis.main() 결과(tuple)와 과거 dict 기반 구조를 모두 허용하기 위한 헬퍼.
+    - tuple/list: (title, pdf_path, [start_page], [end_page])
+    - dict: {"chapter_title": ..., "pdf_path": ..., "start_page": ..., "end_page": ...}
+    """
+    if isinstance(ch, dict):
+        return ch
+
+    if isinstance(ch, (list, tuple)):
+        title = ch[0] if len(ch) > 0 else None
+        pdf_path = ch[1] if len(ch) > 1 else None
+        start_page = ch[2] if len(ch) > 2 else None
+        end_page = ch[3] if len(ch) > 3 else None
+        return {
+            "chapter_title": title,
+            "pdf_path": pdf_path,
+            "start_page": start_page,
+            "end_page": end_page,
+        }
+
+    # fallback
+    return {
+        "chapter_title": str(ch),
+        "pdf_path": None,
+        "start_page": None,
+        "end_page": None,
+    }
+
+
 async def append_session_log(lecture_id: int, level: str, message: str):
     """
     파이프라인 세션 로그에 메시지를 추가
@@ -379,13 +409,18 @@ async def handle_initialize_stage(payload: Dict[str, Any]):
     async with pipeline_lock:
         session = pipeline_sessions.get(lecture_id_int)
         if session and session.get("status") == "initialized":
-            chapters_info = session.get("chaptersInfo", [])
+            raw_chapters = session.get("chaptersInfo", [])
+            chapters_info = [_normalize_chapter_info(ch) for ch in raw_chapters]
             return {
                 "status": "initialized",
                 "lectureId": lecture_id_int,
                 "totalChapters": len(chapters_info),
                 "chapters": [
-                    {"title": ch["chapter_title"], "startPage": ch["start_page"], "endPage": ch["end_page"]}
+                    {
+                        "title": ch.get("chapter_title"),
+                        "startPage": ch.get("start_page"),
+                        "endPage": ch.get("end_page"),
+                    }
                     for ch in chapters_info
                 ],
             }
@@ -576,11 +611,18 @@ async def _generate_next_content_internal(lecture_id: int):
 
         chapter_data = generated_chapters.get(current_chapter_idx)
         if chapter_data is None:
-            chapter_info = chapters_info[current_chapter_idx]
+            raw_chapter_info = chapters_info[current_chapter_idx]
+            chapter_info = _normalize_chapter_info(raw_chapter_info)
+            chapter_tuple = (
+                chapter_info.get("chapter_title"),
+                chapter_info.get("pdf_path"),
+                chapter_info.get("start_page"),
+                chapter_info.get("end_page"),
+            )
             chapter_data = await asyncio.to_thread(
                 generate_single_chapter,
                 pdf_path,
-                chapter_info,
+                chapter_tuple,
                 current_chapter_idx
             )
             generated_chapters[current_chapter_idx] = chapter_data
@@ -589,7 +631,7 @@ async def _generate_next_content_internal(lecture_id: int):
                 all_questions[qid] = {
                     **qmeta,
                     "chapterIndex": current_chapter_idx,
-                    "chapterTitle": chapter_info["chapter_title"],
+                    "chapterTitle": chapter_info.get("chapter_title"),
                     "pdfPath": chapter_data["pdfPath"],
                     "answered": False,
                     "answer": None,
