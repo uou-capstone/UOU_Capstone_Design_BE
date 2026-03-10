@@ -767,13 +767,14 @@ public class MaterialGenerationService {
             }
             
             // ========== 2단계: ko 브랜치 통합 엔드포인트 호출 ==========
-            // /api/lecture-gen/phase3-5/auto 엔드포인트 사용
+            // ai-service(FastAPI) POST /api/lecture-gen/phase3-5/auto — FE는 호출하지 않음. Spring이 async 처리 시 내부 호출.
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
             
             // ✅ Redis Pub/Sub으로 진행 상황 발행
             publishProgress(sessionId, 20, "Phase 3-5 시작: 콘텐츠 생성 중...", "PHASE3");
             
             Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("session_id", sessionId);
             requestBody.put("finalized_brief", finalizedBriefMap);
             
             // FastAPI 통합 엔드포인트 호출
