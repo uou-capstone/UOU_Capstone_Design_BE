@@ -16,7 +16,6 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.*;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
-import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamStatus;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
@@ -470,6 +469,27 @@ public class ExamGenerationService {
                 .usedProfile(usedProfile)
                 .totalCount(totalCount)
                 .build();
+    }
+
+    /**
+     * 시험 세션 단건 삭제
+     *
+     * - 강의 소유 교사만 삭제 가능
+     * - Redis 캐시(있다면)도 함께 삭제
+     */
+    @Transactional
+    public void deleteExamSession(Long examSessionId) {
+        ExamSession session = examSessionRepository.findById(examSessionId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+
+        io.github.uou_capstone.aiplatform.util.AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
+
+        cacheService.deleteExamSessionCache(examSessionId);
+        examSessionRepository.delete(session);
     }
 
     /**

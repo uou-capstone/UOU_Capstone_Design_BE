@@ -177,6 +177,17 @@ public class ExamGenerationController {
         return ResponseEntity.ok(response);
     }
 
+    @Operation(
+            summary = "[삭제] 시험 세션 삭제",
+            description = "시험 카드(세션) 단건을 삭제합니다. 해당 강의의 소유 교사만 삭제할 수 있습니다."
+    )
+    @DeleteMapping("/{examSessionId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteExamSession(@PathVariable Long examSessionId) {
+        examGenerationService.deleteExamSession(examSessionId);
+        return ResponseEntity.noContent().build();
+    }
+
     /**
      * 프로필 대화 1턴 (문서: ai-service-endpoint-request.md §2, §4)
      *
