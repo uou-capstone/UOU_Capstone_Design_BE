@@ -383,13 +383,27 @@ public class LectureService {
         payload.put("aiQuestionId", requestDto.getAiQuestionId());
         payload.put("answer", requestDto.getAnswer());
 
-        StreamingAnswerResponse response = executeStreamingStage("answer_question", payload, StreamingAnswerResponse.class);
-
-        if (!"PROCESSING".equals(response.getStatus()) && response.getSupplementary() == null) {
-            throw new BusinessException(CommonErrorCode.AI_CONTENT_GENERATION_FAILED);
+        try {
+            StreamingAnswerResponse response = executeStreamingStage("answer_question", payload, StreamingAnswerResponse.class);
+            if (!"PROCESSING".equals(response.getStatus()) && response.getSupplementary() == null) {
+                throw new BusinessException(CommonErrorCode.AI_CONTENT_GENERATION_FAILED);
+            }
+            return response;
+        } catch (StreamingApiException e) {
+            // "이미 답변 처리됨" 등으로 ai-service가 400을 주는 경우 -> 에러 대신 200으로 이미 처리됨 응답
+            if (e.getStatusCode() == HttpStatus.BAD_REQUEST && e.getMessage() != null
+                    && e.getMessage().contains("Not waiting for answer")) {
+                log.debug("answer_question 400 treated as already answered: {}", e.getMessage());
+                return StreamingAnswerResponse.builder()
+                        .status("ALREADY_ANSWERED")
+                        .lectureId(lectureId)
+                        .aiQuestionId(requestDto.getAiQuestionId())
+                        .supplementary("이미 답변이 처리되었습니다. 다음으로 진행해 주세요.")
+                        .canContinue(true)
+                        .build();
+            }
+            throw e;
         }
-
-        return response;
     }
 
     /**
