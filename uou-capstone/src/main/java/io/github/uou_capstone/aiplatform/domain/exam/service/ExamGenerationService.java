@@ -27,7 +27,6 @@ import io.github.uou_capstone.aiplatform.service.CacheService;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
 import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
-import io.github.uou_capstone.aiplatform.util.AuthorizationUtil;
 import io.github.uou_capstone.aiplatform.util.HashUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,7 +43,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * 시험 생성 서비스
@@ -389,30 +387,6 @@ public class ExamGenerationService {
      * @param examSessionId 시험 세션 ID
      * @return 시험 생성 응답 DTO
      */
-    /**
-     * 강의별 시험 세션 목록 조회. 해당 강의 소유(선생님)만 접근 가능.
-     * FE: selectedLectureId 변경 시 호출해 로컬 상태를 서버 응답으로 채우면 새로고침/재로그인 후에도 목록 복원 가능.
-     */
-    @Transactional(readOnly = true)
-    public List<ExamSessionListItemDto> getExamSessionsByLectureId(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        AuthorizationUtil.requireLectureOwner(currentUser, lecture);
-
-        return examSessionRepository.findByLecture_IdOrderByCreatedAtDesc(lectureId).stream()
-                .map(es -> ExamSessionListItemDto.builder()
-                        .examSessionId(es.getId())
-                        .examType(es.getExamType() != null ? es.getExamType().name() : null)
-                        .status(es.getStatus() != null ? es.getStatus().name() : null)
-                        .targetCount(es.getTargetCount())
-                        .createdAt(es.getCreatedAt())
-                        .build())
-                .collect(Collectors.toList());
-    }
-
     @Transactional(readOnly = true)
     public ExamGenerationResponseDto getExamSession(Long examSessionId) {
         // ========== 1단계: 세션 조회 ==========

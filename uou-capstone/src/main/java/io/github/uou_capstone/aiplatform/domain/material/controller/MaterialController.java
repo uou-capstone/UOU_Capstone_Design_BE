@@ -2,7 +2,6 @@ package io.github.uou_capstone.aiplatform.domain.material.controller;
 
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
-import io.github.uou_capstone.aiplatform.domain.material.dto.MaterialListItemDto;
 import io.github.uou_capstone.aiplatform.domain.material.dto.MaterialUploadResponseDto;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.service.MaterialService;
@@ -17,7 +16,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
 import java.io.IOException;
 
 @Tag(name = "강의 자료 API", description = "강의 자료(PDF) 업로드 등 관련 API")
@@ -30,14 +28,6 @@ public class MaterialController {
 
     private static final String MATERIAL_FILE_PATH_PREFIX = "/api/materials/";
     private static final String MATERIAL_FILE_PATH_SUFFIX = "/file";
-
-    @Operation(summary = "강의별 자료 목록 조회", description = "해당 강의에 업로드된 자료 목록을 반환합니다. 강의 진입 시 호출해 로컬 상태를 채우면 새로고침/재로그인 후에도 목록이 복원됩니다.")
-    @GetMapping("/lectures/{lectureId}/materials")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<List<MaterialListItemDto>> listMaterialsByLecture(@PathVariable Long lectureId) {
-        List<MaterialListItemDto> list = materialService.getMaterialsByLectureId(lectureId);
-        return ResponseEntity.ok(list);
-    }
 
     @Operation(summary = "강의 자료(PDF) 업로드", description = "특정 강의에 PDF 파일을 업로드합니다. 응답에 materialId, displayName, materialType, url을 포함하여 프론트에서 PDF 미리보기·채팅에 사용할 수 있습니다.")
     @PostMapping(value = "/lectures/{lectureId}/materials", consumes = "multipart/form-data", produces = "application/json")

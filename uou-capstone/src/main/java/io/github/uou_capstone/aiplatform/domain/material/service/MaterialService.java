@@ -9,7 +9,6 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.dto.AiFileResponseDto;
-import io.github.uou_capstone.aiplatform.domain.material.dto.MaterialListItemDto;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
@@ -25,8 +24,6 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import java.util.List;
-import java.util.stream.Collectors;
 import java.io.IOException;
 
 @Service
@@ -41,31 +38,6 @@ public class MaterialService {
     private final StudentRepository studentRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CourseRepository courseRepository;
-
-    /**
-     * 강의별 업로드된 자료 목록 조회. 해당 강의의 선생님 또는 수강생만 접근 가능.
-     * FE: selectedLectureId 변경 시 호출해 로컬 상태를 서버 응답으로 채우면 새로고침/재로그인 후에도 목록 복원 가능.
-     */
-    @Transactional(readOnly = true)
-    public List<MaterialListItemDto> getMaterialsByLectureId(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
-
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        validateLectureParticipant(lecture, currentUser);
-
-        return materialRepository.findByLecture_IdOrderByCreatedAtDesc(lectureId).stream()
-                .map(m -> MaterialListItemDto.builder()
-                        .materialId(m.getId())
-                        .displayName(m.getDisplayName())
-                        .materialType(m.getMaterialType() != null ? m.getMaterialType() : "FILE")
-                        .url("/api/materials/" + m.getId() + "/file")
-                        .createdAt(m.getCreatedAt())
-                        .build())
-                .collect(Collectors.toList());
-    }
 
     @Transactional
     public Material uploadFile(Long lectureId, MultipartFile file) throws IOException {

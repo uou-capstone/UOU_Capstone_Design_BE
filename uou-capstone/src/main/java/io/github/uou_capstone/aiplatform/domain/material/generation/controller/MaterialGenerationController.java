@@ -20,7 +20,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -195,24 +194,6 @@ public class MaterialGenerationController {
         
         // HTTP 200 OK와 함께 응답 반환
         return ResponseEntity.ok(response);
-    }
-
-    /**
-     * 강의별 강의자료 생성 세션 목록 조회
-     *
-     * 엔드포인트: GET /api/materials/generation/lectures/{lectureId}/sessions
-     *
-     * 강의 진입 시 호출해 서버에서 목록을 불러오면, 기존 세션을 선택해 재개할 수 있어 불필요한 새 세션 생성(토큰 낭비)을 줄일 수 있음.
-     */
-    @Operation(
-            summary = "강의별 생성 세션 목록 조회",
-            description = "해당 강의에 대한 강의자료 생성 세션 목록을 반환합니다. 강의 진입 시 호출해 목록을 복원하고, 기존 세션을 선택해 재개할 수 있습니다."
-    )
-    @GetMapping("/lectures/{lectureId}/sessions")
-    @PreAuthorize("hasAuthority('TEACHER')")
-    public ResponseEntity<List<MaterialGenerationSessionSummaryDto>> listGenerationSessionsByLecture(@PathVariable Long lectureId) {
-        List<MaterialGenerationSessionSummaryDto> list = materialGenerationService.findGenerationSessionsByLectureId(lectureId);
-        return ResponseEntity.ok(list);
     }
 
     /**
