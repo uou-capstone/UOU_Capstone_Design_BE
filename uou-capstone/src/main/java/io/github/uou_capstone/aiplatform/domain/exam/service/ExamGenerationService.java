@@ -490,6 +490,7 @@ public class ExamGenerationService {
 
         cacheService.deleteExamSessionCache(examSessionId);
         examSessionRepository.delete(session);
+        examSessionRepository.flush();
     }
 
     /**

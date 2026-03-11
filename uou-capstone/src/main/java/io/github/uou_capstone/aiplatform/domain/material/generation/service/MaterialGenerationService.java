@@ -428,6 +428,7 @@ public class MaterialGenerationService {
         cacheService.delete("draft_plan:" + sessionId);
         cacheService.delete("finalized_brief:" + sessionId);
         generationSessionRepository.delete(session);
+        generationSessionRepository.flush();
     }
 
     /**

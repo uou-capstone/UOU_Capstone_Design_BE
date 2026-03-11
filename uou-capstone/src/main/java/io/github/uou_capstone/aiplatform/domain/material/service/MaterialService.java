@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.IOException;
 
@@ -63,15 +64,25 @@ public class MaterialService {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
         builder.part("file", file.getResource());
 
-        AiFileResponseDto aiResponse = aiServiceWebClient.post()
-                .uri("/api/files/upload") // ai-service의 파일 업로드 엔드포인트
-                .body(BodyInserters.fromMultipartData(builder.build()))
-                .retrieve()
-                .bodyToMono(AiFileResponseDto.class)
-                .block();
+        AiFileResponseDto aiResponse;
+        try {
+            aiResponse = aiServiceWebClient.post()
+                    .uri("/api/files/upload") // ai-service의 파일 업로드 엔드포인트
+                    .body(BodyInserters.fromMultipartData(builder.build()))
+                    .retrieve()
+                    .bodyToMono(AiFileResponseDto.class)
+                    .block();
+        } catch (WebClientResponseException e) {
+            if (e.getStatusCode().value() == 404) {
+                throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED,
+                        "파일 서버 업로드 API를 찾을 수 없습니다. ai-service에 /api/files/upload 엔드포인트가 있는지 확인해주세요.");
+            }
+            throw e;
+        }
 
         if (aiResponse == null || aiResponse.getPath() == null) {
-            throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED);
+            throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED,
+                    "파일 서버가 저장 경로를 반환하지 않았습니다.");
         }
 
         // 5. DB에 ai-service가 알려준 경로를 저장
@@ -103,8 +114,9 @@ public class MaterialService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // 3. 자료 삭제
+        // 3. 자료 삭제 (flush로 즉시 DB 반영, 이후 contents 조회에서 제외 보장)
         materialRepository.delete(material);
+        materialRepository.flush();
     }
 
     /**
@@ -127,16 +139,24 @@ public class MaterialService {
             throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "파일 경로가 없습니다.");
         }
 
-        byte[] body = aiServiceWebClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/api/files/serve").queryParam("path", filePath).build())
-                .retrieve()
-                .bodyToMono(byte[].class)
-                .block();
+        try {
+            byte[] body = aiServiceWebClient.get()
+                    .uri(uriBuilder -> uriBuilder.path("/api/files/serve").queryParam("path", filePath).build())
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .block();
 
-        if (body == null) {
-            throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED, "파일을 불러올 수 없습니다.");
+            if (body == null) {
+                throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "파일을 불러올 수 없습니다.");
+            }
+            return body;
+        } catch (WebClientResponseException e) {
+            if (e.getStatusCode().value() == 404) {
+                throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND,
+                        "파일 서버에서 해당 파일을 찾을 수 없습니다. 파일이 삭제되었거나 서버 경로가 일치하지 않을 수 있습니다.");
+            }
+            throw e;
         }
-        return body;
     }
 
     private void validateLectureParticipant(Lecture lecture, User currentUser) {
