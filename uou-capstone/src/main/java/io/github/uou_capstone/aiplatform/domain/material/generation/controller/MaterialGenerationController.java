@@ -217,13 +217,13 @@ public class MaterialGenerationController {
     }
 
     /**
-     * [삭제] 기획안(생성 세션) 삭제
+     * [삭제] 강의 자료 생성 세션 전체 삭제 (Phase 1~5)
      *
-     * 불러온 기획안을 쓰지 않을 때 호출. 해당 세션과 Redis 캐시가 삭제되며, 이후 latest-session 조회 시 다른 세션이 나오거나 없으면 SESSION_NOT_FOUND.
+     * sessionId로 식별되는 생성 세션 전체를 삭제. 기획안(draftPlan), 확정안(finalizedBrief), 챕터·검증·최종문서 등 Phase 1~5 모든 산출물이 제거되며 Redis 캐시도 삭제됨.
      */
     @Operation(
-            summary = "[삭제] 생성 세션(기획안) 삭제",
-            description = "불러온 기획안을 더 이상 사용하지 않을 때 해당 생성 세션을 삭제합니다. 해당 강의의 소유 교사만 삭제할 수 있습니다."
+            summary = "[삭제] 생성 세션 전체 삭제 (Phase 1~5)",
+            description = "강의 자료 생성 시 사용한 sessionId의 전체 과정(Phase 1 기획안 ~ Phase 5 최종 문서)을 삭제합니다. 해당 강의의 소유 교사만 삭제할 수 있습니다."
     )
     @DeleteMapping("/{sessionId}")
     @PreAuthorize("hasAuthority('TEACHER')")
@@ -366,6 +366,40 @@ public class MaterialGenerationController {
                 .header("Content-Type", "text/markdown; charset=UTF-8")
                 .header("Content-Disposition", "attachment; filename=\"lecture-material-" + sessionId + ".md\"")
                 .body(document);
+    }
+
+    /**
+     * [삭제] Phase 5 산출물(최종 문서) 삭제
+     *
+     * 최종 문서만 제거하고 세션은 유지. Phase 4 완료 상태로 되돌아가며, Phase 5를 다시 실행하면 새 문서를 생성할 수 있음.
+     */
+    @Operation(
+            summary = "[삭제] Phase 5 산출물(최종 문서) 삭제",
+            description = "Phase 5에서 생성된 최종 문서만 삭제합니다. 세션은 유지되며 Phase 4 완료 상태로 되돌아가 Phase 5를 다시 실행할 수 있습니다."
+    )
+    @DeleteMapping("/{sessionId}/document")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deletePhase5Document(@PathVariable Long sessionId) {
+        materialGenerationService.deletePhase5Output(sessionId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * [상태 수정] Phase 3~5만 삭제 후 Phase 2(확정 기획안)로 되돌리기
+     *
+     * Phase 3~5 산출물(챕터·검증·최종문서)만 제거하고, 가장 최근 확정 기획안 상태로 되돌림. 기획안은 유지되므로 Phase 2 수정 또는 Phase 3부터 재실행 가능.
+     */
+    @Operation(
+            summary = "[수정] Phase 3~5 삭제 후 기획안으로 되돌리기",
+            description = "Phase 3~5 산출물만 삭제하고 세션을 Phase 2(확정 기획안) 상태로 되돌립니다. 기획안은 유지되며, 기획안 수정(Phase 2) 또는 Phase 3부터 다시 실행할 수 있습니다."
+    )
+    @PostMapping("/{sessionId}/rollback-to-phase2")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Map<String, String>> rollbackToPhase2(@PathVariable Long sessionId) {
+        materialGenerationService.rollbackToPhase2(sessionId);
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Phase 3~5가 삭제되었습니다. 확정 기획안 단계로 되돌아갔습니다. 기획안 수정 또는 Phase 3부터 다시 실행할 수 있습니다.");
+        return ResponseEntity.ok(response);
     }
 
     /**

@@ -412,7 +412,7 @@ public class MaterialGenerationService {
     }
 
     /**
-     * 불러온 기획안(생성 세션)을 더 이상 쓰지 않을 때 삭제.
+     * 강의 자료 생성 세션 전체 삭제 (Phase 1~5). 기획안·확정안·챕터·검증·최종문서 등 모든 산출물 제거.
      * 해당 강의 소유(교사)만 삭제 가능. Redis 캐시(draft_plan, finalized_brief)도 함께 제거.
      */
     @Transactional
@@ -428,6 +428,41 @@ public class MaterialGenerationService {
         cacheService.delete("draft_plan:" + sessionId);
         cacheService.delete("finalized_brief:" + sessionId);
         generationSessionRepository.delete(session);
+    }
+
+    /**
+     * Phase 3~5 산출물만 삭제하고 세션을 Phase 2(확정 기획안) 상태로 되돌림.
+     * 기획안(draftPlan, finalizedBrief)은 유지되므로, 사용자는 기획안 수정(Phase 2) 또는 Phase 3부터 재실행 가능.
+     */
+    @Transactional
+    public void rollbackToPhase2(Long sessionId) {
+        GenerationSession session = generationSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
+
+        session.rollbackToPhase2();
+        generationSessionRepository.save(session);
+    }
+
+    /**
+     * Phase 5 산출물(최종 문서)만 삭제. 세션은 유지하고 Phase 4 완료 상태로 되돌려, Phase 5를 다시 실행할 수 있게 함.
+     */
+    @Transactional
+    public void deletePhase5Output(Long sessionId) {
+        GenerationSession session = generationSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
+
+        session.clearFinalDocument();
+        generationSessionRepository.save(session);
     }
 
     /**

@@ -112,6 +112,23 @@ public class GenerationSession extends BaseTimeEntity {
         this.progressPercentage = 100;
     }
 
+    /** Phase 5 산출물(최종 문서)만 삭제. 세션은 유지하고 Phase 4 완료 상태로 되돌려 재생성 가능하게 함. */
+    public void clearFinalDocument() {
+        this.finalDocument = null;
+        this.currentPhase = GenerationPhase.PHASE4;
+        this.progressPercentage = 80;
+    }
+
+    /** Phase 3~5 산출물만 삭제하고 Phase 2(확정 기획안) 상태로 되돌림. 기획안(draft/finalized)은 유지. */
+    public void rollbackToPhase2() {
+        this.chapterContentListJson = null;
+        this.verifiedContentJson = null;
+        this.finalDocument = null;
+        this.currentPhase = GenerationPhase.PHASE2;
+        this.progressPercentage = 40;
+        this.errorMessage = null;
+    }
+
     public void markAsFailed(String errorMessage) {
         this.currentPhase = GenerationPhase.FAILED;
         this.errorMessage = errorMessage;
