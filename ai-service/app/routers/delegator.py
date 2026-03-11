@@ -280,6 +280,16 @@ async def handle_answer_question_stage(payload: Dict[str, Any]):
             
             # 대기 중인 질문인지 확인
             if not session.get("waitingForAnswer") or session.get("currentQuestionId") != ai_question_id:
+                # 이미 답변된 질문 재전송은 에러(400) 대신 정상(200)으로 처리
+                question_state = (session.get("allQuestions") or {}).get(ai_question_id) or {}
+                if question_state.get("answered") is True:
+                    return {
+                        "status": "ALREADY_ANSWERED",
+                        "lectureId": lecture_id_int,
+                        "aiQuestionId": ai_question_id,
+                        "supplementary": question_state.get("supplementary"),
+                        "canContinue": True,
+                    }
                 raise HTTPException(
                     status_code=400,
                     detail=f"Not waiting for answer to question {ai_question_id}"
@@ -779,11 +789,14 @@ async def handle_get_next_content_stage(payload: Dict[str, Any]):
             }
 
         if current_status == "completed":
+            # "끝"인 경우 400이 아니라 200으로 종료 payload 반환
             return {
-                "status": "completed",
+                "status": "COMPLETED",
                 "lectureId": lecture_id_int,
+                "hasMore": False,
+                "contentType": "END",
+                "contentData": None,
                 "message": "All chapters completed",
-                "hasMore": False
             }
 
         job_start = datetime.utcnow().isoformat()
