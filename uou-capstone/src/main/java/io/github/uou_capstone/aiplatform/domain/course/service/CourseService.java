@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.course.service;
 
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsDeleteRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
@@ -15,10 +16,16 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.GeneratedContentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationService;
+import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
+import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.material.generation.service.MaterialGenerationService;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
+import io.github.uou_capstone.aiplatform.domain.material.service.MaterialService;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Role;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
@@ -50,6 +57,9 @@ public class CourseService {
     private final GenerationSessionRepository generationSessionRepository;
     private final ExamProfileRepository examProfileRepository;
     private final GeneratedContentRepository generatedContentRepository;
+    private final MaterialService materialService;
+    private final ExamGenerationService examGenerationService;
+    private final MaterialGenerationService materialGenerationService;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
@@ -166,6 +176,57 @@ public class CourseService {
                 .collect(Collectors.toList());
 
         return new CourseContentsResponseDto(course.getId(), course.getTitle(), lectureContents);
+    }
+
+    /**
+     * 강의실 내 주차별로 생성해둔 강의자료·시험·생성세션을 일괄 삭제합니다.
+     * (강의실 자료 조회 GET /api/courses/{courseId}/contents 와 동일한 스코프, 선생님만 호출 가능)
+     */
+    @Transactional
+    public void deleteCourseContents(Long courseId, CourseContentsDeleteRequestDto requestDto) {
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+
+        if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+
+        List<Long> materialIds = requestDto.getMaterialIds() != null ? requestDto.getMaterialIds() : List.of();
+        List<Long> examSessionIds = requestDto.getExamSessionIds() != null ? requestDto.getExamSessionIds() : List.of();
+        List<Long> generationSessionIds = requestDto.getGenerationSessionIds() != null ? requestDto.getGenerationSessionIds() : List.of();
+
+        for (Long materialId : materialIds) {
+            Material material = materialRepository.findById(materialId)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND));
+            if (!material.getLecture().getCourse().getId().equals(courseId)) {
+                throw new BusinessException(CommonErrorCode.FORBIDDEN);
+            }
+            materialService.deleteMaterial(materialId);
+        }
+
+        for (Long examSessionId : examSessionIds) {
+            ExamSession session = examSessionRepository.findById(examSessionId)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+            if (!session.getLecture().getCourse().getId().equals(courseId)) {
+                throw new BusinessException(CommonErrorCode.FORBIDDEN);
+            }
+            examGenerationService.deleteExamSession(examSessionId);
+        }
+
+        for (Long sessionId : generationSessionIds) {
+            GenerationSession session = generationSessionRepository.findById(sessionId)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+            if (!session.getLecture().getCourse().getId().equals(courseId)) {
+                throw new BusinessException(CommonErrorCode.FORBIDDEN);
+            }
+            materialGenerationService.deleteGenerationSession(sessionId);
+        }
     }
 
     @Transactional

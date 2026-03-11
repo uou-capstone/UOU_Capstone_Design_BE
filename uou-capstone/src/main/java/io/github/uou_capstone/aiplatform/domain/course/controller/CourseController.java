@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.controller;
 
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsDeleteRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
@@ -63,6 +64,16 @@ public class CourseController {
     public ResponseEntity<CourseContentsResponseDto> getCourseContents(@PathVariable Long courseId) {
         CourseContentsResponseDto contents = courseService.getCourseContents(courseId);
         return ResponseEntity.ok(contents);
+    }
+
+    @Operation(summary = "강의실 n주차 자료 일괄 삭제", description = "강의실 내 주차별로 생성해둔 강의자료·시험·생성세션을 선택하여 일괄 삭제합니다. (선생님만 호출 가능, contents 조회와 동일 스코프)")
+    @PostMapping("/{courseId}/contents/delete")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteCourseContents(
+            @PathVariable Long courseId,
+            @Valid @RequestBody CourseContentsDeleteRequestDto requestDto) {
+        courseService.deleteCourseContents(courseId, requestDto);
+        return ResponseEntity.noContent().build();
     }
 
     // 기존 ID 기반 수강 신청 (유지할지 결정 필요하나, 일단 둠)
