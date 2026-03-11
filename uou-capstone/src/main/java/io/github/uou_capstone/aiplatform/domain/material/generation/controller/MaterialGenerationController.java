@@ -217,6 +217,22 @@ public class MaterialGenerationController {
     }
 
     /**
+     * [삭제] 기획안(생성 세션) 삭제
+     *
+     * 불러온 기획안을 쓰지 않을 때 호출. 해당 세션과 Redis 캐시가 삭제되며, 이후 latest-session 조회 시 다른 세션이 나오거나 없으면 SESSION_NOT_FOUND.
+     */
+    @Operation(
+            summary = "[삭제] 생성 세션(기획안) 삭제",
+            description = "불러온 기획안을 더 이상 사용하지 않을 때 해당 생성 세션을 삭제합니다. 해당 강의의 소유 교사만 삭제할 수 있습니다."
+    )
+    @DeleteMapping("/{sessionId}")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<Void> deleteGenerationSession(@PathVariable Long sessionId) {
+        materialGenerationService.deleteGenerationSession(sessionId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
      * Phase 3: 콘텐츠 생성 (챕터 분해 및 본문 작성)
      * 
      * 엔드포인트: POST /api/materials/generation/phase3

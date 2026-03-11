@@ -412,6 +412,25 @@ public class MaterialGenerationService {
     }
 
     /**
+     * 불러온 기획안(생성 세션)을 더 이상 쓰지 않을 때 삭제.
+     * 해당 강의 소유(교사)만 삭제 가능. Redis 캐시(draft_plan, finalized_brief)도 함께 제거.
+     */
+    @Transactional
+    public void deleteGenerationSession(Long sessionId) {
+        GenerationSession session = generationSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
+
+        cacheService.delete("draft_plan:" + sessionId);
+        cacheService.delete("finalized_brief:" + sessionId);
+        generationSessionRepository.delete(session);
+    }
+
+    /**
      * Phase 3: 콘텐츠 생성 (챕터 분해 및 본문 작성)
      * 
      * 로직 설명:
