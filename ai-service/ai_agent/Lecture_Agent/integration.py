@@ -105,8 +105,15 @@ def build_segments_from_explanation(explanation: str, prefix: str = ""):
 
 
 def generate_single_chapter(pdf_path: str, chapter_info: tuple, current_chapter_idx: int):
-    """단일 챕터의 스크립트를 생성하고 세그먼트로 파싱합니다."""
-    chapter_title, chapter_pdf_path = chapter_info
+    """
+    단일 챕터의 스크립트를 생성하고 세그먼트로 파싱합니다.
+
+    chapter_info는 다음 두 형태를 모두 허용합니다.
+    - (chapter_title, chapter_pdf_path)
+    - (chapter_title, chapter_pdf_path, start_page, end_page)
+    """
+    chapter_title = chapter_info[0] if len(chapter_info) > 0 else None
+    chapter_pdf_path = chapter_info[1] if len(chapter_info) > 1 else None
     result_dict = lecture_agent_main(chapter_title, chapter_pdf_path)
     explanation = result_dict.get(chapter_title, "")
 
