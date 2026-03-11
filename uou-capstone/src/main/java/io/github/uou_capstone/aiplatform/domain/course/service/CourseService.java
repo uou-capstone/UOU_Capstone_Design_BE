@@ -213,6 +213,7 @@ public class CourseService {
         generationSessionRepository.deleteByLectureCourseId(courseId);
         examSessionRepository.deleteByLectureCourseId(courseId);
         examProfileRepository.deleteByLectureCourseId(courseId);
+        materialRepository.deleteByLectureCourseId(courseId);
 
         // 4. 강의실 삭제 (cascade: lectures -> materials, generated_contents, student_inquiries 등)
         courseRepository.delete(course);

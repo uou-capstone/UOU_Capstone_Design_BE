@@ -178,6 +178,7 @@ public class LectureService {
         generationSessionRepository.deleteByLectureId(lectureId);
         examSessionRepository.deleteByLectureId(lectureId);
         examProfileRepository.deleteByLectureId(lectureId);
+        materialRepository.deleteByLectureId(lectureId);
 
         // 4. 강의 삭제 (cascade: materials, generated_contents, student_inquiries)
         lectureRepository.delete(lecture);
