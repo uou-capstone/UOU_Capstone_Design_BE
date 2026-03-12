@@ -1,18 +1,6 @@
 services:
-  # Redis 서비스 추가
-  redis:
-    image: redis:alpine
-    container_name: ai-redis
-    ports:
-      - "6379:6379"
-    restart: always
-    command: redis-server --save 60 1 --loglevel warning
-    volumes:
-      - redis_data:/data
-    networks:
-      - app-network  # 추가
-
   ai-service:
+    container_name: ai-service
     build: .
     # image: golila0611/ai-service:latest
     env_file:
@@ -22,20 +10,17 @@ services:
     volumes:
       - ./uploads:/app/uploads
     restart: unless-stopped
-    depends_on:
-      - redis
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=backend-redis
       - REDIS_PORT=6379
     networks:
       app-network:  # 추가
         aliases:
           - ai-service  # Backend에서 접근할 별칭
 
-volumes:
-  redis_data:
+volumes: {}
 
-networks:  # 추가
+networks:
   app-network:
     name: app-network
-    external: true  # Backend가 만든 네트워크 사용
+    external: true
