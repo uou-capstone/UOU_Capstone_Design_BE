@@ -33,6 +33,9 @@ class Phase3Request(BaseModel):
     session_id: int = Field(
         ..., description="백엔드 세션 ID (finalized_brief:{sessionId} 조회용)"
     )
+    finalized_brief: Dict[str, Any] | None = Field(
+        None, description="기획안 데이터 (옵션, 제공 시 Redis에 캐시)"
+    )
 
 
 router = APIRouter(
@@ -73,6 +76,7 @@ async def phase2_update_endpoint(req: Phase2Request):
 async def phase3_to_5_auto_endpoint(
     req: Phase3Request,
     background_tasks: BackgroundTasks,
+    redis: Redis = Depends(get_redis),
 ):
     """
     Phase 3~5: 집필/검토/조립 비동기 실행
@@ -82,10 +86,16 @@ async def phase3_to_5_auto_endpoint(
     session_id: int = req.session_id
 
     try:
-        background_tasks.add_task(
-            run_phase3_to_5_task,
-            session_id,
-        )
+        # Spring에서 finalized_brief를 바디로 보내는 경우, 백그라운드 태스크 시작 전에 Redis에 캐싱
+        if req.finalized_brief:
+            cache_key = f"finalized_brief:{session_id}"
+            await redis.set(
+                cache_key,
+                json.dumps(req.finalized_brief, ensure_ascii=False),
+                ex=86400,
+            )
+
+        background_tasks.add_task(run_phase3_to_5_task, session_id)
 
         return {
             "session_id": session_id,
