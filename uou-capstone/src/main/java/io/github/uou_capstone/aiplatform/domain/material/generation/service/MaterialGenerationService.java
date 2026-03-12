@@ -201,20 +201,40 @@ public class MaterialGenerationService {
         }
 
         // ========== 3단계: Phase 확인 ==========
-        if (session.getCurrentPhase() != GenerationPhase.PHASE1) {
-            throw new BusinessException(
-                    CommonErrorCode.INVALID_PHASE, 
-                    "Phase 2는 Phase 1 완료 후에만 진행할 수 있습니다."
-            );
+        // confirm: PHASE1만 허용. feedback(수정 요청): PHASE1 또는 PHASE2(rollback 후) 허용
+        GenerationPhase currentPhase = session.getCurrentPhase();
+        if ("confirm".equals(normalizedAction)) {
+            if (currentPhase != GenerationPhase.PHASE1) {
+                throw new BusinessException(
+                        CommonErrorCode.INVALID_PHASE,
+                        "이미 기획안이 확정된 상태입니다. 수정이 필요하면 수정 사항을 입력해 주세요."
+                );
+            }
+        } else {
+            if (currentPhase != GenerationPhase.PHASE1 && currentPhase != GenerationPhase.PHASE2) {
+                throw new BusinessException(
+                        CommonErrorCode.INVALID_PHASE,
+                        "기획안 수정은 Phase 1 또는 Phase 2(되돌리기 후) 상태에서만 가능합니다."
+                );
+            }
         }
 
-        // ========== 4단계: DraftPlan 조회 ==========
-        // 세션에 저장된 DraftPlan JSON을 DTO로 변환
-        Map<String, Object> draftPlanMap = session.getDraftPlanJson();
-        if (draftPlanMap == null) {
-            throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "DraftPlan이 없습니다.");
+        // ========== 4단계: 수정 기준 기획안 조회 ==========
+        // PHASE1: DraftPlan 사용. PHASE2(rollback 후): 확정 기획안(FinalizedBrief)을 기준으로 수정 (동일 스키마)
+        DraftPlanDto draftPlan;
+        if (currentPhase == GenerationPhase.PHASE1) {
+            Map<String, Object> draftPlanMap = session.getDraftPlanJson();
+            if (draftPlanMap == null) {
+                throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "DraftPlan이 없습니다.");
+            }
+            draftPlan = objectMapper.convertValue(draftPlanMap, DraftPlanDto.class);
+        } else {
+            Map<String, Object> finalizedBriefMap = session.getFinalizedBriefJson();
+            if (finalizedBriefMap == null) {
+                throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "확정 기획안이 없습니다.");
+            }
+            draftPlan = objectMapper.convertValue(finalizedBriefMap, DraftPlanDto.class);
         }
-        DraftPlanDto draftPlan = objectMapper.convertValue(draftPlanMap, DraftPlanDto.class);
 
         // ========== 5단계: 사용자 피드백 처리 ==========
         // 사용자가 최종 확정(action="confirm")한 경우
