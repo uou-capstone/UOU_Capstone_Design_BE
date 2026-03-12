@@ -796,7 +796,10 @@ public class MaterialGenerationService {
             }
             
             // ========== 2단계: ko 브랜치 통합 엔드포인트 호출 ==========
-            // ai-service(FastAPI) POST /api/lecture-gen/phase3-5/auto — FE는 호출하지 않음. Spring이 async 처리 시 내부 호출.
+            // ko FastAPI는 요청 본문이 아닌 Redis 키 finalized_brief:{sessionId} 로 기획안을 조회하므로, 호출 전 반드시 Redis에 저장.
+            String finalizedBriefCacheKey = "finalized_brief:" + sessionId;
+            cacheService.set(finalizedBriefCacheKey, finalizedBriefMap, 86400); // 24시간
+
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
             
             // ✅ Redis Pub/Sub으로 진행 상황 발행
