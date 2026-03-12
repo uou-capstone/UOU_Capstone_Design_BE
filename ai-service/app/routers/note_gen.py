@@ -30,7 +30,7 @@ class Phase2Request(BaseModel):
 
 
 class Phase3Request(BaseModel):
-    session_id: str = Field(
+    session_id: int = Field(
         ..., description="백엔드 세션 ID (finalized_brief:{sessionId} 조회용)"
     )
 
@@ -79,7 +79,8 @@ async def phase3_to_5_auto_endpoint(
     - 백엔드는 finalized_brief를 미리 Redis에 저장하고, 여기에는 sessionId만 전달합니다.
     - 진행 상황은 Redis Pub/Sub 채널(progress:session:{sessionId})로 방송됩니다.
     """
-    session_id = req.session_id
+    session_id = req.session_id # int
+    session_id_str = str(session_id)
 
     try:
         background_tasks.add_task(
