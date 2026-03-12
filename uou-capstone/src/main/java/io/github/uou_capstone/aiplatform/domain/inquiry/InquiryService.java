@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.inquiry;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
@@ -34,6 +35,7 @@ public class InquiryService {
     private final EnrollmentRepository enrollmentRepository;
     private final StudentInquiryRepository studentInquiryRepository;
     private final GeneratedContentRepository generatedContentRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public InquiryResponseDto answerAiQuestion(InquiryRequestDto requestDto) {
@@ -71,24 +73,36 @@ public class InquiryService {
                 .bodyToMono(AiQaResponseDto.class)
                 .block(); // 👈 즉시 답변을 받아야 하므로 동기(.block()) 호출
 
-        if (aiResponse == null || aiResponse.getSupplementary() == null) {
+        if (aiResponse == null || aiResponse.getStatus() == null) {
             throw new BusinessException(CommonErrorCode.AI_CONTENT_GENERATION_FAILED);
         }
 
-        String answerText = aiResponse.getSupplementary();
+        // 5. DB 저장용 텍스트 가공 (GOOD이면 explanation, BAD면 steps 전체를 JSON 문자열로 저장)
+        String agentAnswerToSave;
+        if ("GOOD".equals(aiResponse.getStatus())) {
+            agentAnswerToSave = aiResponse.getExplanation();
+        } else {
+            try {
+                agentAnswerToSave = objectMapper.writeValueAsString(aiResponse.getSteps());
+            } catch (Exception e) {
+                agentAnswerToSave = "하위 개념 학습이 생성되었습니다.";
+            }
+        }
 
-        // 5. DB에 학생의 답변 및 AI의 보충 설명 저장 (기록용)
         StudentInquiry inquiry = StudentInquiry.builder()
                 .student(student)
                 .lecture(lecture)
-                .inquiryText(requestDto.getAnswerText()) // 학생의 답변
-                .agentAnswer(answerText) // AI의 보충 설명
-                // .aiQuestionId(requestDto.getAiQuestionId()) // (필요시 Inquiry 엔티티에도 컬럼 추가)
+                .inquiryText(requestDto.getAnswerText())
+                .agentAnswer(agentAnswerToSave)
                 .build();
         studentInquiryRepository.save(inquiry);
 
-        // 6. 학생에게 AI의 보충 설명 반환
-        return new InquiryResponseDto(answerText);
+        // 6. 프론트엔드로 DTO 매핑하여 반환
+        return new InquiryResponseDto(
+                aiResponse.getStatus(),
+                aiResponse.getExplanation(),
+                aiResponse.getSteps()
+        );
     }
 
 }
