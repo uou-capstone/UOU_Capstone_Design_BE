@@ -18,11 +18,8 @@ import io.github.uou_capstone.aiplatform.domain.submission.repository.Submission
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
-import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.repository.TeacherRepository;
-import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,22 +32,16 @@ public class SubmissionService {
 
     private final SubmissionRepository submissionRepository;
     private final StudentAnswerRepository studentAnswerRepository;
-    private final StudentRepository studentRepository;
     private final AssessmentRepository assessmentRepository;
     private final io.github.uou_capstone.aiplatform.domain.exam.repository.ExamQuestionRepository examQuestionRepository;  // v2: ExamQuestionRepository 사용
-    private final ChoiceOptionRepository choiceOptionRepository; // ChoiceOptionRepository 사용
+    private final ChoiceOptionRepository choiceOptionRepository;
     private final EnrollmentRepository enrollmentRepository;
-    private final UserRepository userRepository; // UserRepository 주입 확인
-    private final TeacherRepository teacherRepository;
+    private final CurrentUserResolver currentUserResolver;
 
     @Transactional
     public Long createSubmission(Long assessmentId, SubmissionRequestDto requestDto) {
-        // 1. 현재 학생 정보 가져오기 (수정된 로직)
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Student student = studentRepository.findById(user.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        // 1. 현재 학생 정보 가져오기
+        Student student = currentUserResolver.getStudent();
 
         // 2. 평가 정보 가져오기 (변경 없음)
         Assessment assessment = assessmentRepository.findById(assessmentId)
@@ -100,10 +91,8 @@ public class SubmissionService {
         Submission submission = submissionRepository.findById(submissionId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SUBMISSION_NOT_FOUND));
 
-        // 2. 현재 사용자 정보 가져오기 (변경 없음)
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        // 2. 현재 사용자 정보 가져오기
+        User user = currentUserResolver.getUser();
 
         // 3. 소유권 확인 (변경 없음)
         if (!submission.getStudent().getUser().getId().equals(user.getId())) {
@@ -125,12 +114,7 @@ public class SubmissionService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.ASSESSMENT_NOT_FOUND));
 
         // 2. 선생님 권한 인증
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId()) // User ID로 Teacher 조회
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN)); // 선생님 정보 없으면 접근 거부
-            // 평가를 만든 선생님 ID와 현재 로그인한 선생님 ID 비교
+        Teacher currentTeacher = currentUserResolver.getTeacher();
         if (!assessment.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }

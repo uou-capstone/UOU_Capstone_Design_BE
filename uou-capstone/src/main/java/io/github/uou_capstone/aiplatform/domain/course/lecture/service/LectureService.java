@@ -18,8 +18,9 @@ import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepos
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
-import io.github.uou_capstone.aiplatform.domain.user.entity.*;
-import io.github.uou_capstone.aiplatform.domain.user.repository.*;
+import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
+import io.github.uou_capstone.aiplatform.domain.user.entity.User;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,7 +29,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -59,10 +59,8 @@ public class LectureService {
     private final CourseRepository courseRepository;
     private final LectureRepository lectureRepository;
     private final GeneratedContentRepository generatedContentRepository;
-    private final TeacherRepository teacherRepository;
-    private final UserRepository userRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final EnrollmentRepository enrollmentRepository;
-    private final StudentRepository studentRepository;
     private final MaterialRepository materialRepository;
     private final GenerationSessionRepository generationSessionRepository;
     private final ExamSessionRepository examSessionRepository;
@@ -76,12 +74,7 @@ public class LectureService {
 
 
         // 2. 권한 확인: 현재 로그인한 사용자가 이 과목의 선생님인지 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -104,27 +97,9 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        // 2. 권한 확인 로직 추가
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-
-        Course course = lecture.getCourse(); // 강의가 속한 과목 정보 가져오기
-
-        // 2-1. 선생님 권한 확인
-        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
-                .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
-                .orElse(false);
-
-        // 2-2. 수강생 권한 확인
-        boolean isStudentEnrolled = studentRepository.findById(currentUser.getId())
-                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, course))
-                .orElse(false);
-
-        // 선생님도 아니고 수강생도 아니면 접근 거부
-        if (!isTeacherOfCourse && !isStudentEnrolled) {
-            throw new BusinessException(CommonErrorCode.FORBIDDEN);
-        }
+        // 2. 권한 확인 로직
+        Course course = lecture.getCourse();
+        validateLectureParticipant(course);
 
         // 3. 해당 강의에 속한 AI 생성 콘텐츠 목록 조회
         List<GeneratedContent> contents = generatedContentRepository.findByLectureId(lectureId);
@@ -140,11 +115,7 @@ public class LectureService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         // 2. 권한 확인: 현재 로그인한 사용자가 이 강의가 속한 과목의 선생님인지 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -163,11 +134,7 @@ public class LectureService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         // 2. 권한 확인: 현재 로그인한 사용자가 이 강의가 속한 과목의 선생님인지 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -192,12 +159,7 @@ public class LectureService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         // 2. 권한 확인
-        // Service에서도 이 강의가 '본인'의 과목인지 2차 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -240,9 +202,7 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        User currentUser = getCurrentUser();
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -270,8 +230,7 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        User currentUser = getCurrentUser();
-        validateLectureParticipant(lecture, currentUser);
+        validateLectureParticipant(lecture.getCourse());
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
@@ -353,8 +312,7 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        User currentUser = getCurrentUser();
-        validateLectureParticipant(lecture, currentUser);
+        validateLectureParticipant(lecture.getCourse());
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
@@ -373,8 +331,7 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        User currentUser = getCurrentUser();
-        validateLectureParticipant(lecture, currentUser);
+        validateLectureParticipant(lecture.getCourse());
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lecture.getId());
@@ -416,8 +373,7 @@ public class LectureService {
         Lecture lecture = lectureRepository.findById(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        User currentUser = getCurrentUser();
-        validateLectureParticipant(lecture, currentUser);
+        validateLectureParticipant(lecture.getCourse());
 
         // pdf_path 가져오기 (FastAPI 요구사항)
         Material sourceMaterial = getLatestPdfMaterial(lectureId);
@@ -562,22 +518,13 @@ public class LectureService {
         return body;
     }
 
-    private User getCurrentUser() {
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        return userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-    }
+    private void validateLectureParticipant(Course course) {
+        User currentUser = currentUserResolver.getUser();
 
-    private void validateLectureParticipant(Lecture lecture, User currentUser) {
-        Course course = lecture.getCourse();
-
-        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
-                .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
-                .orElse(false);
-
-        boolean isStudentEnrolled = studentRepository.findById(currentUser.getId())
-                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, course))
-                .orElse(false);
+        boolean isTeacherOfCourse = currentUser.getTeacher() != null
+                && currentUser.getTeacher().getId().equals(course.getTeacher().getId());
+        boolean isStudentEnrolled = currentUser.getStudent() != null
+                && enrollmentRepository.existsByStudentAndCourse(currentUser.getStudent(), course);
 
         if (!isTeacherOfCourse && !isStudentEnrolled) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);

@@ -7,11 +7,8 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
-import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.entity.User;
-import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,17 +18,12 @@ public class EnrollmentService {
 
     private final EnrollmentRepository enrollmentRepository;
     private final CourseRepository courseRepository;
-    private final UserRepository userRepository;
-    private final StudentRepository studentRepository;
+    private final CurrentUserResolver currentUserResolver;
 
     @Transactional
     public Long enrollCourse(Long courseId) {
         // 1. 현재 로그인한 학생 정보 가져오기
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Student student = studentRepository.findById(user.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        Student student = currentUserResolver.getStudent();
 
         // 2. 수강 신청할 강의실 정보 가져오기
         Course course = courseRepository.findById(courseId)
@@ -55,11 +47,7 @@ public class EnrollmentService {
     @Transactional
     public Long enrollCourseByCode(String invitationCode) {
         // 1. 현재 로그인한 학생 정보 가져오기
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Student student = studentRepository.findById(user.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        Student student = currentUserResolver.getStudent();
 
         // 2. 인증코드로 강의실 정보 가져오기
         Course course = courseRepository.findByInvitationCode(invitationCode)

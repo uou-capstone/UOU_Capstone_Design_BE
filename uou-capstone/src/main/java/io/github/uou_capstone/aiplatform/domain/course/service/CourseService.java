@@ -30,11 +30,8 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.Role;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
-import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.repository.TeacherRepository;
-import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,9 +45,7 @@ import java.util.stream.Collectors;
 public class CourseService {
 
     private final CourseRepository courseRepository;
-    private final UserRepository userRepository;
-    private final TeacherRepository teacherRepository;
-    private final StudentRepository studentRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final EnrollmentRepository enrollmentRepository;
     private final MaterialRepository materialRepository;
     private final ExamSessionRepository examSessionRepository;
@@ -63,14 +58,8 @@ public class CourseService {
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
-        // 1. 현재 로그인한 사용자 정보 가져오기
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-
-        // 2. 현재 사용자가 선생님(Teacher)인지 확인하기
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN)); // 선생님 권한 없음
+        // 1. 현재 로그인한 사용자 정보 가져오기 + 선생님 권한 확인
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         // 3. 고유한 인증코드 생성 (UUID 사용)
         String invitationCode = UUID.randomUUID().toString();
@@ -90,28 +79,21 @@ public class CourseService {
     @Transactional(readOnly = true) // 조회 기능이므로 readOnly = true 설정
     public List<CourseResponseDto> getAllCourses() { //강의실 전체 조회
         
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-
+        User currentUser = currentUserResolver.getUser();
         List<Course> courses;
 
         if (currentUser.getRole() == Role.TEACHER) {
-            Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                    .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND)); // 선생님 정보 없음
-            // 생성일 내림차순 정렬
+            Teacher currentTeacher = currentUserResolver.getTeacher();
             courses = courseRepository.findByTeacherOrderByCreatedAtDesc(currentTeacher);
         } else if (currentUser.getRole() == Role.STUDENT) {
-            Student student = studentRepository.findById(currentUser.getId())
-                    .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND)); // 학생 정보 없음
-            // 학생이 수강 중인 강의실 목록 (최신순 정렬)
+            Student student = currentUserResolver.getStudent();
             courses = enrollmentRepository.findByStudent(student).stream()
                     .map(Enrollment::getCourse)
                     .distinct()
-                    .sorted(Comparator.comparing(Course::getCreatedAt).reversed()) // 메모리 내 정렬
+                    .sorted(Comparator.comparing(Course::getCreatedAt).reversed())
                     .collect(Collectors.toList());
         } else {
-            courses = courseRepository.findAll(); // 관리자용 (필요시 정렬 추가)
+            courses = courseRepository.findAll();
         }
 
         return courses.stream()
@@ -134,19 +116,15 @@ public class CourseService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
 
         if (currentUser.getRole() == Role.TEACHER) {
-            Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                    .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+            Teacher currentTeacher = currentUserResolver.getTeacher();
             if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
                 throw new BusinessException(CommonErrorCode.FORBIDDEN);
             }
         } else if (currentUser.getRole() == Role.STUDENT) {
-            Student student = studentRepository.findById(currentUser.getId())
-                    .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+            Student student = currentUserResolver.getStudent();
             if (!enrollmentRepository.existsByStudentAndCourse(student, course)) {
                 throw new BusinessException(CommonErrorCode.FORBIDDEN);
             }
@@ -187,11 +165,7 @@ public class CourseService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -236,14 +210,10 @@ public class CourseService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
         // 2. 권한 확인: 현재 로그인한 사용자가 이 강의실의 선생님인지 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN)); // 선생님 아님
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
-            throw new BusinessException(CommonErrorCode.FORBIDDEN); // 본인 강의실 아님
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
         // 3. Entity 업데이트 DTO에 값이 있을 경우에만 수정
@@ -259,11 +229,7 @@ public class CourseService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
         // 2. 권한 확인: 현재 로그인한 사용자가 이 강의실의 선생님인지 확인
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Teacher currentTeacher = teacherRepository.findByUser_Id(currentUser.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FORBIDDEN));
+        Teacher currentTeacher = currentUserResolver.getTeacher();
 
         if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);

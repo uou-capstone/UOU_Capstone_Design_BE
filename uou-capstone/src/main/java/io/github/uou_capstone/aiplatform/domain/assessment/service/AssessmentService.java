@@ -17,14 +17,11 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
-import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.repository.TeacherRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
-import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.BodyInserters;
@@ -43,9 +40,7 @@ public class AssessmentService {
     private final ChoiceOptionRepository choiceOptionRepository;
     private final CourseRepository courseRepository;
     private final EnrollmentRepository enrollmentRepository;
-    private final UserRepository userRepository;
-    private final TeacherRepository teacherRepository;
-    private final StudentRepository studentRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final WebClient aiServiceWebClient;
     private final LectureRepository lectureRepository;
     private final MaterialRepository materialRepository;
@@ -103,21 +98,13 @@ public class AssessmentService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
         // 2. 권한 확인 (강의 상세 조회와 동일한 로직)
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
 
-        // 2-1. 선생님 권한 확인
-        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
-                .map(teacher -> teacher.getId().equals(course.getTeacher().getId()))
-                .orElse(false);
+        boolean isTeacherOfCourse = currentUser.getTeacher() != null
+                && currentUser.getTeacher().getId().equals(course.getTeacher().getId());
+        boolean isStudentEnrolled = currentUser.getStudent() != null
+                && enrollmentRepository.existsByStudentAndCourse(currentUser.getStudent(), course);
 
-        // 2-2. 수강생 권한 확인
-        boolean isStudentEnrolled = studentRepository.findById(currentUser.getId())
-                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, course))
-                .orElse(false);
-
-        // 선생님도 아니고 수강생도 아니면 접근 거부
         if (!isTeacherOfCourse && !isStudentEnrolled) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
@@ -138,17 +125,12 @@ public class AssessmentService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.ASSESSMENT_NOT_FOUND));
 
         // 2. 권한 확인 (강의 상세 조회와 동일한 로직)
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
 
-        boolean isTeacherOfCourse = teacherRepository.findByUser_Id(currentUser.getId())
-                .map(teacher -> teacher.getId().equals(assessment.getCourse().getTeacher().getId()))
-                .orElse(false);
-
-        boolean isStudentEnrolled = studentRepository.findById(currentUser.getId())
-                .map(student -> enrollmentRepository.existsByStudentAndCourse(student, assessment.getCourse()))
-                .orElse(false);
+        boolean isTeacherOfCourse = currentUser.getTeacher() != null
+                && currentUser.getTeacher().getId().equals(assessment.getCourse().getTeacher().getId());
+        boolean isStudentEnrolled = currentUser.getStudent() != null
+                && enrollmentRepository.existsByStudentAndCourse(currentUser.getStudent(), assessment.getCourse());
 
         if (!isTeacherOfCourse && !isStudentEnrolled) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);

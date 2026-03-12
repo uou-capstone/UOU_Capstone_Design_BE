@@ -12,13 +12,10 @@ import io.github.uou_capstone.aiplatform.domain.inquiry.dto.AiQaResponseDto;
 import io.github.uou_capstone.aiplatform.domain.inquiry.dto.InquiryRequestDto;
 import io.github.uou_capstone.aiplatform.domain.inquiry.dto.InquiryResponseDto;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
-import io.github.uou_capstone.aiplatform.domain.user.repository.StudentRepository;
-import io.github.uou_capstone.aiplatform.domain.user.entity.User;
-import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.BodyInserters;
@@ -30,8 +27,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class InquiryService {
 
     private final WebClient aiServiceWebClient;
-    private final UserRepository userRepository;
-    private final StudentRepository studentRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final EnrollmentRepository enrollmentRepository;
     private final StudentInquiryRepository studentInquiryRepository;
     private final GeneratedContentRepository generatedContentRepository;
@@ -40,11 +36,7 @@ public class InquiryService {
     @Transactional
     public InquiryResponseDto answerAiQuestion(InquiryRequestDto requestDto) {
         // 1. 학생 정보 조회
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        Student student = studentRepository.findById(user.getId())
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        Student student = currentUserResolver.getStudent();
 
         // 2. 학생이 답변한 '질문 콘텐츠' 정보 조회 (aiQuestionId 사용)
         GeneratedContent questionContent = generatedContentRepository.findByAiQuestionId(requestDto.getAiQuestionId())
