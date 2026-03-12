@@ -19,9 +19,6 @@ if not GEMINI_API_KEY:
 # 2. google-genai Client (api_key는 호출 시 전달하거나 여기서 한 번만 생성)
 gemini_client = genai.Client(api_key=GEMINI_API_KEY or "") if GEMINI_API_KEY else None
 
-# 3. 모델명 상수
-MODEL_FAST = "gemini-2.5-flash"
-MODEL_SMART = "gemini-2.5-flash"
 
 GOOGLE_API_KEY = GEMINI_API_KEY
-DEFAULT_MODEL = MODEL_SMART
+DEFAULT_MODEL = "gemini-2.5-flash"
