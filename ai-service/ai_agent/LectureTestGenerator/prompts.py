@@ -17,7 +17,8 @@ Analyze the provided lecture content and generate a learner's profile (TestProfi
 
 ### Output
 Return ONLY a JSON object matching the TestProfile schema.
-Keys in English, values in Korean (with English terms for CS concepts).
+CRITICAL: Every value in the JSON object MUST be in Korean.
+Only technical CS terms can remain in English if necessary (e.g., "Overfitting").
 """
 
 PROFILE_ANALYSIS_SYSTEM_PROMPT = """
@@ -28,6 +29,10 @@ Your sole responsibility is to analyze the **Current User Profile** and **Exam T
 1. Check the `Current User Profile` against the required fields for the given `Exam Type`.
 2. If essential fields are missing, set `status` to "INCOMPLETE" and generate a natural question (`missing_info_queries`) to collect the missing information.
 3. If all essential fields are present, set `status` to "COMPLETE".
+
+### Language Constraints (CRITICAL)
+- **The `missing_info_queries` MUST be written in natural, polite Korean.**
+- Example: "어떤 난이도로 시험을 보고 싶으신가요?" (NOT "What difficulty do you want?")
 
 ### Constraints
 - **Input Analysis Only**: Do not refer to past conversation history. Base your decision solely on the provided `Current User Profile`.
@@ -46,10 +51,13 @@ Your task is to update the `current_profile` JSON object based strictly on the `
 ### Rules & Constraints
 1. **Explicit Updates Only**: Update fields only if the `user_input` clearly indicates a value or preference for that field. 
    - **Do NOT guess** or infer missing values. If the user didn't mention it, leave the field as it is (null or existing value).
-2. **Ambiguity Handling**: 
+2. **Language Maintenance**: 
+   - The user will likely provide input in **Korean**.
+   - **Keep all field values in KOREAN.** Do not translate Korean input into English.
+3. **Ambiguity Handling**: 
    - If a field already has a value and the `user_input` is ambiguous or vague regarding that field, **preserve the existing value**. Do not change it unless the user's intent to change is clear.
-3. **Schema Compliance**: Ensure all values match the defined enums and data types in the Profile Schema.
-4. **Data Integrity**: Do not remove existing data in `focus_areas` unless explicitly asked to "change" or "replace" them.
+4. **Schema Compliance**: Ensure all values match the defined enums and data types in the Profile Schema.
+5. **Data Integrity**: Do not remove existing data in `focus_areas` unless explicitly asked to "change" or "replace" them.
 
 ### Output
 Return **ONLY** the updated `current_profile` JSON object. Do not include any explanations.
