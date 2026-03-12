@@ -2,7 +2,7 @@
 # 사용법: docker compose -f docker-compose.backend.prod.yml up -d
 
 services:
-  # Backend 전용 Redis (배포용)
+  # 공유 Redis (Spring + FastAPI 공용)
   redis-backend:
     image: redis:alpine
     container_name: backend-redis
@@ -13,7 +13,8 @@ services:
       - backend-redis-data:/data
     command: redis-server --save 60 1 --loglevel warning --appendonly yes
     networks:
-      - backend-network
+      - backend-network  # Spring용
+      - app-network      # FastAPI에서도 접근 가능하도록
     restart: always  # 배포 환경에서는 always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -32,10 +33,10 @@ services:
       - "${BACKEND_PORT:-8080}:8080"  # 외부 접근 필요
     environment:
       # 데이터베이스 설정 (외부 MySQL 사용)
-      - SPRING_DATASOURCE_URL=jdbc:mysql://${MYSQL_HOST:-mysql-db}:${MYSQL_PORT:-3306}/${MYSQL_DATABASE:-uoucapstone}?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-db:${MYSQL_PORT:-3306}/${MYSQL_DATABASE:-uoucapstone}?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC&characterEncoding=UTF8
       - SPRING_DATASOURCE_USERNAME=${MYSQL_USERNAME:-root}
       - SPRING_DATASOURCE_PASSWORD=${MYSQL_PASSWORD}
-      # Redis 설정 (자체 Redis 사용 - 독립 배포)
+      # Redis 설정 (Spring + FastAPI 공유)
       - SPRING_DATA_REDIS_HOST=redis-backend
       - SPRING_DATA_REDIS_PORT=6379
       - SPRING_DATA_REDIS_DATABASE=0

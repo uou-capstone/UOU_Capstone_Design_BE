@@ -802,7 +802,7 @@ public class MaterialGenerationService {
 
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
             
-            // ✅ Redis Pub/Sub으로 진행 상황 발행
+            //  Redis Pub/Sub으로 진행 상황 발행
             publishProgress(sessionId, 20, "Phase 3-5 시작: 콘텐츠 생성 중...", "PHASE3");
             
             Map<String, Object> requestBody = new HashMap<>();
@@ -836,99 +836,111 @@ public class MaterialGenerationService {
                 throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, msg);
             }
             
-            if (response == null || !response.containsKey("task_id")) {
-                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "FastAPI 작업 등록 실패");
-            }
-            
-            String fastApiTaskId = (String) response.get("task_id");
-            String statusUrl = (String) response.get("status_url");
-            
-            log.info("FastAPI Phase 3-5 작업 등록 완료: fastApiTaskId={}, statusUrl={}", fastApiTaskId, statusUrl);
-            
-            // ========== 3단계: FastAPI 작업 상태 폴링 ==========
-            // FastAPI의 /api/lecture-gen/status/{task_id}로 진행 상황 확인
-            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
-            
-            // ✅ Redis Pub/Sub으로 진행 상황 발행
-            publishProgress(sessionId, 30, "FastAPI에서 콘텐츠 생성 중...", "PHASE3");
-            
-            // 폴링 로직 (최대 20분 대기, 5초마다 확인)
-            int maxAttempts = 240; // 20분 = 1200초 / 5초 = 240회
-            int attempt = 0;
-            boolean completed = false;
-            
-            while (attempt < maxAttempts && !completed) {
-                try {
-                    Thread.sleep(5000); // 5초 대기
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, "작업이 중단되었습니다.");
-                }
-                attempt++;
-                
-                try {
-                    Map<String, Object> statusResponse = aiServiceWebClient.get()
-                            .uri(statusUrl)
-                            .retrieve()
-                            .bodyToMono(Map.class)
-                            .block();
-                    
-                    if (statusResponse != null) {
-                        String status = (String) statusResponse.get("status");
-                        Integer progress = statusResponse.get("progress") != null 
-                            ? ((Number) statusResponse.get("progress")).intValue() 
-                            : 0;
-                        String message = (String) statusResponse.get("message");
-                        
-                        // 백엔드 task 진행률 업데이트 (30% ~ 90%)
-                        int backendProgress = 30 + (progress * 60 / 100); // FastAPI 진행률을 30-90% 범위로 매핑
-                        asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, backendProgress, message);
-                        
-                        // ✅ Redis Pub/Sub으로 진행 상황 발행
-                        publishProgress(sessionId, backendProgress, message, "PHASE3-5");
-                        
-                        if ("completed".equals(status)) {
-                            completed = true;
-                            
-                            // 최종 결과 저장
-                            String finalMarkdown = (String) statusResponse.get("result");
-                            if (finalMarkdown != null) {
-                                session.updateFinalDocument(finalMarkdown);
-                                session.updatePhase(GenerationPhase.PHASE5);
-                                session.updateProgress(100);
-                                generationSessionRepository.save(session);
-                            }
-                            
-                            // ✅ 완료 진행 상황 발행
-                            publishProgress(sessionId, 100, "완료: 최종 문서 생성 완료", "PHASE5");
-                            
-                            // 완료 처리
-                            String resultJson = objectMapper.writeValueAsString(Map.of(
-                                "sessionId", sessionId,
-                                "message", "강의 자료 생성이 완료되었습니다.",
-                                "fastApiTaskId", fastApiTaskId
-                            ));
-                            asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 최종 문서 생성 완료", resultJson);
-                            
-                        } else if ("failed".equals(status)) {
-                            String errorMessage = (String) statusResponse.get("error");
-                            
-                            // ✅ 실패 진행 상황 발행
-                            publishProgress(sessionId, backendProgress, "오류 발생: " + errorMessage, "ERROR");
-                            
-                            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, 
-                                "FastAPI 작업 실패: " + (errorMessage != null ? errorMessage : "알 수 없는 오류"));
-                        }
+            // ko 브랜치: status=accepted, session_id 반환 (task_id 없음). han 등: task_id, status_url 반환.
+            boolean koBranch = response != null && "accepted".equals(response.get("status")) && !response.containsKey("task_id");
+            if (koBranch) {
+                // ========== ko 브랜치: Redis final_result:{sessionId} 폴링 ==========
+                log.info("FastAPI Phase 3-5 (ko 브랜치) 작업 수락됨: sessionId={}", sessionId);
+                asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
+                publishProgress(sessionId, 30, "FastAPI에서 콘텐츠 생성 중...", "PHASE3");
+                String finalResultKey = "final_result:" + sessionId;
+                int maxAttempts = 240;
+                int attempt = 0;
+                boolean completed = false;
+                while (attempt < maxAttempts && !completed) {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, "작업이 중단되었습니다.");
                     }
-                } catch (Exception e) {
-                    log.warn("FastAPI 상태 조회 실패 (시도 {}/{}): {}", attempt, maxAttempts, e.getMessage());
-                    // 계속 재시도
+                    attempt++;
+                    String finalMarkdown = redisTemplate.opsForValue().get(finalResultKey);
+                    if (finalMarkdown != null && !finalMarkdown.isBlank()) {
+                        completed = true;
+                        session.updateFinalDocument(finalMarkdown);
+                        session.updatePhase(GenerationPhase.PHASE5);
+                        session.updateProgress(100);
+                        generationSessionRepository.save(session);
+                        publishProgress(sessionId, 100, "완료: 최종 문서 생성 완료", "PHASE5");
+                        String resultJson = objectMapper.writeValueAsString(Map.of(
+                                "sessionId", sessionId,
+                                "message", "강의 자료 생성이 완료되었습니다."
+                        ));
+                        asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 최종 문서 생성 완료", resultJson);
+                    }
                 }
-            }
-            
-            if (!completed) {
-                throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT, 
-                    "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 20분)");
+                if (!completed) {
+                    throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT,
+                            "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 20분)");
+                }
+            } else {
+                // ========== task_id/status_url 있는 경우: 기존 폴링 ==========
+                if (response == null || !response.containsKey("task_id")) {
+                    throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "FastAPI 작업 등록 실패");
+                }
+                String fastApiTaskId = (String) response.get("task_id");
+                String statusUrl = (String) response.get("status_url");
+                log.info("FastAPI Phase 3-5 작업 등록 완료: fastApiTaskId={}, statusUrl={}", fastApiTaskId, statusUrl);
+                asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
+                publishProgress(sessionId, 30, "FastAPI에서 콘텐츠 생성 중...", "PHASE3");
+                int maxAttempts = 240;
+                int attempt = 0;
+                boolean completed = false;
+                while (attempt < maxAttempts && !completed) {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new BusinessException(CommonErrorCode.INTERNAL_SERVER_ERROR, "작업이 중단되었습니다.");
+                    }
+                    attempt++;
+                    try {
+                        Map<String, Object> statusResponse = aiServiceWebClient.get()
+                                .uri(statusUrl)
+                                .retrieve()
+                                .bodyToMono(Map.class)
+                                .block();
+                        if (statusResponse != null) {
+                            String status = (String) statusResponse.get("status");
+                            Integer progress = statusResponse.get("progress") != null
+                                    ? ((Number) statusResponse.get("progress")).intValue()
+                                    : 0;
+                            String message = (String) statusResponse.get("message");
+                            int backendProgress = 30 + (progress * 60 / 100);
+                            asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, backendProgress, message);
+                            publishProgress(sessionId, backendProgress, message, "PHASE3-5");
+                            if ("completed".equals(status)) {
+                                completed = true;
+                                String finalMarkdown = (String) statusResponse.get("result");
+                                if (finalMarkdown != null) {
+                                    session.updateFinalDocument(finalMarkdown);
+                                    session.updatePhase(GenerationPhase.PHASE5);
+                                    session.updateProgress(100);
+                                    generationSessionRepository.save(session);
+                                }
+                                publishProgress(sessionId, 100, "완료: 최종 문서 생성 완료", "PHASE5");
+                                String resultJson = objectMapper.writeValueAsString(Map.of(
+                                        "sessionId", sessionId,
+                                        "message", "강의 자료 생성이 완료되었습니다.",
+                                        "fastApiTaskId", fastApiTaskId
+                                ));
+                                asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 최종 문서 생성 완료", resultJson);
+                            } else if ("failed".equals(status)) {
+                                String errorMessage = (String) statusResponse.get("error");
+                                publishProgress(sessionId, 0, "오류 발생: " + errorMessage, "ERROR");
+                                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
+                                        "FastAPI 작업 실패: " + (errorMessage != null ? errorMessage : "알 수 없는 오류"));
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("FastAPI 상태 조회 실패 (시도 {}/{}): {}", attempt, maxAttempts, e.getMessage());
+                    }
+                }
+                if (!completed) {
+                    throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT,
+                            "FastAPI 작업이 시간 초과되었습니다. (최대 대기 시간: 20분)");
+                }
             }
             
         } catch (BusinessException e) {
