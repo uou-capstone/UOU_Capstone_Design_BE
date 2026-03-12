@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -274,8 +275,9 @@ public class ExamGenerationController {
         // ========== 2단계: 작업 등록 ==========
         asyncTaskService.createTask(taskId, "시험 생성 대기 중...");
         
-        // ========== 3단계: 비동기 처리 시작 ==========
-        examGenerationService.generateExamAsync(taskId, requestDto);
+        // ========== 3단계: 비동기 처리 시작 (SecurityContext는 비동기 스레드에 전파되지 않으므로 userEmail 전달) ==========
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        examGenerationService.generateExamAsync(taskId, requestDto, userEmail);
         
         // ========== 4단계: 즉시 응답 반환 ==========
         AsyncTaskResponse response = AsyncTaskResponse.builder()

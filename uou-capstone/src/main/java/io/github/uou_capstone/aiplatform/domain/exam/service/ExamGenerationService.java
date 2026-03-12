@@ -99,12 +99,20 @@ public class ExamGenerationService {
      */
     @Transactional
     public ExamGenerationResponseDto generateExam(ExamGenerationRequestDto requestDto) {
+        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+        return generateExam(requestDto, userEmail);
+    }
+
+    /**
+     * 시험 생성 (사용자 이메일 지정)
+     * 비동기 스레드 등 SecurityContext가 없는 경우 호출용.
+     */
+    @Transactional
+    public ExamGenerationResponseDto generateExam(ExamGenerationRequestDto requestDto, String userEmail) {
         log.info("시험 생성 시작: lectureId={}, examType={}, targetCount={}", 
                 requestDto.getLectureId(), requestDto.getExamType(), requestDto.getTargetCount());
 
         // ========== 1단계: 권한 확인 ==========
-        // 현재 로그인한 사용자 정보 조회
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         User currentUser = userRepository.findByEmail(userEmail)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
 
@@ -506,12 +514,12 @@ public class ExamGenerationService {
      * @param requestDto 시험 생성 요청 DTO
      */
     @org.springframework.scheduling.annotation.Async("taskExecutor")
-    public void generateExamAsync(String taskId, ExamGenerationRequestDto requestDto) {
+    public void generateExamAsync(String taskId, ExamGenerationRequestDto requestDto, String userEmail) {
         try {
             // ========== 1단계: Profile 생성/검증 ==========
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 10, "Profile 생성 중...");
             
-            ExamGenerationResponseDto response = generateExam(requestDto);
+            ExamGenerationResponseDto response = generateExam(requestDto, userEmail);
             
             // ========== 2단계: 완료 처리 ==========
             String resultJson = objectMapper.writeValueAsString(Map.of(
