@@ -514,6 +514,7 @@ public class ExamGenerationService {
      * @param requestDto 시험 생성 요청 DTO
      */
     @org.springframework.scheduling.annotation.Async("taskExecutor")
+    @Transactional
     public void generateExamAsync(String taskId, ExamGenerationRequestDto requestDto, String userEmail) {
         try {
             // ========== 1단계: Profile 생성/검증 ==========
