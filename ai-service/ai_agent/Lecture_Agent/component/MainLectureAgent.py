@@ -2,7 +2,7 @@ import os
 import pathlib
 import asyncio
 import time
-from typing import TypedDict, AsyncGenerator
+from typing import TypedDict, AsyncGenerator, Optional
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -36,6 +36,7 @@ except ImportError:
 class LectureState(TypedDict):
     chapter_title: str
     pdf_path: str
+    md_path: Optional[str]
     explanation: str
 
 
@@ -44,12 +45,16 @@ SYSTEM_PROMPT = """# [Role]
 당신은 학생들에게 강의를 진행하는, 친절하고 전문 지식을 갖춘 교수입니다. 당신의 목표는 학생들이 주어진 학습 자료를 수동적으로 받아 적는 것이 아니라, **스스로 생각하고 개념을 깨우칠 수 있도록 돕는 것**입니다.
 
 # [Task]
-당신은 '챕터 제목'과 해당 챕터의 '강의 자료 (PDF 파일)'를 입력받습니다.
-당신의 임무는 이 자료를 바탕으로, 학생에게 직접 강의하듯이 핵심 내용을 설명하고, 학생의 사고를 자극하는 질문을 던지는 것입니다.
+당신은 '챕터 제목'과 해당 챕터의 두 가지 자료를 입력받습니다.
+- 원본 시각 자료: PDF
+- 강의 대본 초안: Markdown(MD)
+당신의 임무는 **제공된 강의 대본 초안(MD)의 텍스트와 원본 시각 자료(PDF)를 모두 종합**하여,
+학생에게 직접 강의하듯이 핵심 내용을 설명하고, 학생의 사고를 자극하는 질문을 던지는 것입니다.
 
 # [Input Format]
 - [챕터 제목]: 강의 자료의 챕터 제목
-- [강의 자료]: PDF 파일 전체 내용
+- [원본 시각 자료]: PDF (해당 챕터에 해당하는 분할본)
+- [강의 대본 초안]: MD 텍스트 (해당 챕터에 해당하는 분할본)
 
 # [Output Generation Rules]
 1. **강의 톤**: 실제 강의실에서 학생들에게 말하듯이, 친절하고 이해하기 쉬운 구어체로 설명해야 합니다.
@@ -90,52 +95,55 @@ SYSTEM_PROMPT = """# [Role]
 """
 
 
+def _read_text_any_encoding(path: pathlib.Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="cp949")
+
+
 def generate_explanation(state: LectureState) -> LectureState:
     """
     강의 자료(PDF/MD)를 읽어 교수님 페르소나로 강의 텍스트를 생성하는 함수
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
-    file_path = pathlib.Path(state["pdf_path"])
+    pdf_path = pathlib.Path(state["pdf_path"])
+    md_path_str = state.get("md_path")
+    md_path = pathlib.Path(md_path_str) if md_path_str else None
 
-    # 1. 파일 형식에 따른 분기 처리 (Markdown 호환성 확보)
-    file_extension = file_path.suffix.lower()
+    # 1. 챕터별 PDF(바이너리) + MD(텍스트) 동시 로드 (Two-track)
+    if pdf_path.suffix.lower() != ".pdf":
+        raise ValueError(f"pdf_path는 .pdf여야 합니다: {pdf_path}")
 
-    if file_extension == ".pdf":
-        # PDF: 바이너리로 읽어서 MIME 타입 지정
-        content_part = types.Part.from_bytes(
-            data=file_path.read_bytes(),
-            mime_type="application/pdf",
-        )
-    elif file_extension == ".md":
-        # Markdown: 텍스트로 읽어서 프롬프트에 직접 삽입
-        try:
-            text_content = file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            # 인코딩 이슈 대비
-            text_content = file_path.read_text(encoding="cp949")
+    pdf_part = types.Part.from_bytes(
+        data=pdf_path.read_bytes(),
+        mime_type="application/pdf",
+    )
 
-        content_part = f"""
-[강의 자료 내용 ({file_extension})]
-{text_content}
-"""
-    else:
-        raise ValueError(f"지원하지 않는 파일 형식입니다: {file_extension}")
+    md_part = None
+    if md_path:
+        if md_path.suffix.lower() != ".md":
+            raise ValueError(f"md_path는 .md여야 합니다: {md_path}")
+        md_text = _read_text_any_encoding(md_path)
+        md_part = f"[강의 대본 초안 (MD) - 해당 챕터]\n{md_text}"
 
     # 2. 사용자 프롬프트 구성
     user_prompt = f"""[현재 챕터]: {state['chapter_title']}
 
-위 챕터 주제를 중심으로 강의를 진행해주세요. 
-전체 자료 중 해당 챕터와 관련된 부분을 중점적으로 설명하고, 학생들의 사고를 확장시키는 질문을 1~2개 포함해주세요.
+제공된 강의 대본 초안(MD)의 텍스트와 원본 시각 자료(PDF)를 모두 종합하여 강의를 진행해주세요.
+위 챕터 주제를 중심으로, 해당 챕터 자료 범위 안에서만 근거를 사용해 설명하세요.
+학생들의 사고를 확장시키는 질문을 1~2개 포함해주세요.
 """
 
     # 3. API 호출
+    contents = [SYSTEM_PROMPT, pdf_part]
+    if md_part:
+        contents.append(md_part)
+    contents.append(user_prompt)
+
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=[
-            SYSTEM_PROMPT,
-            content_part,
-            user_prompt,
-        ],
+        contents=contents,
     )
 
     return {**state, "explanation": response.text}
@@ -149,7 +157,9 @@ async def generate_explanation_streaming(
     Gemini API의 thinking 기능을 활용하여 내부 추론 과정을 실시간으로 전송합니다.
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
-    file_path = pathlib.Path(state["pdf_path"])
+    pdf_path = pathlib.Path(state["pdf_path"])
+    md_path_str = state.get("md_path")
+    md_path = pathlib.Path(md_path_str) if md_path_str else None
     
     # 1. 초기 생각 시작
     yield StreamingEvent(
@@ -162,33 +172,25 @@ async def generate_explanation_streaming(
         )
     )
     
-    # 2. 파일 로드
-    file_extension = file_path.suffix.lower()
-    if file_extension == ".pdf":
-        content_part = types.Part.from_bytes(
-            data=file_path.read_bytes(),
-            mime_type="application/pdf",
-        )
-        yield StreamingEvent(
-            type="thought",
-            delta="PDF 파일을 로드했습니다. 문서 구조를 분석 중...\n"
-        )
-    elif file_extension == ".md":
-        try:
-            text_content = file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text_content = file_path.read_text(encoding="cp949")
-        content_part = f"[강의 자료 내용 ({file_extension})]\n{text_content}"
-        yield StreamingEvent(
-            type="thought",
-            delta="Markdown 파일을 로드했습니다. 내용을 분석 중...\n"
-        )
-    else:
-        yield StreamingEvent(
-            type="error",
-            delta=f"지원하지 않는 파일 형식입니다: {file_extension}"
-        )
+    # 2. 챕터별 PDF(바이너리) + MD(텍스트) 동시 로드
+    if pdf_path.suffix.lower() != ".pdf":
+        yield StreamingEvent(type="error", delta=f"pdf_path는 .pdf여야 합니다: {pdf_path}")
         return
+
+    pdf_part = types.Part.from_bytes(
+        data=pdf_path.read_bytes(),
+        mime_type="application/pdf",
+    )
+    yield StreamingEvent(type="thought", delta="PDF(시각 자료) 챕터 파일을 로드했습니다.\n")
+
+    md_part = None
+    if md_path:
+        if md_path.suffix.lower() != ".md":
+            yield StreamingEvent(type="error", delta=f"md_path는 .md여야 합니다: {md_path}")
+            return
+        md_text = _read_text_any_encoding(md_path)
+        md_part = f"[강의 대본 초안 (MD) - 해당 챕터]\n{md_text}"
+        yield StreamingEvent(type="thought", delta="MD(대본 초안) 챕터 파일을 로드했습니다.\n")
     
     # 3. 챕터 분석
     yield StreamingEvent(
@@ -201,54 +203,13 @@ async def generate_explanation_streaming(
         )
     )
     
-    # 3-1. 특정 주제에 대한 시각화 데이터 생성 예시
-    # DQN, 강화학습, 마르코프 프로세스 등 특정 주제에 대해 시각화 생성
-    chapter_title_lower = state['chapter_title'].lower()
-    
-    if "dqn" in chapter_title_lower or "deep q-network" in chapter_title_lower:
-        # DQN 아키텍처 시각화
-        dqn_viz = ThoughtNode.create(
-            step_id="step_002_viz",
-            content="DQN의 핵심인 Experience Replay와 Target Network의 관계를 시각화합니다.",
-            status="processing",
-            viz_type="flowchart",
-            viz_data="""graph LR
-  A[Experience] --> B(Replay Buffer)
-  B --> C{Sampling}
-  C --> D[Main Network]
-  E[Target Network] -- Update --> D
-  D --> F[Q-values]
-  F --> G[Action Selection]"""
-        )
-        yield StreamingEvent(type="thought", content=dqn_viz)
-        await asyncio.sleep(0.3)
-        dqn_viz.status = "completed"
-        yield StreamingEvent(type="thought", content=dqn_viz)
-    
-    elif "마르코프" in chapter_title_lower or "markov" in chapter_title_lower:
-        # 마르코프 프로세스 시각화
-        markov_viz = ThoughtNode.create(
-            step_id="step_002_viz",
-            content="마르코프 프로세스의 상태 전이를 시각화합니다.",
-            status="processing",
-            viz_type="graph",
-            viz_data="""graph LR
-  A[State 1] -->|P_12| B[State 2]
-  B -->|P_23| C[State 3]
-  C -->|P_31| A
-  A -->|P_11| A
-  B -->|P_22| B
-  C -->|P_33| C"""
-        )
-        yield StreamingEvent(type="thought", content=markov_viz)
-        await asyncio.sleep(0.3)
-        markov_viz.status = "completed"
-        yield StreamingEvent(type="thought", content=markov_viz)
-    
+    # [수정됨] 특정 과목(DQN, 마르코프)에 종속되었던 하드코딩된 시각화 다이어그램 주입 로직 제거
+
     user_prompt = f"""[현재 챕터]: {state['chapter_title']}
 
-위 챕터 주제를 중심으로 강의를 진행해주세요. 
-전체 자료 중 해당 챕터와 관련된 부분을 중점적으로 설명하고, 학생들의 사고를 확장시키는 질문을 1~2개 포함해주세요.
+제공된 강의 대본 초안(MD)의 텍스트와 원본 시각 자료(PDF)를 모두 종합하여 강의를 진행해주세요.
+위 챕터 주제를 중심으로, 해당 챕터 자료 범위 안에서만 근거를 사용해 설명하세요.
+학생들의 사고를 확장시키는 질문을 1~2개 포함해주세요.
 """
     
     # 4. Gemini API 스트리밍 호출 (thinking 활성화)
@@ -257,11 +218,7 @@ async def generate_explanation_streaming(
         response_stream = await asyncio.to_thread(
             client.models.generate_content_stream,
             model="gemini-2.5-flash",
-            contents=[
-                SYSTEM_PROMPT,
-                content_part,
-                user_prompt,
-            ],
+            contents=[p for p in [SYSTEM_PROMPT, pdf_part, md_part, user_prompt] if p is not None],
             config=types.GenerateContentConfig(
                 thinking_budget=10000  # thinking 토큰 예산 설정
             )
@@ -272,7 +229,7 @@ async def generate_explanation_streaming(
             type="thought",
             content=ThoughtNode(
                 step_id="step_002",
-                content=f"챕터 '{state['chapter_title']}'의 핵심 개념을 추출 중...",
+                content=f"챕터 '{state['chapter_title']}'의 핵심 개념을 추출 완료했습니다.",
                 status="completed",
                 timestamp=time.time()
             )
@@ -291,9 +248,6 @@ async def generate_explanation_streaming(
                             text = part.text
                             
                             # Thinking vs Answer 구분
-                            # Gemini API의 thinking 출력은 특정 패턴을 가질 수 있음
-                            # 실제 구현은 API 응답 구조에 따라 조정 필요
-                            
                             # 간단한 휴리스틱: "생각", "추론", "분석" 등의 키워드가 있으면 thinking
                             thinking_keywords = ["생각", "추론", "분석", "검토", "확인", "고려"]
                             is_thinking = any(keyword in text for keyword in thinking_keywords)
@@ -329,11 +283,12 @@ async def generate_explanation_streaming(
         )
 
 
-def main(chapter_title: str, pdf_path: str) -> dict:
+def main(chapter_title: str, pdf_path: str, md_path: Optional[str] = None) -> dict:
     """외부에서 호출하는 진입점"""
     initial_state: LectureState = {
         "chapter_title": chapter_title,
         "pdf_path": pdf_path,
+        "md_path": md_path,
         "explanation": "",
     }
     result_state = generate_explanation(initial_state)

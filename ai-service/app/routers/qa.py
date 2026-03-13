@@ -15,8 +15,8 @@ router = APIRouter(prefix="/api/qa", tags=["qa"])
 
 @router.post("/evaluate")
 async def evaluate(req: QAEvaluateRequest):
-    # 동기 함수를 스레드 풀에서 실행하여 블로킹 방지
     text = await asyncio.to_thread(evaluate_answer, req.original_q, req.user_answer, req.pdf_path)
-    return {"supplementary_explanation": text}
-
+    
+    parsed_json = json.loads(text)
+    return parsed_json
 

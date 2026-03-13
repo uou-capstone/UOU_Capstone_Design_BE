@@ -50,20 +50,44 @@ def extract_questions(text: str) -> List[Tuple[int, int, str]]:
 # delegator.py에서 호출하는 함수들입니다.
 # =============================================================================
 
-def initialize_lecture(pdf_path: str):
-    """PDF를 분석하여 챕터 정보를 반환합니다."""
-    chapters_info = pdf_analysis_main(pdf_path)
-    return chapters_info, pdf_path
+def _align_chapters(
+    pdf_chapters: List[Tuple[str, str]],
+    md_chapters: List[Tuple[str, str]] | None,
+) -> List[Tuple[str, str, str | None]]:
+    """
+    PDF 분할 결과와 MD 분할 결과를 인덱스 기준으로 페어링합니다.
+    토큰 폭발/할루시네이션을 막기 위해, 항상 "챕터별로 쪼개진" 경로만 사용합니다.
+    """
+    if not md_chapters:
+        return [(t, p, None) for (t, p) in pdf_chapters]
+
+    n = min(len(pdf_chapters), len(md_chapters))
+    paired: List[Tuple[str, str, str | None]] = []
+    for i in range(n):
+        pdf_title, chapter_pdf_path = pdf_chapters[i]
+        md_title, chapter_md_path = md_chapters[i]
+        title = pdf_title or md_title
+        paired.append((title, chapter_pdf_path, chapter_md_path))
+    return paired
 
 
-def prepare_lecture_content(pdf_path: str):
+def initialize_lecture(pdf_path: str, md_path: str | None = None):
+    """PDF/MD를 각각 챕터별로 분석/분할하여 페어링된 챕터 정보를 반환합니다."""
+    pdf_chapters_info = pdf_analysis_main(pdf_path)
+    md_chapters_info = pdf_analysis_main(md_path) if md_path else None
+    chapters_info = _align_chapters(pdf_chapters_info, md_chapters_info)
+    return chapters_info, pdf_path, md_path
+
+
+def prepare_lecture_content(pdf_path: str, md_path: str | None = None):
     """초기 세션 구성을 위해 챕터 기본 구조를 반환합니다."""
-    chapters_info, _ = initialize_lecture(pdf_path)
+    chapters_info, _, _ = initialize_lecture(pdf_path, md_path)
     chapters = []
-    for title, path in chapters_info:
+    for title, chapter_pdf_path, chapter_md_path in chapters_info:
         chapters.append({
             "chapterTitle": title,
-            "pdfPath": path,
+            "pdfPath": chapter_pdf_path,
+            "mdPath": chapter_md_path,
             "questions": {}
         })
     return {"chapters": chapters}
@@ -104,17 +128,23 @@ def build_segments_from_explanation(explanation: str, prefix: str = ""):
     return segments, question_meta
 
 
-def generate_single_chapter(pdf_path: str, chapter_info: tuple, current_chapter_idx: int):
+def generate_single_chapter(
+    pdf_path: str,
+    chapter_info: tuple,
+    current_chapter_idx: int,
+    md_path: str | None = None,
+):
     """
     단일 챕터의 스크립트를 생성하고 세그먼트로 파싱합니다.
 
-    chapter_info는 다음 두 형태를 모두 허용합니다.
-    - (chapter_title, chapter_pdf_path)
-    - (chapter_title, chapter_pdf_path, start_page, end_page)
+    chapter_info는 다음 형태를 허용합니다.
+    - (chapter_title, chapter_pdf_path, chapter_md_path)
     """
     chapter_title = chapter_info[0] if len(chapter_info) > 0 else None
     chapter_pdf_path = chapter_info[1] if len(chapter_info) > 1 else None
-    result_dict = lecture_agent_main(chapter_title, chapter_pdf_path)
+    chapter_md_path = chapter_info[2] if len(chapter_info) > 2 else md_path
+
+    result_dict = lecture_agent_main(chapter_title, chapter_pdf_path, chapter_md_path)
     explanation = result_dict.get(chapter_title, "")
 
     segments, question_meta = build_segments_from_explanation(explanation, prefix=f"c{current_chapter_idx}-")
@@ -124,7 +154,8 @@ def generate_single_chapter(pdf_path: str, chapter_info: tuple, current_chapter_
         "explanation": explanation,
         "segments": segments,
         "questions": question_meta,
-        "pdfPath": chapter_pdf_path
+        "pdfPath": chapter_pdf_path,
+        "mdPath": chapter_md_path,
     }
 
 
@@ -151,16 +182,16 @@ def generate_supplementary_explanation(question_text: str, user_answer: str, pdf
     }
 
 
-def run_full_pipeline(pdf_path: str, skip_qa: bool = True, cancellation_callback=None):
+def run_full_pipeline(pdf_path: str, md_path: str | None = None, skip_qa: bool = True, cancellation_callback=None):
     """백그라운드에서 전체 파이프라인을 실행하고 결과를 반환합니다."""
-    chapters_info = pdf_analysis_main(pdf_path)
+    chapters_info, _, _ = initialize_lecture(pdf_path, md_path)
     lecture_results = []
 
-    for i, (chapter_title, chapter_pdf_path) in enumerate(chapters_info):
+    for i, (chapter_title, chapter_pdf_path, chapter_md_path) in enumerate(chapters_info):
         if cancellation_callback:
             cancellation_callback()
 
-        result_dict = lecture_agent_main(chapter_title, chapter_pdf_path)
+        result_dict = lecture_agent_main(chapter_title, chapter_pdf_path, chapter_md_path)
         lecture_results.append(result_dict)
 
     return chapters_info, lecture_results
@@ -227,15 +258,15 @@ async def process_explanation_with_qa_async(explanation: str, chapter_title: str
         print_streaming(remaining)
 
 
-async def run_lecture_agent_async(chapter_title: str, pdf_path: str) -> Dict[str, str]:
+async def run_lecture_agent_async(chapter_title: str, pdf_path: str, md_path: str | None = None) -> Dict[str, str]:
     """
     단일 챕터에 대해 강의 에이전트를 비동기적으로 실행 (Wrapper)
     동기 함수(lecture_agent_main)를 별도 스레드에서 실행하여 이벤트 루프 차단을 방지.
     """
-    return await asyncio.to_thread(lecture_agent_main, chapter_title, pdf_path)
+    return await asyncio.to_thread(lecture_agent_main, chapter_title, pdf_path, md_path)
 
 
-async def main_async(file_path: str, skip_qa: bool = False):
+async def main_async(pdf_path: str, md_path: str | None = None, skip_qa: bool = False):
     """
     비동기 메인 로직:
     1. 모든 챕터 생성을 동시에 시작 (Parallel Execution)
@@ -245,18 +276,19 @@ async def main_async(file_path: str, skip_qa: bool = False):
     print("교육 에이전트 시스템을 시작합니다")
     print("=" * 60 + "\n")
 
-    # 1. 문서 구조 분석 (PDF/Markdown 모두 PdfAnalysis에 위임)
-    lower_path = file_path.lower()
-
-    if lower_path.endswith((".pdf", ".md")):
-        print("[INFO] 문서 구조를 분석하고 챕터 리스트를 생성합니다...\n")
-        chapters_info = pdf_analysis_main(file_path)
-    else:
-        print("[ERROR] 지원하지 않는 파일 형식입니다.")
+    # 1. 문서 구조 분석/분할 (Two-track: PDF + MD)
+    if not pdf_path.lower().endswith(".pdf"):
+        print("[ERROR] 첫 번째 인자는 PDF 경로여야 합니다.")
+        return [], []
+    if md_path and (not md_path.lower().endswith(".md")):
+        print("[ERROR] 두 번째 인자는 MD 경로여야 합니다.")
         return [], []
 
+    print("[INFO] PDF/MD를 챕터별로 분석/분할하고 페어링합니다...\n")
+    chapters_info, _, _ = initialize_lecture(pdf_path, md_path)
+
     print(f"총 {len(chapters_info)}개의 챕터를 발견했습니다.\n")
-    for i, (title, _) in enumerate(chapters_info, 1):
+    for i, (title, _, _) in enumerate(chapters_info, 1):
         print(f"  {i}. {title}")
     print("\n")
 
@@ -266,9 +298,9 @@ async def main_async(file_path: str, skip_qa: bool = False):
     print("강의 생성 작업을 백그라운드에서 동시에 시작합니다...\n")
 
     tasks: List[asyncio.Task] = []
-    for chapter_title, chapter_pdf_path in chapters_info:
+    for chapter_title, chapter_pdf_path, chapter_md_path in chapters_info:
         task = asyncio.create_task(
-            run_lecture_agent_async(chapter_title, chapter_pdf_path)
+            run_lecture_agent_async(chapter_title, chapter_pdf_path, chapter_md_path)
         )
         tasks.append(task)
 
@@ -278,6 +310,7 @@ async def main_async(file_path: str, skip_qa: bool = False):
     for i, task in enumerate(tasks):
         chapter_title = chapters_info[i][0]
         chapter_path = chapters_info[i][1]
+        # chapter_md_path = chapters_info[i][2]  # 필요 시 디버깅/로깅용
 
         if not task.done():
             print(f"챕터 '{chapter_title}' 생성 중... 잠시만 기다려주세요.\n")
@@ -310,12 +343,12 @@ async def main_async(file_path: str, skip_qa: bool = False):
     return chapters_info, [lecture_results_all]
 
 
-def main(file_path: str, skip_qa: bool = False):
+def main(pdf_path: str, md_path: str | None = None, skip_qa: bool = False):
     """엔트리 포인트: 비동기 루프 실행"""
     import traceback
 
     try:
-        return asyncio.run(main_async(file_path, skip_qa))
+        return asyncio.run(main_async(pdf_path, md_path, skip_qa))
     except FileNotFoundError as e:
         print(f"[ERROR] 파일을 찾을 수 없습니다 - {e}")
         sys.exit(1)
@@ -327,9 +360,10 @@ def main(file_path: str, skip_qa: bool = False):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("사용법: python integration.py <파일 경로>")
+        print("사용법: python integration.py <pdf 경로> [md 경로]")
         sys.exit(1)
 
-    file_path_arg = sys.argv[1]
-    main(file_path_arg)
+    pdf_path_arg = sys.argv[1]
+    md_path_arg = sys.argv[2] if len(sys.argv) >= 3 else None
+    main(pdf_path_arg, md_path_arg)
 

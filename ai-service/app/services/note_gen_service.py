@@ -13,7 +13,7 @@ from ai_agent.LectureContentGenerator.agents.phase5_assembly import execute_phas
 from app.core.redis_client import redis_manager
 
 
-async def get_finalized_brief_from_cache(session_id: str) -> Dict[str, Any]:
+async def get_finalized_brief_from_cache(session_id: int) -> Dict[str, Any]:
     """백엔드가 넣어둔 기획안(finalized_brief)을 Redis에서 직접 꺼내옴."""
     redis = redis_manager.get_client()
     cache_key = f"finalized_brief:{session_id}"
@@ -21,10 +21,12 @@ async def get_finalized_brief_from_cache(session_id: str) -> Dict[str, Any]:
 
     if cached:
         return json.loads(cached)
-    raise ValueError(f"Redis에서 session_id {session_id}의 기획안을 찾을 수 없습니다.")
+    raise ValueError(
+        f"Redis에서 session_id {session_id}의 기획안을 찾을 수 없습니다. (조회 키: {cache_key})"
+    )
 
 
-async def publish_progress(session_id: str, progress: int, message: str, phase: str) -> None:
+async def publish_progress(session_id: int, progress: int, message: str, phase: str) -> None:
     """진행 상황을 Redis Pub/Sub 채널로 실시간 방송."""
     redis = redis_manager.get_client()
     channel = f"progress:session:{session_id}"
@@ -137,7 +139,7 @@ async def run_phase2(draft_plan: Dict[str, Any], user_feedback: str) -> Dict[str
     return finalized_brief
 
 
-async def run_phase3_to_5_task(session_id: str):
+async def run_phase3_to_5_task(session_id: int):
     """
     Phase 3~5: 비동기 집필 및 조립 태스크
 
