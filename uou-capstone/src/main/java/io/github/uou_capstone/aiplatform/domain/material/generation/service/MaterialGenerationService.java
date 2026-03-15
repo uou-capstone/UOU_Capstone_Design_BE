@@ -142,6 +142,9 @@ public class MaterialGenerationService {
             throw new BusinessException(CommonErrorCode.AGENT_EXECUTION_FAILED, userMessage);
         }
 
+        // ========== 5.5단계: 챕터 order/estimated_sections 기본값 채우기 (프론트 표시·정렬용) ==========
+        normalizeDraftPlanChapters(draftPlan);
+
         // ========== 6단계: 결과 저장 ==========
         // DraftPlanDto를 JSON으로 변환하여 세션에 저장
         // - objectMapper.convertValue(): DTO를 Map으로 변환
@@ -352,6 +355,20 @@ public class MaterialGenerationService {
     }
 
     /**
+     * draftPlan.chapters[]의 order, estimated_sections가 null일 때 기본값 채움.
+     * 프론트에서 표시/정렬 시 null이 아니도록 보장.
+     */
+    private void normalizeDraftPlanChapters(DraftPlanDto draftPlan) {
+        if (draftPlan == null || draftPlan.getChapters() == null) return;
+        List<ChapterDto> chapters = draftPlan.getChapters();
+        for (int i = 0; i < chapters.size(); i++) {
+            ChapterDto ch = chapters.get(i);
+            if (ch.getOrder() == null) ch.setOrder(i + 1);
+            if (ch.getEstimatedSections() == null) ch.setEstimatedSections(1);
+        }
+    }
+
+    /**
      * 생성 상태 조회
      * 
      * 로직 설명:
@@ -407,6 +424,9 @@ public class MaterialGenerationService {
         DraftPlanDto draftPlan = session.getDraftPlanJson() == null
                 ? null
                 : objectMapper.convertValue(session.getDraftPlanJson(), DraftPlanDto.class);
+        if (draftPlan != null) {
+            normalizeDraftPlanChapters(draftPlan);
+        }
         FinalizedBriefDto finalizedBrief = session.getFinalizedBriefJson() == null
                 ? null
                 : objectMapper.convertValue(session.getFinalizedBriefJson(), FinalizedBriefDto.class);
