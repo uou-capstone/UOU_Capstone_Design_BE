@@ -93,15 +93,17 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // 프론트엔드 개발자에게 받은 주소를 여기에 추가
-        // 주의: 슬래시(/) 없이 정확한 도메인만 입력
+        // 프론트엔드 출처(Origin). 슬래시(/) 없이 도메인만 입력
+        // 127.0.0.1 추가: localhost와 다른 Host로 인식되어 CORS 차단될 수 있음
         config.setAllowedOrigins(Arrays.asList(
                 "http://localhost:3000",
                 "http://localhost:5173",
                 "http://localhost:8000",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5173",
+                "http://127.0.0.1:8000",
                 "https://ai-lms.netlify.app",
                 "https://plutean-clement-apheliotropically.ngrok-free.dev"
-                // (여러 개 등록 가능)
         ));
 
         // 허용할 HTTP 메서드 (전부 허용)
@@ -133,8 +135,8 @@ public class SecurityConfig {
         ));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        // "/api/**"로 시작하는 모든 경로에 이 CORS 설정을 적용
         source.registerCorsConfiguration("/api/**", config);
+        source.registerCorsConfiguration("/**", config);  // 미리보기 등 기타 경로도 CORS 적용
         return source;
     }
 }
