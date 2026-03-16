@@ -246,76 +246,31 @@ public class ExamGenerationService {
         try {
             switch (requestDto.getExamType()) {
             case FLASH_CARD:
-                // 플래시카드 생성. /api/test-gen/flash-card 404 시 /api/test-gen/generate 폴백
-                try {
-                    flashCards = flashCardGeneratorAgent.generateFlashCards(
-                            lectureContent, profile, session.getTargetCount());
-                } catch (WebClientResponseException e) {
-                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
-                        log.warn("[FlashCard] POST /api/test-gen/flash-card 404 - ai-service(ko) 통합 엔드포인트 /api/test-gen/generate로 폴백합니다.");
-                        flashCards = callUnifiedGenerateFlashCards(lectureContent, profile, session.getTargetCount());
-                    } else {
-                        throw e;
-                    }
-                }
+                // ko 브랜치: 모든 시험 유형을 통합 엔드포인트 /api/test-gen/generate 로 생성
+                flashCards = callUnifiedGenerateFlashCards(lectureContent, profile, session.getTargetCount());
                 break;
 
             case OX_PROBLEM:
-                // OX 문제 생성. /api/test-gen/ox-problem 404 시 /api/test-gen/generate 폴백
-                try {
-                    oxProblems = oxProblemGeneratorAgent.generateOxProblems(
-                            lectureContent, profile, session.getTargetCount());
-                } catch (WebClientResponseException e) {
-                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
-                        log.warn("[OxProblem] POST /api/test-gen/ox-problem 404 - ai-service(ko) 통합 엔드포인트 /api/test-gen/generate로 폴백합니다.");
-                        oxProblems = callUnifiedGenerateOxProblems(lectureContent, profile, session.getTargetCount());
-                    } else {
-                        throw e;
-                    }
-                }
+                oxProblems = callUnifiedGenerateOxProblems(lectureContent, profile, session.getTargetCount());
                 break;
 
             case FIVE_CHOICE:
-                try {
-                    fiveChoiceProblems = fiveChoiceGeneratorAgent.generateFiveChoiceProblems(
-                            lectureContent, profile, session.getTargetCount());
-                } catch (WebClientResponseException e) {
-                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
-                        log.warn("[FiveChoice] POST /api/test-gen/five-choice 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
-                        fiveChoiceProblems = callUnifiedGenerateFiveChoice(lectureContent, profile, session.getTargetCount());
-                    } else throw e;
-                }
+                fiveChoiceProblems = callUnifiedGenerateFiveChoice(lectureContent, profile, session.getTargetCount());
                 break;
 
             case SHORT_ANSWER:
-                try {
-                    shortAnswerProblems = shortAnswerGeneratorAgent.generateShortAnswerProblems(
-                            lectureContent, profile, session.getTargetCount());
-                } catch (WebClientResponseException e) {
-                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
-                        log.warn("[ShortAnswer] POST /api/test-gen/short-answer 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
-                        shortAnswerProblems = callUnifiedGenerateShortAnswer(lectureContent, profile, session.getTargetCount());
-                    } else throw e;
-                }
+                shortAnswerProblems = callUnifiedGenerateShortAnswer(lectureContent, profile, session.getTargetCount());
                 break;
 
             case DEBATE:
-                try {
-                    debateTopics = debateGeneratorAgent.generateDebateTopics(
-                            lectureContent, profile, session.getTargetCount());
-                } catch (WebClientResponseException e) {
-                    if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
-                        log.warn("[Debate] POST /api/test-gen/debate 404 - ai-service(ko) /api/test-gen/generate로 폴백합니다.");
-                        debateTopics = callUnifiedGenerateDebate(lectureContent, profile, session.getTargetCount());
-                    } else throw e;
-                }
+                debateTopics = callUnifiedGenerateDebate(lectureContent, profile, session.getTargetCount());
                 break;
 
-                default:
-                    throw new BusinessException(
-                            CommonErrorCode.INVALID_PARAMETER, 
-                            "지원하지 않는 시험 유형입니다: " + requestDto.getExamType()
-                    );
+            default:
+                throw new BusinessException(
+                        CommonErrorCode.INVALID_PARAMETER,
+                        "지원하지 않는 시험 유형입니다: " + requestDto.getExamType()
+                );
             }
         } catch (Exception e) {
             log.error("시험 생성 실패: examSessionId={}, examType={}, error={}", 
