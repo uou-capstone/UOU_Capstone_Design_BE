@@ -100,20 +100,33 @@ def get_default_test_profile() -> TestProfile:
 async def analyze_profile_async(
     current_profile: TestProfile,
     exam_type: ExamType,
-    client: Optional[genai.Client] = None
+    client: Optional[genai.Client] = None,
+    topic: Optional[str] = None,
+    problem_count: Optional[int] = None,
 ) -> ProfileAnalysisResponse:
     """
     현재 프로필의 완성도 분석 (비동기)
+
+    Args:
+        topic: 프론트에서 이미 확정한 주제 (에이전트가 다시 묻지 않도록 전달)
+        problem_count: 프론트에서 이미 확정한 문제 수 (동일)
     """
     if client is None:
         client = get_gemini_client()
     
     print(f"[Profile] Analyzing profile completeness for exam type: {exam_type.value}...")
 
-    # 원본 코드의 "Current Profile: ...", "Exam Type: ..." 형태 유지
+    # 프론트에서 확정된 정보를 명시적으로 전달하여 에이전트가 재확인하지 않도록 함
+    confirmed_info_lines = [f"- Exam Type: {exam_type.value} (CONFIRMED, do not ask)"]
+    if topic:
+        confirmed_info_lines.append(f"- Topic/Subject: {topic} (CONFIRMED, do not ask)")
+    if problem_count:
+        confirmed_info_lines.append(f"- Number of Problems: {problem_count} (CONFIRMED, do not ask)")
+
     contents = [
+        f"[Already Confirmed by User]\n" + "\n".join(confirmed_info_lines),
         f"Current Profile: {current_profile.model_dump_json()}",
-        f"Exam Type: {exam_type.value}"
+        f"Exam Type: {exam_type.value}",
     ]
 
     try:

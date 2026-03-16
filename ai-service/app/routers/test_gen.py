@@ -46,7 +46,9 @@ def get_generator() -> LectureTestGenerator:
 # --- [1] Profile Request / Response 스키마 ---
 class ProfileContext(BaseModel):
     lecture_content: str
-    exam_type: Optional[str] = None
+    exam_type: Optional[str] = None      # 프론트에서 이미 선택한 시험 유형
+    topic: Optional[str] = None          # 프론트에서 이미 선택한 주제
+    problem_count: Optional[int] = None  # 프론트에서 이미 선택한 문제 수
     existing_profile: Optional[Dict[str, Any]] = None
     user_message: Optional[str] = None
 
@@ -76,7 +78,11 @@ async def chat_and_update_profile(request: ProfileRequest):
     ctx = request.context
     current_profile_raw = ctx.existing_profile or {}
     user_msg = (ctx.user_message or "").strip()
-    exam_type_str = ctx.exam_type or "Flash_Card"
+
+    # exam_type이 없으면 에러 반환 (프론트에서 반드시 선택해야 함)
+    if not ctx.exam_type:
+        raise HTTPException(status_code=400, detail="exam_type은 필수입니다. 프론트에서 시험 유형을 선택해주세요.")
+    exam_type_str = ctx.exam_type
 
     # dict -> TestProfile (빈 객체면 기본 프로필 사용)
     try:
@@ -87,6 +93,10 @@ async def chat_and_update_profile(request: ProfileRequest):
         )
     except Exception:
         current_profile_obj = get_default_test_profile()
+
+    # 프론트에서 확정된 topic을 focus_areas에 pre-populate (없는 경우에만)
+    if ctx.topic and not current_profile_obj.learning_goal.focus_areas:
+        current_profile_obj.learning_goal.focus_areas = [ctx.topic]
 
     try:
         # Step 1: 사용자 메시지가 있으면 프로필 업데이트 (Update Agent)
@@ -108,6 +118,8 @@ async def chat_and_update_profile(request: ProfileRequest):
             current_profile=updated_profile_obj,
             exam_type=exam_type_enum,
             client=generator_instance.client,
+            topic=ctx.topic,
+            problem_count=ctx.problem_count,
         )
 
         # Step 3: 백엔드 명세에 맞춰 응답 (snake_case -> camelCase는 Spring에서 처리 가능)
