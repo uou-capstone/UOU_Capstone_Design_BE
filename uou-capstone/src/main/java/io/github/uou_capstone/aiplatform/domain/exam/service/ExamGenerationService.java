@@ -137,20 +137,12 @@ public class ExamGenerationService {
         
         String lectureContent;
         if (pdfMaterial != null) {
-            // PDF 파일이 있는 경우, PDF 텍스트 추출 시도
             String pdfPath = pdfMaterial.getFilePath();
-            String pdfText = null;
-            try {
-                // ========== PDF 텍스트 추출 ==========
-                // PdfTextExtractor를 사용하여 PDF 내용 추출
-                pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractText(pdfPath);
+            // 로컬에 없거나 /app/ 경로(ai-service 전용)면 추출 생략 → 경로만 넘겨 ai-service가 읽도록 함
+            String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractTextIfLocal(pdfPath);
+            if (pdfText != null && !pdfText.trim().isEmpty()) {
                 log.debug("PDF 텍스트 추출 완료: lectureId={}, textLength={}", requestDto.getLectureId(), pdfText.length());
-            } catch (Exception e) {
-                log.warn("PDF 텍스트 추출 실패: lectureId={}, pdfPath={}", requestDto.getLectureId(), pdfPath, e);
-                // PDF 추출 실패 시 파일 경로 사용 (FastAPI에서 처리 가능)
             }
-            
-            // PDF 텍스트가 성공적으로 추출된 경우 텍스트 사용, 실패한 경우 파일 경로 사용
             lectureContent = (pdfText != null && !pdfText.trim().isEmpty()) ? pdfText : pdfPath;
         } else {
             // PDF가 없는 경우: 요청의 lectureContent → 강의 제목·설명 순으로 사용 (PDF 없이도 시험 생성 가능)
@@ -208,12 +200,24 @@ public class ExamGenerationService {
                 }
             } catch (JsonProcessingException e) {
                 log.warn("Failed to parse cached profile, generating new one", e);
-                profile = callProfileAgentOrDefault(lectureContent, requestDto.getUserProfile());
+                profile = callProfileAgentOrDefault(
+                        lectureContent,
+                        requestDto.getUserProfile(),
+                        requestDto.getExamType(),
+                        requestDto.getTopic(),
+                        requestedCount
+                );
             }
         } else {
             // 프로필 없음 → 생성: ProfileAgent(/api/test-gen/profile) 호출, 404 시 기본 프로필 사용
             log.info("Profile cache miss or user profile provided: contentHash={}", contentHash);
-            profile = callProfileAgentOrDefault(lectureContent, requestDto.getUserProfile());
+            profile = callProfileAgentOrDefault(
+                    lectureContent,
+                    requestDto.getUserProfile(),
+                    requestDto.getExamType(),
+                    requestDto.getTopic(),
+                    requestedCount
+            );
 
             // 5-3. 생성된 Profile을 Redis에 캐싱 (사용자가 Profile을 제공하지 않은 경우만)
             if (requestDto.getUserProfile() == null) {
@@ -544,11 +548,25 @@ public class ExamGenerationService {
 
     /**
      * 프로필 없을 때 생성: ProfileAgent(/api/test-gen/profile) 호출.
+     * examType/topic/problemCount를 넘기면 ai가 프론트에서 이미 선택한 정보를 재질문하지 않음.
      * 404(엔드포인트 미구현) 시 기본 프로필로 폴백하여 "프로필 없으면 생성"을 보장하고 502 방지.
      */
-    private TestProfileDto callProfileAgentOrDefault(String lectureContent, TestProfileDto existingProfile) {
+    private TestProfileDto callProfileAgentOrDefault(
+            String lectureContent,
+            TestProfileDto existingProfile,
+            ExamType examType,
+            String topic,
+            Integer problemCount
+    ) {
         try {
-            return profileAgent.generateOrValidateProfile(lectureContent, existingProfile);
+            String examTypeStr = toAiExamType(examType);
+            return profileAgent.generateOrValidateProfile(
+                    lectureContent,
+                    examTypeStr,
+                    topic,
+                    problemCount,
+                    existingProfile
+            );
         } catch (WebClientResponseException e) {
             if (HttpStatusCode.valueOf(404).equals(e.getStatusCode())) {
                 log.warn("[ProfileAgent] POST /api/test-gen/profile 404 - ai-service에 해당 엔드포인트가 없습니다. 기본 프로필로 생성하여 진행합니다.");
@@ -556,6 +574,23 @@ public class ExamGenerationService {
             }
             throw e;
         }
+    }
+
+    /**
+     * Spring ExamType → ai-service exam_type 문자열 매핑
+     * FLASH_CARD → Flash_Card, SHORT_ANSWER → Short_Answer 등
+     */
+    private String toAiExamType(ExamType examType) {
+        if (examType == null) {
+            return null;
+        }
+        return switch (examType) {
+            case FLASH_CARD -> "Flash_Card";
+            case OX_PROBLEM -> "OX_Problem";
+            case FIVE_CHOICE -> "Five_Choice";
+            case SHORT_ANSWER -> "Short_Answer";
+            case DEBATE -> "Debate";
+        };
     }
 
     /** 프로필 없을 때 사용하는 기본 프로필 (문서: user_profile 없으면 자동 생성. FastAPI get_default_test_profile과 동일 의미) */

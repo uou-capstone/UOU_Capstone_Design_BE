@@ -134,8 +134,8 @@ public class ExamGenerationStreamService {
             
             case DEBATE:
                 return debateGeneratorAgent.executeStreaming(request);
-            
             default:
+                // enum에 모든 값이 있으면 도달하지 않음. null/미래 enum 대비 및 컴파일 보장용.
                 throw new BusinessException(
                         CommonErrorCode.INVALID_PARAMETER,
                         "지원하지 않는 시험 유형입니다: " + examType
@@ -156,18 +156,11 @@ public class ExamGenerationStreamService {
                 .orElse(null);
         
         if (pdfMaterial != null) {
-            // ========== PDF 텍스트 추출 ==========
             String pdfPath = pdfMaterial.getFilePath();
-            String pdfText = null;
-            try {
-                pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractText(pdfPath);
+            String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractTextIfLocal(pdfPath);
+            if (pdfText != null && !pdfText.trim().isEmpty()) {
                 log.debug("PDF 텍스트 추출 완료: lectureId={}, textLength={}", lectureId, pdfText.length());
-            } catch (Exception e) {
-                log.warn("PDF 텍스트 추출 실패: lectureId={}, pdfPath={}", lectureId, pdfPath, e);
-                // PDF 추출 실패 시 파일 경로 사용 (FastAPI에서 처리 가능)
             }
-            
-            // PDF 텍스트가 성공적으로 추출된 경우 텍스트 사용, 실패한 경우 파일 경로 사용
             return (pdfText != null && !pdfText.trim().isEmpty()) ? pdfText : pdfPath;
         }
 

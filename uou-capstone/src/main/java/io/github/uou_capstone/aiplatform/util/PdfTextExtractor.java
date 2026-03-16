@@ -29,6 +29,33 @@ import java.nio.file.Paths;
 public class PdfTextExtractor {
 
     /**
+     * 로컬에 파일이 있을 때만 PDF 텍스트 추출.
+     * file_path가 다른 컨테이너(예: ai-service의 /app/uploads/...) 경로인 경우 null을 반환하여
+     * 호출부에서 경로를 그대로 넘기고, 해당 서비스가 파일을 읽도록 할 때 사용.
+     *
+     * @param filePath PDF 파일 경로
+     * @return 추출된 텍스트, 또는 경로가 원격이거나 추출 실패 시 null
+     */
+    public static String extractTextIfLocal(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return null;
+        }
+        if (filePath.startsWith("/app/")) {
+            return null;
+        }
+        try {
+            Path path = Paths.get(filePath);
+            if (!Files.exists(path) || !Files.isRegularFile(path)) {
+                return null;
+            }
+            return extractText(filePath);
+        } catch (Exception e) {
+            log.debug("PDF 로컬 추출 생략 또는 실패: path={}", filePath, e);
+            return null;
+        }
+    }
+
+    /**
      * PDF 파일에서 전체 텍스트 추출
      * 
      * @param filePath PDF 파일 경로

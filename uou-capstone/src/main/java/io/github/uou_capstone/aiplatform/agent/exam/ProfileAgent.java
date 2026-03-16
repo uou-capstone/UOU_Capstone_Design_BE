@@ -45,18 +45,40 @@ public class ProfileAgent extends AbstractAgent {
      * FastAPI POST /api/test-gen/profile 응답에서 updated_profile만 추출해 반환합니다.
      *
      * @param lectureContent 강의 자료 내용
+     * @param examType 시험 유형 (예: Flash_Card, Short_Answer 등) - 없으면 Flash_Card 로 기본 처리될 수 있음
+     * @param topic 프론트에서 선택한 주제(선택)
+     * @param problemCount 프론트에서 선택한 문제 수(선택)
      * @param existingProfile 기존 Profile (선택적)
      * @return 생성/검증된 Profile (updated_profile)
      */
     @SuppressWarnings("unchecked")
-    public TestProfileDto generateOrValidateProfile(String lectureContent, TestProfileDto existingProfile) {
+    public TestProfileDto generateOrValidateProfile(
+            String lectureContent,
+            String examType,
+            String topic,
+            Integer problemCount,
+            TestProfileDto existingProfile
+    ) {
         Map<String, Object> context = new HashMap<>();
         context.put("lecture_content", lectureContent);
+        if (examType != null && !examType.isBlank()) {
+            context.put("exam_type", examType);
+        }
+        if (topic != null && !topic.isBlank()) {
+            context.put("topic", topic);
+        }
+        if (problemCount != null && problemCount > 0) {
+            context.put("problem_count", problemCount);
+        }
         if (existingProfile != null) {
             context.put("existing_profile", existingProfile);
         }
 
-        AgentRequest request = new SimpleAgentRequest("Generate or validate test profile", context);
+        String prompt = "Generate or validate test profile.";
+        if (examType != null && !examType.isBlank()) {
+            prompt += " Exam type for this request: " + examType + ". Do not assume Flash_Card.";
+        }
+        AgentRequest request = new SimpleAgentRequest(prompt, context);
         Map<String, Object> response = execute(request, (Class<Map<String, Object>>) (Class<?>) Map.class);
 
         Object updated = response != null ? response.get("updated_profile") : null;

@@ -20,6 +20,12 @@ public class ExamGenerationRequestDto {
     
     @Min(value = 1, message = "생성할 문제/카드 수는 1개 이상이어야 합니다.")
     private Integer targetCount; // 생성할 문제/카드 수 (기본값: 10)
+
+    /**
+     * 프론트에서 입력한 시험 주제(예: "프로세스와 스레드의 차이").
+     * ProfileAgent 호출 시 context.topic 및 problem_count 로 전달됩니다.
+     */
+    private String topic;
     
     private String lectureContent; // 강의 자료 텍스트 (Markdown 등) - 선택적
     private TestProfileDto userProfile; // 사용자 프로필 (선택적, 없으면 자동 생성)

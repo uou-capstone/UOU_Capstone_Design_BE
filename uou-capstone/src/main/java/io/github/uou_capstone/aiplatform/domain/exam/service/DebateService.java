@@ -93,13 +93,9 @@ public class DebateService {
                 .orElse(null);
         
         if (pdfMaterial != null) {
-            try {
-                String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractText(pdfMaterial.getFilePath());
-                lectureContent = (pdfText != null && !pdfText.trim().isEmpty()) ? pdfText : pdfMaterial.getFilePath();
-            } catch (Exception e) {
-                log.warn("PDF 텍스트 추출 실패: lectureId={}", lecture.getId(), e);
-                lectureContent = pdfMaterial.getFilePath();
-            }
+            String pdfPath = pdfMaterial.getFilePath();
+            String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor.extractTextIfLocal(pdfPath);
+            lectureContent = (pdfText != null && !pdfText.trim().isEmpty()) ? pdfText : pdfPath;
         } else if (lecture.getDescription() != null) {
             lectureContent = lecture.getDescription();
         }
