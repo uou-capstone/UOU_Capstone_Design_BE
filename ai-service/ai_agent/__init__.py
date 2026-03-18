@@ -13,11 +13,10 @@ else:
 
 # --- 하위 모듈 import ---
 from ai_agent.Lecture_Agent.component import (
-    MainLectureAgent,
     MainQandAAgent,
     PdfAnalysis,
 )
 
-__all__ = ["MainLectureAgent", "MainQandAAgent", "PdfAnalysis"]
+__all__ = ["MainQandAAgent", "PdfAnalysis"]
 
 print("[ai_agent] initialized successfully.")

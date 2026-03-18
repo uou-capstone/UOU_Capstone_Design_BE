@@ -2,10 +2,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from app.routers.delegator import router as delegator_router
+from app.routers.session import router as session_router
 from app.routers.pdf import router as pdf_router
-from app.routers.lecture import router as lecture_router
-from app.routers.qa import router as qa_router
 from app.routers.upload import router as upload_router
 from app.routers.note_gen import router as note_gen_router
 from app.routers.test_gen import router as test_gen_router
@@ -36,7 +34,7 @@ def create_app() -> FastAPI:
             content={
                 "detail": exc.errors(),
                 "body": body_str,
-                "message": "요청 형식이 올바르지 않습니다. JSON 형식으로 stage와 payload를 전달해야 합니다."
+                "message": "요청 형식이 올바르지 않습니다."
             },
         )
     
@@ -50,10 +48,8 @@ def create_app() -> FastAPI:
         expose_headers=["*"],
     )
     
-    app.include_router(delegator_router)
+    app.include_router(session_router)
     app.include_router(pdf_router)
-    app.include_router(lecture_router)
-    app.include_router(qa_router)
     app.include_router(upload_router)
     app.include_router(note_gen_router)
     app.include_router(test_gen_router)
