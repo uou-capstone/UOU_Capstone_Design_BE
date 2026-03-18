@@ -34,7 +34,6 @@ import java.util.Map;
 public class ExamGenerationStreamService {
 
     // ========== 의존성 주입 ==========
-    private final ProfileAgent profileAgent;
     private final FlashCardGeneratorAgent flashCardGeneratorAgent;
     private final OxProblemGeneratorAgent oxProblemGeneratorAgent;
     private final FiveChoiceGeneratorAgent fiveChoiceGeneratorAgent;
@@ -64,26 +63,10 @@ public class ExamGenerationStreamService {
         // ========== 2단계: 강의 자료 내용 조회 ==========
         String lectureContent = getLectureContent(session.getLecture().getId());
 
-        // ========== 3단계: Profile 스트리밍 ==========
-        // ProfileAgent를 먼저 스트리밍
+        // ========== 3단계: Profile 스트리밍 (미사용) ==========
+        // 정책(케이스 A): ProfileAgent를 사용하지 않으므로 프로필 스트리밍 단계는 스킵한다.
         Map<String, Object> priorProfileMap = session.getPriorProfileJson();
-        Flux<StreamingEvent> profileStream;
-        
-        if (priorProfileMap != null) {
-            // 이미 Profile이 있으면 스킵
-            profileStream = Flux.empty();
-        } else {
-            // Profile 생성 스트리밍
-            Map<String, Object> profileContext = new HashMap<>();
-            profileContext.put("lecture_content", lectureContent);
-            
-            // 사용자가 제공한 Profile은 ExamGenerationService에서 처리되므로
-            // 여기서는 null로 설정 (이미 생성된 Profile이 있으면 priorProfileMap에 있음)
-            profileContext.put("existing_profile", null);
-            
-            AgentRequest profileRequest = new SimpleAgentRequest("Generate or validate profile", profileContext);
-            profileStream = profileAgent.executeStreaming(profileRequest);
-        }
+        Flux<StreamingEvent> profileStream = Flux.empty();
 
         // ========== 4단계: 시험 유형별 문제 생성 스트리밍 ==========
         Flux<StreamingEvent> examGenerationStream = getExamGenerationStream(

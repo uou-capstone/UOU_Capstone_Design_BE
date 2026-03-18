@@ -7,7 +7,6 @@ import io.github.uou_capstone.aiplatform.agent.exam.FeedbackGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FlashCardGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.FiveChoiceGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.OxProblemGeneratorAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.ProfileAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.ShortAnswerGeneratorAgent;
 import io.github.uou_capstone.aiplatform.agent.exam.debate.DebatePhase1Agent;
 import io.github.uou_capstone.aiplatform.agent.exam.debate.DebaterAgent;
@@ -99,19 +98,6 @@ public class AgentConfig {
     }
 
     // ========== 시험 생성 Agent ==========
-
-    /**
-     * ProfileAgent Bean 등록
-     * 
-     * 역할: 시험 생성 전 Profile 완성 여부 판단 및 생성
-     * 엔드포인트: /api/test-gen/profile
-     * 
-     * 사용 위치: ExamGenerationService.generateExam()
-     */
-    @Bean
-    public ProfileAgent profileAgent() {
-        return new ProfileAgent(aiServiceWebClient, objectMapper, agentPerformanceLogger);
-    }
 
     /**
      * FlashCardGeneratorAgent Bean 등록
