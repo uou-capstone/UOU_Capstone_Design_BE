@@ -86,7 +86,7 @@ class ExplainerAgent:
         )
         contents.append(user_prompt)
 
-        async for event in self._bridge.stream(contents):
+        async for event in self._bridge.stream(contents, agent="explainer", tool="EXPLAIN_PAGE"):
             yield event
 
     async def run(

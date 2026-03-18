@@ -50,7 +50,10 @@ class QuizAgents:
             count: 생성할 문제 수
         """
         yield NdjsonEvent(
-            type=NdjsonEventType.THOUGHT_DELTA,
+            type=NdjsonEventType.AGENT_DELTA,
+            agent="quiz",
+            tool="GENERATE_QUIZ",
+            channel="thought",
             delta=f"{quiz_type} 유형 퀴즈 {count}문항을 생성 중입니다...",
         )
 
@@ -58,11 +61,15 @@ class QuizAgents:
             quiz_data = await self._generate_quiz(quiz_type, lecture_content, profile, count)
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
+                agent="quiz",
+                tool="GENERATE_QUIZ",
+                final=True,
                 data={"quiz": quiz_data, "quiz_type": quiz_type},
             )
         except Exception as exc:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
+                agent="quiz",
                 message=f"퀴즈 생성 실패 ({quiz_type}): {exc}",
             )
 

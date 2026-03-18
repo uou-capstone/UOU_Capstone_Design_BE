@@ -67,7 +67,7 @@ class QaAgent:
         user_prompt = f"{context_prefix}[학생 질문]: {question}\n\n위 질문에 답변해주세요."
         contents.append(user_prompt)
 
-        async for event in self._bridge.stream(contents):
+        async for event in self._bridge.stream(contents, agent="qa", tool="ANSWER_QUESTION"):
             yield event
 
     async def run(

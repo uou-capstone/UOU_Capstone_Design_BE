@@ -1,8 +1,8 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.1 (코드 리뷰 및 최적화 반영)  
-> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-17  
-> **설계 기준**: `통합_교육_에이전트.pdf` v1.0
+> **버전**: v2.2 (Option B 절충안 — agent_delta 규격 + /bridge/* 단건 위임 엔드포인트)  
+> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-18  
+> **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영
 
 ---
 
@@ -11,20 +11,22 @@
 MergeEduAgent는 학습자에게 강의 설명, 질의응답, 퀴즈 생성/채점, 복습 루프를 제공하는 **멀티 에이전트 오케스트레이션 시스템**입니다.
 
 ```
-Web(React) ──POST /api/session/:id/event/stream──► FastAPI (ai-service)
-                                                       │
-                                              OrchestrationEngine
-                                             ┌─────────┼─────────┐
-                                        StateReducer  Orchestrator  ToolDispatcher
-                                                          │              │
-                                                    (규칙 기반 계획)   (에이전트 실행)
-                                                                    ┌───┼───┐───┐
-                                                              Explainer  QA  Quiz  Grader
-                                                                    │
-                                                          GeminiBridgeClient
-                                                                    │
-                                                          Google Gemini API
+Spring Boot / Web ──POST /api/session/{id}/event/stream──► FastAPI OrchestrationEngine
+  (세션 기반 학습 흐름)                                    ┌────────┼────────┐
+                                                      StateReducer Orchestrator ToolDispatcher
+                                                                              │
+                                                                   Explainer · QA · Quiz · Grader
+                                                                              │
+Spring Boot ──────────POST /bridge/quiz  (단건 위임)───────────────► QuizAgents
+Spring Boot ──────────POST /bridge/grade (단건 위임)───────────────► GraderAgent
+                                                                              │
+                                                                   GeminiBridgeClient → Gemini API
 ```
+
+> **핵심 원칙**: Spring Boot는 오케스트레이션을 담당하지 않습니다.  
+> - **세션 흐름**: `/api/session/{id}/event/stream` 단일 진입점으로 이벤트 전달 → FastAPI가 에이전트 호출 순서 결정  
+> - **단건 위임**: `/bridge/quiz`, `/bridge/grade`는 "퀴즈 만들어줘", "채점해줘" 같은 원자 작업 전용  
+> - `/bridge/*`를 순서대로 여러 번 호출해 오케스트레이션을 구현하는 것은 **금지** 패턴입니다.
 
 ---
 
@@ -60,7 +62,8 @@ ai-service/
     │   ├── redis_client.py        ← Redis 연결 관리
     │   └── session_store.py       ← 세션 영속화 (Redis, TTL 24h)
     └── routers/
-        ├── session.py             ← 통합 세션 API (핵심 진입점)
+        ├── session.py             ← 세션 API — 단일 진입점 (오케스트레이션 위임)
+        ├── bridge.py              ← Bridge API — 단건 태스크 위임 (/bridge/quiz, /bridge/grade)
         ├── note_gen.py            ← 강의 노트 생성 API
         ├── test_gen.py            ← 시험 생성 API
         ├── pdf.py                 ← PDF 분석 API
@@ -82,7 +85,7 @@ ai-service/
 | `LearnerModel` | 학습자 모델 (점수 이력, 약점 개념, 페이지별 퀴즈 시도 횟수) |
 | `SessionState` | 세션 전체 상태 (pages + learner + quiz_history + messages) |
 | `OrchestratorPlan` | 실행 계획 (OrchestratorAction 목록) |
-| `NdjsonEvent` | 스트리밍 이벤트 (thought_delta / answer_delta / done / error) |
+| `NdjsonEvent` | 스트리밍 이벤트 (agent_delta / done / error) — agent/tool/channel/final 필드 포함 |
 
 #### 주요 제약
 
@@ -97,7 +100,7 @@ ai-service/
 |---|---|
 | `generate(contents)` | 비스트리밍 텍스트 생성 (`asyncio.wait_for` 타임아웃 적용) |
 | `generate_structured(contents, schema)` | JSON 구조화 출력 (타임아웃 적용) |
-| `stream(contents)` | thought_delta / answer_delta / done NDJSON 스트림 |
+| `stream(contents, agent, tool)` | agent_delta / done NDJSON 스트림 (agent/tool/channel 필드 포함) |
 | `load_pdf_part(pdf_path)` | PDF → Gemini Part 변환 (`@lru_cache(maxsize=32)`) |
 | `load_text(text_path)` | MD/TXT 텍스트 읽기 (다중 인코딩 fallback) |
 
@@ -207,13 +210,16 @@ NdjsonEvent 스트림 반환
 
 ## 4. API 엔드포인트
 
-### 4.1 세션 API (`/api/session`) — 핵심
+### 4.1 세션 API (`/api/session`) — 단일 진입점 ★
+
+Spring Boot는 학습 세션의 모든 AI 흐름을 이 단일 진입점으로만 전달합니다.  
+어떤 에이전트를 호출할지는 FastAPI OrchestrationEngine이 결정합니다.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/api/session/by-lecture/{lectureId}` | 세션 조회/생성 |
 | `POST` | `/api/session/{sessionId}/event` | 단건 이벤트 (비스트리밍) |
-| `POST` | `/api/session/{sessionId}/event/stream` | NDJSON 스트리밍 이벤트 |
+| `POST` | `/api/session/{sessionId}/event/stream` | NDJSON 스트리밍 이벤트 **← 주 진입점** |
 | `GET` | `/api/session/{sessionId}/state` | 세션 상태 전체 조회 |
 | `DELETE` | `/api/session/{sessionId}` | 세션 삭제 |
 
@@ -222,21 +228,43 @@ NdjsonEvent 스트림 반환
 ```json
 POST /api/session/123/event/stream
 {
-  "type": "SESSION_ENTERED",
+  "type": "USER_MESSAGE",
   "lecture_id": 456,
-  "payload": {}
+  "payload": { "question": "소프트웨어 프로세스의 4가지 활동은?" }
 }
 ```
 
-#### 스트리밍 응답 형식 (NDJSON)
+#### 스트리밍 응답 형식 (NDJSON — agent_delta 규격)
 
-```
-{"type": "thought_delta", "delta": "강의 자료 분석 중..."}
-{"type": "answer_delta", "delta": "소프트웨어 프로세스란..."}
-{"type": "done", "data": {"ui": {"widget": "QUIZ_DECISION"}}}
+```json
+{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "강의 자료 분석 중..."}
+{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "소프트웨어 프로세스란..."}
+{"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
 ```
 
-### 4.2 기타 API
+### 4.2 Bridge API (`/bridge`) — 단건 태스크 위임 전용
+
+Spring Boot가 학습 세션 흐름과 무관하게 단건 AI 작업만 필요할 때 사용합니다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `POST` | `/bridge/quiz` | 강의 내용 → 퀴즈 생성 |
+| `POST` | `/bridge/grade` | 답안 → 채점 결과 |
+
+> **⚠ 금지 패턴**: `/bridge/*`를 순서대로 여러 번 호출해 흐름을 구성하는 것은 Spring Boot가 오케스트레이션을 수행하는 것과 동일하므로 허용하지 않습니다.
+
+#### 요청/응답 예시
+
+```json
+POST /bridge/quiz
+{ "quiz_type": "Five_Choice", "lecture_content": "...", "count": 5 }
+
+// 응답 (NDJSON)
+{"type": "agent_delta", "agent": "quiz", "tool": "GENERATE_QUIZ", "channel": "thought", "delta": "퀴즈 생성 중..."}
+{"type": "done", "agent": "quiz", "tool": "GENERATE_QUIZ", "final": true, "data": {"quiz": [...], "quiz_type": "Five_Choice"}}
+```
+
+### 4.3 기타 API
 
 | 경로 | 설명 |
 |---|---|
@@ -249,14 +277,29 @@ POST /api/session/123/event/stream
 
 ---
 
-## 5. 스트리밍 이벤트 타입
+## 5. 스트리밍 이벤트 타입 (agent_delta 규격)
 
-| type | delta | data | message | 설명 |
-|---|---|---|---|---|
-| `thought_delta` | 추론 텍스트 | - | - | AI 내부 사고 과정 |
-| `answer_delta` | 답변 텍스트 | - | - | 실제 답변 (점진적 출력) |
-| `done` | - | `{ui?, quiz?, grading?, ...}` | - | 처리 완료 |
-| `error` | - | - | 오류 메시지 | 오류 발생 |
+### 이벤트 필드
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `type` | string | `"agent_delta"` \| `"done"` \| `"error"` |
+| `agent` | string | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
+| `tool` | string? | 호출 툴 (e.g. `"EXPLAIN_PAGE"`, `"ANSWER_QUESTION"`, `"GENERATE_QUIZ"`, `"GRADE"`) |
+| `channel` | string? | `agent_delta` 전용 — `"thought"` (내부 추론) \| `"main"` (실제 답변) |
+| `delta` | string? | `agent_delta` 텍스트 청크 |
+| `final` | bool? | `done` 이벤트에서 `true` |
+| `data` | object? | `done` 이벤트 부가 데이터 |
+| `message` | string? | `error` 이벤트 오류 메시지 |
+
+### 이벤트 타입별 예시
+
+```json
+{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "강의 자료 분석 중..."}
+{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "소프트웨어 프로세스란..."}
+{"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
+{"type": "error",       "agent": "system",    "message": "서버 오류가 발생했습니다."}
+```
 
 #### `done.data` 필드 상세
 
@@ -291,10 +334,30 @@ POST /api/session/123/event/stream
 
 | 항목 | 변경 전 | 변경 후 |
 |---|---|---|
-| 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/session/:id/event/stream` |
-| 세션 생성/조회 | 없음 | `GET /api/session/by-lecture/:lectureId` |
+| 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/session/{id}/event/stream` |
+| 세션 생성/조회 | 없음 | `GET /api/session/by-lecture/{lectureId}` |
+| 단건 퀴즈/채점 | 없음 | `POST /bridge/quiz`, `POST /bridge/grade` |
 | 스트리밍 포맷 | SSE (`data: ...\n\n`) | NDJSON (`{...}\n`) |
+| 이벤트 타입 | `thought_delta` / `answer_delta` | `agent_delta` (channel 필드로 구분) |
 | 이벤트 모델 | `stage` 문자열 | `AppEventType` Enum |
+
+### Spring Boot 연동 패턴
+
+```
+✅ 허용: 학습 세션 흐름
+  Spring Boot → POST /api/session/{id}/event/stream {"type": "PAGE_CHANGED", ...}
+                                          ↓
+                          FastAPI가 에이전트 호출 순서 결정
+                                          ↓
+                          NDJSON 스트림 반환
+
+✅ 허용: 단건 태스크 위임
+  Spring Boot → POST /bridge/quiz {"quiz_type": "OX_Problem", "lecture_content": "..."}
+  Spring Boot → POST /bridge/grade {"quiz_type": "OX_Problem", "problems": [...], ...}
+
+❌ 금지: Spring Boot가 bridge를 순서대로 호출해 흐름 구성
+  Spring Boot → /bridge/quiz → 결과 수령 → /bridge/grade → 결과 수령  (오케스트레이션 금지)
+```
 
 ---
 

@@ -71,7 +71,10 @@ class GraderAgent:
             lecture_content: 강의 자료 텍스트 (단답/서술 채점용)
         """
         yield NdjsonEvent(
-            type=NdjsonEventType.THOUGHT_DELTA,
+            type=NdjsonEventType.AGENT_DELTA,
+            agent="grader",
+            tool="GRADE",
+            channel="thought",
             delta="채점을 진행 중입니다...",
         )
 
@@ -83,11 +86,15 @@ class GraderAgent:
 
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
+                agent="grader",
+                tool="GRADE",
+                final=True,
                 data={"grading": result, "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO},
             )
         except Exception as exc:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
+                agent="grader",
                 message=f"채점 실패: {exc}",
             )
 

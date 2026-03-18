@@ -179,17 +179,20 @@ class OrchestratorPlan(BaseModel):
 # ---------------------------------------------------------------------------
 
 class NdjsonEventType(str, Enum):
-    THOUGHT_DELTA = "thought_delta"
-    ANSWER_DELTA = "answer_delta"
+    AGENT_DELTA = "agent_delta"   # 텍스트 스트리밍 (channel: "thought"|"main")
     DONE = "done"
     ERROR = "error"
 
 
 class NdjsonEvent(BaseModel):
     type: NdjsonEventType
+    agent: Optional[str] = None    # "explainer" | "qa" | "quiz" | "grader" | "system"
+    tool: Optional[str] = None     # ToolName 문자열
+    channel: Optional[str] = None  # "thought" | "main"
     delta: Optional[str] = None
     data: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
+    final: Optional[bool] = None   # done 이벤트에서 True
 
     def to_ndjson_line(self) -> str:
         return self.model_dump_json(exclude_none=True) + "\n"

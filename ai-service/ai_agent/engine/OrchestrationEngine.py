@@ -68,10 +68,12 @@ class OrchestrationEngine:
 
             if not plan.actions:
                 yield NdjsonEvent(
-                    type=NdjsonEventType.ANSWER_DELTA,
+                    type=NdjsonEventType.AGENT_DELTA,
+                    agent="system",
+                    channel="main",
                     delta="처리할 액션이 없습니다.",
                 )
-                yield NdjsonEvent(type=NdjsonEventType.DONE, data={})
+                yield NdjsonEvent(type=NdjsonEventType.DONE, agent="system", final=True, data={})
                 return
 
             # 4. 액션 실행 (ToolDispatcher)
@@ -85,6 +87,7 @@ class OrchestrationEngine:
             )
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
+                agent="system",
                 message=f"서버 오류가 발생했습니다: {exc}",
             )
 
@@ -109,7 +112,7 @@ class OrchestrationEngine:
         data_patches = []
 
         async for ev in self.handle_event_stream(session_id, lecture_id, event):
-            if ev.type == NdjsonEventType.ANSWER_DELTA and ev.delta:
+            if ev.type == NdjsonEventType.AGENT_DELTA and ev.channel == "main" and ev.delta:
                 messages.append(ev.delta)
             elif ev.type == NdjsonEventType.DONE and ev.data:
                 if "ui" in ev.data:

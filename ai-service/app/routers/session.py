@@ -106,11 +106,11 @@ async def handle_event_stream(
     NDJSON 스트리밍 이벤트 처리.
     각 줄은 독립적인 JSON 객체입니다.
 
-    스트림 이벤트 타입:
-      {"type": "thought_delta", "delta": "..."}
-      {"type": "answer_delta", "delta": "..."}
-      {"type": "done", "data": {...}}
-      {"type": "error", "message": "..."}
+    스트림 이벤트 포맷 (agent_delta 규격):
+      {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "..."}
+      {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "..."}
+      {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {...}}
+      {"type": "error",       "agent": "system",    "message": "..."}
     """
     event = AppEvent(type=req.type, payload=req.payload)
 
@@ -122,7 +122,7 @@ async def handle_event_stream(
                 yield ndjson_event.to_ndjson_line()
         except Exception as exc:
             from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
-            err = NdjsonEvent(type=NdjsonEventType.ERROR, message=str(exc))
+            err = NdjsonEvent(type=NdjsonEventType.ERROR, agent="system", message=str(exc))
             yield err.to_ndjson_line()
 
     return StreamingResponse(

@@ -4,11 +4,11 @@ GeminiBridgeClient
 설계서 §9 기준: thought/answer 채널 분리, NDJSON 포맷 통일.
 모든 서브 에이전트는 이 클라이언트를 통해 Gemini API를 호출한다.
 
-스트리밍 출력 포맷 (NDJSON):
-  {"type": "thought_delta", "delta": "..."}
-  {"type": "answer_delta", "delta": "..."}
-  {"type": "done", "data": {...}}
-  {"type": "error", "message": "..."}
+스트리밍 출력 포맷 (NDJSON — agent_delta 규격):
+  {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "..."}
+  {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main", "delta": "..."}
+  {"type": "done", "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {...}}
+  {"type": "error", "agent": "explainer", "message": "..."}
 """
 from __future__ import annotations
 
@@ -101,9 +101,17 @@ class GeminiBridgeClient:
         self,
         contents: List[Any],
         done_data: Optional[Dict[str, Any]] = None,
+        agent: str = "system",
+        tool: Optional[str] = None,
     ) -> AsyncGenerator[NdjsonEvent, None]:
         """
-        Gemini 스트리밍 호출. thought/answer 채널을 분리해 NdjsonEvent를 yield한다.
+        Gemini 스트리밍 호출. thought/main 채널을 분리해 agent_delta 포맷으로 yield한다.
+
+        Args:
+            contents: Gemini API에 전달할 컨텐츠 리스트
+            done_data: 완료 이벤트에 포함할 추가 데이터
+            agent: 호출 주체 에이전트 이름 ("explainer"|"qa"|"quiz"|"grader"|"system")
+            tool: 호출 툴 이름 (ToolName 문자열)
 
         [핵심] 동기 SDK 이터레이터의 각 next() 호출은 네트워크 I/O를 블로킹한다.
         asyncio.Queue + run_in_executor 패턴으로 이벤트 루프 블로킹을 방지한다.
@@ -131,13 +139,17 @@ class GeminiBridgeClient:
                                 continue
                             is_thought = getattr(part, "thought", False)
                             event = NdjsonEvent(
-                                type=NdjsonEventType.THOUGHT_DELTA if is_thought else NdjsonEventType.ANSWER_DELTA,
+                                type=NdjsonEventType.AGENT_DELTA,
+                                agent=agent,
+                                tool=tool,
+                                channel="thought" if is_thought else "main",
                                 delta=text,
                             )
                             loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
                 error_event = NdjsonEvent(
                     type=NdjsonEventType.ERROR,
+                    agent=agent,
                     message=f"GeminiBridgeClient 스트리밍 실패: {exc}",
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, error_event)
@@ -155,6 +167,7 @@ class GeminiBridgeClient:
         except asyncio.TimeoutError:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
+                agent=agent,
                 message=f"Gemini 스트리밍 타임아웃 ({_STREAM_TIMEOUT}초)",
             )
         finally:
@@ -162,6 +175,9 @@ class GeminiBridgeClient:
 
         yield NdjsonEvent(
             type=NdjsonEventType.DONE,
+            agent=agent,
+            tool=tool,
+            final=True,
             data=done_data or {},
         )
 

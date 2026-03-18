@@ -77,18 +77,24 @@ class ToolDispatcher:
         try:
             if action.type == ActionType.SEND_MESSAGE:
                 yield NdjsonEvent(
-                    type=NdjsonEventType.ANSWER_DELTA,
+                    type=NdjsonEventType.AGENT_DELTA,
+                    agent="system",
+                    channel="main",
                     delta=action.message or "",
                 )
                 if action.ui_state:
                     yield NdjsonEvent(
                         type=NdjsonEventType.DONE,
+                        agent="system",
+                        final=True,
                         data={"ui": action.ui_state},
                     )
 
             elif action.type == ActionType.SET_UI_STATE:
                 yield NdjsonEvent(
                     type=NdjsonEventType.DONE,
+                    agent="system",
+                    final=True,
                     data={"ui": action.ui_state or {}},
                 )
 
@@ -98,7 +104,9 @@ class ToolDispatcher:
 
         except Exception as exc:
             yield NdjsonEvent(
-                type=NdjsonEventType.ANSWER_DELTA,
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="system",
+                channel="main",
                 delta=f"[SYSTEM] AI 도구 실행 실패 ({action.tool}): {exc}",
             )
 
@@ -125,7 +133,7 @@ class ToolDispatcher:
             # 설명 텍스트 수집 (Redis 저장용 요약 — 최대 2000자로 제한)
             answer_chunks: List[str] = []
             async for event in self._explainer.run_stream(chapter_title, pdf_path, md_path, detail):
-                if event.type == NdjsonEventType.ANSWER_DELTA and event.delta:
+                if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)
                 yield event
 
@@ -194,6 +202,8 @@ class ToolDispatcher:
                         if not event.data.get("passed"):
                             yield NdjsonEvent(
                                 type=NdjsonEventType.DONE,
+                                agent="grader",
+                                final=True,
                                 data={**event.data, "ui": {"widget": "REVIEW_DECISION"}},
                             )
                             continue
@@ -201,6 +211,7 @@ class ToolDispatcher:
             else:
                 yield NdjsonEvent(
                     type=NdjsonEventType.ERROR,
+                    agent="grader",
                     message="채점할 퀴즈 기록을 찾을 수 없습니다.",
                 )
 
@@ -226,6 +237,8 @@ class ToolDispatcher:
                         if not event.data.get("passed"):
                             yield NdjsonEvent(
                                 type=NdjsonEventType.DONE,
+                                agent="grader",
+                                final=True,
                                 data={**event.data, "ui": {"widget": "REVIEW_DECISION"}},
                             )
                             continue
@@ -233,6 +246,7 @@ class ToolDispatcher:
             else:
                 yield NdjsonEvent(
                     type=NdjsonEventType.ERROR,
+                    agent="grader",
                     message="채점할 퀴즈 기록을 찾을 수 없습니다.",
                 )
 
@@ -244,6 +258,9 @@ class ToolDispatcher:
             state.append_message("system", feedback_text, {"role": "feedback"})
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
+                agent="system",
+                tool="WRITE_FEEDBACK_ENTRY",
+                final=True,
                 data={"feedback_written": True},
             )
 

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.routers.session import router as session_router
+from app.routers.bridge import router as bridge_router
 from app.routers.pdf import router as pdf_router
 from app.routers.upload import router as upload_router
 from app.routers.note_gen import router as note_gen_router
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     )
     
     app.include_router(session_router)
+    app.include_router(bridge_router)
     app.include_router(pdf_router)
     app.include_router(upload_router)
     app.include_router(note_gen_router)
