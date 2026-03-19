@@ -1,8 +1,9 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.2 (Option B 절충안 — agent_delta 규격 + /bridge/* 단건 위임 엔드포인트)  
+> **버전**: v2.3 (Spring Boot 피드백 2차 반영 — 필드명 통일, lecture_id optional, API 계약 문서화)  
 > **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-18  
-> **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영
+> **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
+> **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
 
 ---
 
@@ -68,6 +69,10 @@ ai-service/
         ├── test_gen.py            ← 시험 생성 API
         ├── pdf.py                 ← PDF 분석 API
         └── upload.py              ← 파일 업로드 API
+
+docs/                              ← Spring Boot 연동 계약 문서
+    ├── BRIDGE_API.md              ← 세션/Bridge API 전체 스펙 (Spring Boot 공유용)
+    └── TEST_GEN_API.md            ← 시험 생성 스키마 상세 (프론트엔드 공유용)
 ```
 
 ---
@@ -226,13 +231,23 @@ Spring Boot는 학습 세션의 모든 AI 흐름을 이 단일 진입점으로�
 #### 이벤트 요청 형식
 
 ```json
+// 세션 진입 시 (신규 세션이면 lecture_id 필수)
+POST /api/session/123/event/stream
+{
+  "type": "SESSION_ENTERED",
+  "lecture_id": 456,
+  "payload": {}
+}
+
+// 이후 이벤트 (lecture_id 생략 가능 — 세션에 이미 저장됨)
 POST /api/session/123/event/stream
 {
   "type": "USER_MESSAGE",
-  "lecture_id": 456,
   "payload": { "question": "소프트웨어 프로세스의 4가지 활동은?" }
 }
 ```
+
+> `lecture_id`는 **신규 세션 생성 시에만 필수**입니다. 기존 세션 이벤트에서는 생략하면 서버가 세션에서 자동으로 조회합니다.
 
 #### 스트리밍 응답 형식 (NDJSON — agent_delta 규격)
 
@@ -256,13 +271,34 @@ Spring Boot가 학습 세션 흐름과 무관하게 단건 AI 작업만 필요�
 #### 요청/응답 예시
 
 ```json
+// 퀴즈 생성
 POST /bridge/quiz
-{ "quiz_type": "Five_Choice", "lecture_content": "...", "count": 5 }
+{
+  "exam_type": "Five_Choice",
+  "lecture_content": "...",
+  "target_count": 5,
+  "user_profile": null
+}
 
 // 응답 (NDJSON)
 {"type": "agent_delta", "agent": "quiz", "tool": "GENERATE_QUIZ", "channel": "thought", "delta": "퀴즈 생성 중..."}
 {"type": "done", "agent": "quiz", "tool": "GENERATE_QUIZ", "final": true, "data": {"quiz": [...], "quiz_type": "Five_Choice"}}
 ```
+
+```json
+// 채점
+POST /bridge/grade
+{
+  "exam_type": "Five_Choice",
+  "problems": [ /* done.data.quiz 배열 그대로 */ ],
+  "user_answers": [
+    { "problem_id": 1, "user_response": "2" }
+  ],
+  "lecture_content": "..."
+}
+```
+
+> 상세 필드 명세는 [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) §3 참고
 
 ### 4.3 기타 API
 
@@ -332,6 +368,8 @@ POST /bridge/quiz
 
 ## 7. Spring Boot 연동 변경 사항
 
+### 7.1 전체 변경 이력
+
 | 항목 | 변경 전 | 변경 후 |
 |---|---|---|
 | 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/session/{id}/event/stream` |
@@ -340,24 +378,29 @@ POST /bridge/quiz
 | 스트리밍 포맷 | SSE (`data: ...\n\n`) | NDJSON (`{...}\n`) |
 | 이벤트 타입 | `thought_delta` / `answer_delta` | `agent_delta` (channel 필드로 구분) |
 | 이벤트 모델 | `stage` 문자열 | `AppEventType` Enum |
+| `EventRequest.lecture_id` | 매 요청 필수 | 신규 세션 생성 시에만 필수, 이후 생략 가능 |
+| `/bridge/quiz` 필드명 | `quiz_type`, `count`, `profile` | `exam_type`, `target_count`, `user_profile` |
+| `/bridge/grade` 답안 형식 | `List[Any]` (인덱스 순) | `List[UserAnswer]` (problem_id 기준) |
 
-### Spring Boot 연동 패턴
+### 7.2 Spring Boot 연동 패턴
 
 ```
 ✅ 허용: 학습 세션 흐름
-  Spring Boot → POST /api/session/{id}/event/stream {"type": "PAGE_CHANGED", ...}
-                                          ↓
-                          FastAPI가 에이전트 호출 순서 결정
-                                          ↓
-                          NDJSON 스트림 반환
+  1) GET /api/session/by-lecture/{lectureId}?pdf_path=... → session_id 수령
+  2) POST /api/session/{id}/event/stream  {"type": "SESSION_ENTERED", "lecture_id": 456}
+  3) POST /api/session/{id}/event/stream  {"type": "USER_MESSAGE", "payload": {...}}
+     ← 이후 요청은 lecture_id 생략 가능
 
 ✅ 허용: 단건 태스크 위임
-  Spring Boot → POST /bridge/quiz {"quiz_type": "OX_Problem", "lecture_content": "..."}
-  Spring Boot → POST /bridge/grade {"quiz_type": "OX_Problem", "problems": [...], ...}
+  POST /bridge/quiz  {"exam_type": "OX_Problem", "lecture_content": "...", "target_count": 5}
+  POST /bridge/grade {"exam_type": "OX_Problem", "problems": [...],
+                      "user_answers": [{"problem_id": 1, "user_response": "O"}]}
 
 ❌ 금지: Spring Boot가 bridge를 순서대로 호출해 흐름 구성
-  Spring Boot → /bridge/quiz → 결과 수령 → /bridge/grade → 결과 수령  (오케스트레이션 금지)
+  /bridge/quiz → 결과 수령 → /bridge/grade  (오케스트레이션 금지)
 ```
+
+> 전체 API 계약 및 `done.data` 스펙 상세: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md)
 
 ---
 

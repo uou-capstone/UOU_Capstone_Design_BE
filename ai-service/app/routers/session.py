@@ -33,7 +33,10 @@ _engine = OrchestrationEngine(session_store)
 class EventRequest(BaseModel):
     """클라이언트 → 서버 이벤트 요청"""
     type: AppEventType
-    lecture_id: int = Field(..., description="강의 ID (세션 생성 시 사용)")
+    lecture_id: Optional[int] = Field(
+        default=None,
+        description="강의 ID. 신규 세션 생성 시에만 필수, 기존 세션은 생략 가능",
+    )
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -78,6 +81,23 @@ async def get_or_create_session(
     )
 
 
+async def _resolve_lecture_id(session_id: int, req: EventRequest) -> int:
+    """
+    lecture_id 결정 로직.
+    요청에 lecture_id가 있으면 그것을 사용하고,
+    없으면 기존 세션에서 조회한다.
+    """
+    if req.lecture_id is not None:
+        return req.lecture_id
+    state = await session_store.get(session_id)
+    if state is not None:
+        return state.lecture_id
+    raise HTTPException(
+        status_code=400,
+        detail="신규 세션 생성 시 lecture_id가 필요합니다.",
+    )
+
+
 @router.post("/{session_id}/event")
 async def handle_event(
     session_id: int = Path(...),
@@ -87,9 +107,10 @@ async def handle_event(
     단건 이벤트 처리 (비스트리밍).
     전체 응답을 JSON 으로 반환합니다.
     """
+    lecture_id = await _resolve_lecture_id(session_id, req)
     event = AppEvent(type=req.type, payload=req.payload)
 
-    result = await _engine.handle_event(session_id, req.lecture_id, event)
+    result = await _engine.handle_event(session_id, lecture_id, event)
 
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error", "처리 실패"))
@@ -112,12 +133,13 @@ async def handle_event_stream(
       {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {...}}
       {"type": "error",       "agent": "system",    "message": "..."}
     """
+    lecture_id = await _resolve_lecture_id(session_id, req)
     event = AppEvent(type=req.type, payload=req.payload)
 
     async def ndjson_generator():
         try:
             async for ndjson_event in _engine.handle_event_stream(
-                session_id, req.lecture_id, event
+                session_id, lecture_id, event
             ):
                 yield ndjson_event.to_ndjson_line()
         except Exception as exc:

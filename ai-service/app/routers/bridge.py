@@ -26,6 +26,7 @@ from ai_agent.agents.GraderAgent import GraderAgent
 from ai_agent.agents.QuizAgents import QuizAgents
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+from ai_agent.LectureTestGenerator.schemas import UserAnswer
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
 
@@ -45,20 +46,38 @@ _NDJSON_HEADERS = {
 # ---------------------------------------------------------------------------
 
 class QuizRequest(BaseModel):
-    quiz_type: str = Field(
+    """
+    퀴즈 생성 요청.
+    schemas.py의 ProblemRequest와 필드명을 통일합니다.
+    """
+    exam_type: str = Field(
         default="Five_Choice",
         description="Five_Choice | OX_Problem | Flash_Card | Short_Answer | Debate",
     )
-    lecture_content: str
-    count: int = Field(default=5, ge=1, le=20)
-    profile: Optional[Dict[str, Any]] = None
+    lecture_content: str = Field(..., description="강의 자료 텍스트")
+    target_count: int = Field(default=5, ge=1, le=20, description="생성할 문제 수")
+    user_profile: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="TestProfile 객체. 없으면 기본 프로필 사용",
+    )
 
 
 class GradeRequest(BaseModel):
-    quiz_type: str = Field(description="Five_Choice | OX_Problem | Short_Answer | Debate")
-    problems: List[Dict[str, Any]]
-    user_answers: List[Any]
-    lecture_content: str = ""
+    """
+    채점 요청.
+    problems는 퀴즈 생성 응답의 문제 배열을 그대로 전달합니다.
+    user_answers는 problem_id 기준으로 매핑됩니다.
+    """
+    exam_type: str = Field(description="Five_Choice | OX_Problem | Short_Answer | Debate")
+    problems: List[Dict[str, Any]] = Field(
+        ...,
+        description="퀴즈 생성 응답(done.data.quiz)에서 받은 문제 배열 그대로 전달",
+    )
+    user_answers: List[UserAnswer] = Field(
+        ...,
+        description="[{problem_id: 1, user_response: '2'}, ...] 형식",
+    )
+    lecture_content: str = Field(default="", description="단답/서술 채점 시 참고할 강의 자료")
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +98,7 @@ async def bridge_quiz(req: QuizRequest):
     async def _gen():
         try:
             async for event in _quiz.run_stream(
-                req.quiz_type, req.lecture_content, req.profile, req.count
+                req.exam_type, req.lecture_content, req.user_profile, req.target_count
             ):
                 yield event.to_ndjson_line()
         except Exception as exc:
@@ -103,8 +122,12 @@ async def bridge_grade(req: GradeRequest):
     """
     async def _gen():
         try:
+            answers_raw = [
+                {"index": i, "answer": a.user_response}
+                for i, a in enumerate(req.user_answers)
+            ]
             async for event in _grader.run_stream(
-                req.quiz_type, req.problems, req.user_answers, req.lecture_content
+                req.exam_type, req.problems, answers_raw, req.lecture_content
             ):
                 yield event.to_ndjson_line()
         except Exception as exc:
