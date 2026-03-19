@@ -1,8 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.uou_capstone.aiplatform.agent.exam.ExamGraderAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.FeedbackGeneratorAgent;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.*;

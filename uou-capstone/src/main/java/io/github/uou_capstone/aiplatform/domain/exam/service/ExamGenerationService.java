@@ -4,11 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.core.type.TypeReference;
-import io.github.uou_capstone.aiplatform.agent.exam.DebateGeneratorAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.FlashCardGeneratorAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.FiveChoiceGeneratorAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.OxProblemGeneratorAgent;
-import io.github.uou_capstone.aiplatform.agent.exam.ShortAnswerGeneratorAgent;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
@@ -39,41 +34,25 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 시험 생성 서비스
- * Version 2의 5가지 시험 유형 생성을 관리하는 서비스
- * 
- * 시험 유형:
- * 1. FLASH_CARD: 플래시카드
- * 2. OX_PROBLEM: OX 문제
- * 3. FIVE_CHOICE: 5지선다 문제
- * 4. SHORT_ANSWER: 단답형/서술형 문제
- * 5. DEBATE: 토론형 문제
- * 
- * 생성 프로세스:
- * 1. Profile 생성/검증 (ProfileAgent)
- * 2. 시험 유형별 문제 생성 (각 GeneratorAgent)
- * 3. 결과 저장 및 세션 업데이트
+ * 시험 생성 서비스 (v3)
+ *
+ * 5가지 시험 유형 생성을 FastAPI /bridge/quiz 단건 호출로 위임한다.
+ * DB 저장 및 응답 구성은 Spring Boot가 계속 담당한다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ExamGenerationService {
 
-    // ========== 의존성 주입 ==========
-    private final FlashCardGeneratorAgent flashCardGeneratorAgent;  // 플래시카드 생성 Agent
-    private final OxProblemGeneratorAgent oxProblemGeneratorAgent;  // OX 문제 생성 Agent
-    private final FiveChoiceGeneratorAgent fiveChoiceGeneratorAgent;  // 5지선다 생성 Agent
-    private final ShortAnswerGeneratorAgent shortAnswerGeneratorAgent;  // 단답형/서술형 생성 Agent
-    private final DebateGeneratorAgent debateGeneratorAgent;  // 토론형 생성 Agent
     private final ExamSessionRepository examSessionRepository;
     private final LectureRepository lectureRepository;
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
-    private final ObjectMapper objectMapper;  // JSON 변환용
-    private final CacheService cacheService;  // Redis 캐싱 서비스
-    private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
-    private final SessionRecoveryService sessionRecoveryService; // 세션 복구 서비스
-    private final WebClient aiServiceWebClient;  // 404 시 /api/test-gen/generate 폴백용
+    private final ObjectMapper objectMapper;
+    private final CacheService cacheService;
+    private final AsyncTaskService asyncTaskService;
+    private final SessionRecoveryService sessionRecoveryService;
+    private final WebClient aiServiceWebClient;
 
     /**
      * 시험 생성 요청 처리
@@ -183,40 +162,24 @@ public class ExamGenerationService {
         Map<String, Object> profileMap = objectMapper.convertValue(profile, Map.class);
         session.updatePriorProfile(profileMap);
 
-        // ========== 6단계: 시험 유형별 문제 생성 ==========
-        // examType에 따라 해당 GeneratorAgent 호출
-        // 각 시험 유형별로 별도의 리스트를 생성
+        // ========== 6단계: 시험 문제 생성 ==========
+        // FastAPI /bridge/quiz 단건 호출로 위임 (exam type, lecture content, target count 전달)
         List<FlashCardDto> flashCards = null;
         List<OxProblemDto> oxProblems = null;
         List<FiveChoiceProblemDto> fiveChoiceProblems = null;
         List<ShortAnswerProblemDto> shortAnswerProblems = null;
         List<DebateTopicDto> debateTopics = null;
-        
+
         try {
+            String raw = callBridgeQuiz(lectureContent, requestDto.getExamType(), profile, session.getTargetCount());
+
             switch (requestDto.getExamType()) {
-            case FLASH_CARD:
-                // ko 브랜치: 모든 시험 유형을 통합 엔드포인트 /api/test-gen/generate 로 생성
-                flashCards = callUnifiedGenerateFlashCards(lectureContent, profile, session.getTargetCount());
-                break;
-
-            case OX_PROBLEM:
-                oxProblems = callUnifiedGenerateOxProblems(lectureContent, profile, session.getTargetCount());
-                break;
-
-            case FIVE_CHOICE:
-                fiveChoiceProblems = callUnifiedGenerateFiveChoice(lectureContent, profile, session.getTargetCount());
-                break;
-
-            case SHORT_ANSWER:
-                shortAnswerProblems = callUnifiedGenerateShortAnswer(lectureContent, profile, session.getTargetCount());
-                break;
-
-            case DEBATE:
-                debateTopics = callUnifiedGenerateDebate(lectureContent, profile, session.getTargetCount());
-                break;
-
-            default:
-                throw new BusinessException(
+                case FLASH_CARD    -> flashCards        = parseUnifiedGenerateFlashCards(raw);
+                case OX_PROBLEM    -> oxProblems        = parseUnifiedGenerateOxProblems(raw);
+                case FIVE_CHOICE   -> fiveChoiceProblems = parseUnifiedGenerateFiveChoice(raw);
+                case SHORT_ANSWER  -> shortAnswerProblems = parseUnifiedGenerateShortAnswer(raw);
+                case DEBATE        -> debateTopics      = parseUnifiedGenerateDebate(raw);
+                default -> throw new BusinessException(
                         CommonErrorCode.INVALID_PARAMETER,
                         "지원하지 않는 시험 유형입니다: " + requestDto.getExamType()
                 );
@@ -479,50 +442,40 @@ public class ExamGenerationService {
     }
 
     /**
-     * ai-service(ko) 통합 엔드포인트 POST /api/test-gen/generate 호출.
-     * ko 브랜치: ProblemRequest(exam_type, target_count, lecture_content, user_profile), TestGenerationResponse(problems.flash_cards).
+     * FastAPI POST /bridge/quiz 단건 호출.
+     *
+     * 요청: { exam_type, target_count, lecture_content, user_profile }
+     * 응답: { problems: { flash_cards | ox_problems | mcq_problems | short_answer_problems | ... } }
      */
-    private List<FlashCardDto> callUnifiedGenerateFlashCards(String lectureContent, TestProfileDto profile, Integer targetCount) {
-        Map<String, Object> body = buildUnifiedGenerateBody("Flash_Card", lectureContent, profile, targetCount);
-        String raw = aiServiceWebClient.post()
-                .uri("/api/test-gen/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-        return parseUnifiedGenerateFlashCards(raw);
-    }
+    private String callBridgeQuiz(String lectureContent, ExamType examType, TestProfileDto profile, Integer targetCount) {
+        String examTypeStr = switch (examType) {
+            case FLASH_CARD   -> "Flash_Card";
+            case OX_PROBLEM   -> "OX_Problem";
+            case FIVE_CHOICE  -> "Five_Choice";
+            case SHORT_ANSWER -> "Short_Answer";
+            case DEBATE       -> "Debate";
+        };
 
-    /**
-     * ai-service(ko) POST /api/test-gen/generate (exam_type=OX_Problem).
-     */
-    private List<OxProblemDto> callUnifiedGenerateOxProblems(String lectureContent, TestProfileDto profile, Integer targetCount) {
-        Map<String, Object> body = buildUnifiedGenerateBody("OX_Problem", lectureContent, profile, targetCount);
-        String raw = aiServiceWebClient.post()
-                .uri("/api/test-gen/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-        return parseUnifiedGenerateOxProblems(raw);
-    }
-
-    /** ko 브랜치 ai-service ProblemRequest: exam_type, target_count, lecture_content, user_profile(Optional[TestProfile]). */
-    private Map<String, Object> buildUnifiedGenerateBody(String examType, String lectureContent, TestProfileDto profile, Integer targetCount) {
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         Map<String, Object> profileMap = profile != null
                 ? snakeMapper.convertValue(profile, new TypeReference<Map<String, Object>>() {})
                 : null;
+
         Map<String, Object> body = new HashMap<>();
-        body.put("exam_type", examType);
+        body.put("exam_type", examTypeStr);
         body.put("target_count", targetCount != null ? targetCount : 10);
         body.put("lecture_content", lectureContent);
         body.put("user_profile", profileMap);
-        return body;
+
+        return aiServiceWebClient.post()
+                .uri("/bridge/quiz")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
     }
 
-    /** ko 브랜치 TestGenerationResponse: problems.flash_cards 배열 */
     private List<FlashCardDto> parseUnifiedGenerateFlashCards(String raw) {
         if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
@@ -554,39 +507,6 @@ public class ExamGenerationService {
             log.warn("통합 generate 응답 파싱 실패(ox_problems): {}", e.getMessage());
             return List.of();
         }
-    }
-
-    private List<FiveChoiceProblemDto> callUnifiedGenerateFiveChoice(String lectureContent, TestProfileDto profile, Integer targetCount) {
-        Map<String, Object> body = buildUnifiedGenerateBody("Five_Choice", lectureContent, profile, targetCount);
-        String raw = aiServiceWebClient.post()
-                .uri("/api/test-gen/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-        return parseUnifiedGenerateFiveChoice(raw);
-    }
-
-    private List<ShortAnswerProblemDto> callUnifiedGenerateShortAnswer(String lectureContent, TestProfileDto profile, Integer targetCount) {
-        Map<String, Object> body = buildUnifiedGenerateBody("Short_Answer", lectureContent, profile, targetCount);
-        String raw = aiServiceWebClient.post()
-                .uri("/api/test-gen/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-        return parseUnifiedGenerateShortAnswer(raw);
-    }
-
-    private List<DebateTopicDto> callUnifiedGenerateDebate(String lectureContent, TestProfileDto profile, Integer targetCount) {
-        Map<String, Object> body = buildUnifiedGenerateBody("Debate", lectureContent, profile, targetCount);
-        String raw = aiServiceWebClient.post()
-                .uri("/api/test-gen/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-        return parseUnifiedGenerateDebate(raw);
     }
 
     /** ko 브랜치 TestGenerationResponse: problems.mcq_problems 배열 */
