@@ -24,7 +24,7 @@ class SessionStore:
     """
 
     def _key(self, session_id: int) -> str:
-        return f"edu_session:{session_id}"
+        return f"fa:session:{session_id}"
 
     async def get(self, session_id: int) -> Optional[SessionState]:
         """세션 조회. 없으면 None 반환."""

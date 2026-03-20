@@ -81,14 +81,14 @@ async def phase3_to_5_auto_endpoint(
     """
     Phase 3~5: 집필/검토/조립 비동기 실행
     - 백엔드는 finalized_brief를 미리 Redis에 저장하고, 여기에는 sessionId만 전달합니다.
-    - 진행 상황은 Redis Pub/Sub 채널(progress:session:{sessionId})로 방송됩니다.
+    - 진행 상황은 Redis Pub/Sub 채널(shared:progress:{sessionId})로 방송됩니다.
     """
     session_id: int = req.session_id
 
     try:
         # Spring에서 finalized_brief를 바디로 보내는 경우, 백그라운드 태스크 시작 전에 Redis에 캐싱
         if req.finalized_brief:
-            cache_key = f"finalized_brief:{session_id}"
+            cache_key = f"shared:finalized_brief:{session_id}"
             await redis.set(
                 cache_key,
                 json.dumps(req.finalized_brief, ensure_ascii=False),
@@ -101,7 +101,7 @@ async def phase3_to_5_auto_endpoint(
             "session_id": session_id,
             "status": "accepted",
             "message": "Phase 3~5 강의 노트 생성이 시작되었습니다.",
-            "progress_channel": f"progress:session:{session_id}",
+            "progress_channel": f"shared:progress:{session_id}",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Phase 3~5 작업 등록 실패: {str(e)}")
@@ -123,7 +123,7 @@ async def get_task_status(
         - error: 실패 시 에러 메시지 (status가 failed일 때만)
     """
     try:
-        data = await redis.get(f"task:{task_id}")
+        data = await redis.get(f"fa:task:{task_id}")
         if not data:
             raise HTTPException(status_code=404, detail="Task not found")
 

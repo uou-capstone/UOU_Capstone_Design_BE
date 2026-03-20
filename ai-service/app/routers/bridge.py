@@ -108,6 +108,65 @@ async def bridge_quiz(req: QuizRequest):
     return StreamingResponse(_gen(), media_type="application/x-ndjson", headers=_NDJSON_HEADERS)
 
 
+@router.post("/quiz/result")
+async def bridge_quiz_result(req: QuizRequest):
+    """
+    퀴즈 생성 단건 태스크 — 비스트리밍 버전.
+
+    Spring Boot 서버 저장 로직 단순화용.
+    스트리밍 UI는 /bridge/quiz, 결과 저장은 이 엔드포인트로 분리 가능.
+
+    응답:
+    {
+      "quiz": [...],
+      "quiz_type": "Five_Choice"
+    }
+    """
+    try:
+        quiz_data = await _quiz.run(
+            req.exam_type, req.lecture_content, req.user_profile, req.target_count
+        )
+        result = quiz_data if isinstance(quiz_data, dict) else (
+            quiz_data.model_dump() if hasattr(quiz_data, "model_dump") else quiz_data
+        )
+        return {"quiz": result, "quiz_type": req.exam_type}
+    except Exception as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"퀴즈 생성 실패: {exc}")
+
+
+@router.post("/grade/result")
+async def bridge_grade_result(req: GradeRequest):
+    """
+    채점 단건 태스크 — 비스트리밍 버전.
+
+    Spring Boot 서버 저장 로직 단순화용.
+    스트리밍 UI는 /bridge/grade, 결과 저장은 이 엔드포인트로 분리 가능.
+
+    응답:
+    {
+      "grading": { "results": [...], "total_score": 0.8, "overall_feedback": "..." },
+      "passed": true
+    }
+    """
+    try:
+        answers_raw = [
+            {"index": i, "answer": a.user_response}
+            for i, a in enumerate(req.user_answers)
+        ]
+        result = await _grader.run(
+            req.exam_type, req.problems, answers_raw, req.lecture_content
+        )
+        from ai_agent.agents.GraderAgent import PASS_SCORE_RATIO
+        return {
+            "grading": result,
+            "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO,
+        }
+    except Exception as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"채점 실패: {exc}")
+
+
 @router.post("/grade")
 async def bridge_grade(req: GradeRequest):
     """

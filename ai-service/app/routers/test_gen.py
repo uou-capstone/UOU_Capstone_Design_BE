@@ -163,7 +163,7 @@ async def generate_test_route(
         if not profile:
             # 1. 강의 내용 해시 생성 (Cache Key)
             content_hash = hashlib.md5(request.lecture_content.encode('utf-8')).hexdigest()
-            cache_key = f"profile:{content_hash}"
+            cache_key = f"fa:cache:profile:{content_hash}"
             
             # 2. Redis 조회
             try:

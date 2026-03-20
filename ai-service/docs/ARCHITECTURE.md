@@ -1,6 +1,6 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.4 (스트리밍 heartbeat 추가, done.data 계약 확정, 채점 버그 수정)  
+> **버전**: v2.5 (Redis 네임스페이스 통일, /bridge/*/result 비스트리밍 엔드포인트 추가)  
 > **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-12  
 > **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
 > **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
@@ -357,7 +357,56 @@ POST /bridge/grade
 
 ---
 
-## 6. 삭제된 레거시 파일 목록
+## 6. Redis 키 네임스페이스 컨벤션
+
+Spring Boot / FastAPI 공동 Redis 사용 시 **키 충돌 방지 및 소유권 명확화**를 위해 아래 네임스페이스 규칙을 따릅니다.
+
+### 6.1 접두사 규칙
+
+| 접두사 | 소유자 | 설명 |
+|---|---|---|
+| `fa:*` | FastAPI 전용 | FastAPI만 읽기/쓰기. Spring은 접근 금지 |
+| `sb:*` | Spring Boot 전용 | Spring만 읽기/쓰기. FastAPI는 접근 금지 |
+| `shared:*` | 양측 합의 공용 | 양측이 읽기/쓰기 가능. 변경 시 반드시 상호 협의 |
+
+### 6.2 FastAPI 사용 키 목록 (fa:)
+
+| 키 | TTL | 설명 |
+|---|---|---|
+| `fa:session:{sessionId}` | 24h | 오케스트레이션 세션 전체 상태 (SessionState JSON) |
+| `fa:cache:profile:{contentHash}` | 24h | 강의 내용 기반 자동 생성 사용자 프로필 캐시 |
+| `fa:result:{sessionId}` | 24h | Phase 5 최종 강의노트 마크다운 결과 |
+| `fa:task:{taskId}` | 24h | 비동기 태스크 상태 (PENDING/PROCESSING/DONE/FAILED) |
+
+### 6.3 공용 키 목록 (shared:)
+
+| 키 | TTL | 읽기 | 쓰기 | 설명 |
+|---|---|---|---|---|
+| `shared:finalized_brief:{sessionId}` | 24h | FastAPI | Spring / FastAPI | 강의 기획안. Spring이 생성하거나 FastAPI Phase 2가 생성 |
+| `shared:progress:{sessionId}` | — | Spring (구독) | FastAPI (발행) | Pub/Sub 채널. 강의 생성 진행률 방송 |
+| `shared:idem:{requestId}` | 15m | 양측 | 양측 | 중복 요청 방지 멱등성 키 (선택 사항) |
+
+### 6.4 Spring Boot 측 키 (sb:) — 참고용
+
+> FastAPI는 이 키들에 접근하지 않습니다.
+
+| 키 | TTL | 설명 |
+|---|---|---|
+| `sb:auth:blacklist:{jti}` | 토큰 만료까지 | JWT 블랙리스트 |
+| `sb:cache:lecture:{lectureId}` | 5~30m | 강의 메타데이터 캐시 |
+| `sb:cache:exam-session:{sessionId}` | 5~30m | 시험 세션 캐시 |
+| `sb:task:{taskId}` | 24h | Spring 비동기 작업 상태 |
+
+### 6.5 운영 규칙
+
+- **TTL 필수**: 모든 키는 TTL을 설정합니다. 무한 저장 금지
+- **소유권**: 키를 생성한 서비스가 삭제 책임을 집니다
+- **공용 키 최소화**: `shared:*` 키는 현재 목록 외 추가 시 양측 합의 필수
+- **최대 payload**: 1MB 초과 데이터는 Redis 금지 → DB 또는 파일 저장
+
+---
+
+## 7. 삭제된 레거시 파일 목록
 
 리팩터링 과정에서 아래 파일들이 제거되었습니다.
 
@@ -381,7 +430,8 @@ POST /bridge/grade
 |---|---|---|
 | 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/session/{id}/event/stream` |
 | 세션 생성/조회 | 없음 | `GET /api/session/by-lecture/{lectureId}` |
-| 단건 퀴즈/채점 | 없음 | `POST /bridge/quiz`, `POST /bridge/grade` |
+| 단건 퀴즈/채점 (스트리밍) | 없음 | `POST /bridge/quiz`, `POST /bridge/grade` |
+| 단건 퀴즈/채점 (JSON) | 없음 | `POST /bridge/quiz/result`, `POST /bridge/grade/result` |
 | 스트리밍 포맷 | SSE (`data: ...\n\n`) | NDJSON (`{...}\n`) |
 | 이벤트 타입 | `thought_delta` / `answer_delta` | `agent_delta` (channel 필드로 구분) |
 | 이벤트 모델 | `stage` 문자열 | `AppEventType` Enum |
