@@ -8,10 +8,13 @@ QuizAgents
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+
+_HEARTBEAT_INTERVAL = 10.0
 
 
 class QuizAgents:
@@ -57,8 +60,18 @@ class QuizAgents:
             delta=f"{quiz_type} 유형 퀴즈 {count}문항을 생성 중입니다...",
         )
 
+        quiz_task = asyncio.ensure_future(
+            self._generate_quiz(quiz_type, lecture_content, profile, count)
+        )
         try:
-            quiz_data = await self._generate_quiz(quiz_type, lecture_content, profile, count)
+            while True:
+                try:
+                    quiz_data = await asyncio.wait_for(
+                        asyncio.shield(quiz_task), timeout=_HEARTBEAT_INTERVAL
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    yield NdjsonEvent(type=NdjsonEventType.HEARTBEAT)
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
                 agent="quiz",
@@ -67,6 +80,7 @@ class QuizAgents:
                 data={"quiz": quiz_data, "quiz_type": quiz_type},
             )
         except Exception as exc:
+            quiz_task.cancel()
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
                 agent="quiz",
@@ -98,7 +112,7 @@ class QuizAgents:
             exam_type=exam_type,
             target_count=count,
             lecture_content=lecture_content,
-            profile=test_profile,
+            user_profile=test_profile,
         )
 
         generator = self._get_generator()

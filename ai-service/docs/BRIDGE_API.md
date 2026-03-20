@@ -1,8 +1,11 @@
 # Bridge & Session API 계약 문서
 
 > **대상**: Spring Boot 백엔드 개발자  
-> **최종 수정**: 2026-03-18  
+> **최종 수정**: 2026-03-12  
 > **원칙**: Spring Boot는 이 문서에 명시된 필드명·타입·구조만 참고하면 됩니다.
+
+> **📌 done.data 필드명 계약**: `§5`에 명시된 모든 필드명은 **변경되지 않습니다**.  
+> API 버전 업그레이드 없이 필드명을 바꾸지 않으며, 새 필드 추가 시에도 기존 필드는 유지됩니다.
 
 ---
 
@@ -237,44 +240,83 @@ Content-Type: application/json
 
 모든 스트리밍 응답은 **NDJSON** (줄마다 독립 JSON) 형식입니다.
 
-### 4.1 이벤트 필드
+### 4.1 이벤트 타입 및 필드
 
-| 필드 | 타입 | 항상 포함 | 설명 |
+| `type` | 설명 | 항상 보장 |
+|---|---|---|
+| `agent_delta` | 텍스트 청크 스트리밍 | `agent`, `channel`, `delta` |
+| `done` | 작업 완료. `data`에 결과 포함 | `agent`, `final: true`, `data` |
+| `error` | 오류 발생. **스트림은 반드시 이 이벤트로 종료됨** | `agent`, `message` |
+| `heartbeat` | 연결 유지용 keep-alive. **클라이언트가 무시해도 됨** | `type` 만 포함 |
+
+**전체 필드 목록**
+
+| 필드 | 타입 | 포함 조건 | 설명 |
 |---|---|---|---|
-| `type` | `string` | ✅ | `"agent_delta"` \| `"done"` \| `"error"` |
-| `agent` | `string` | ✅ | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
+| `type` | `string` | 항상 | 이벤트 타입 |
+| `agent` | `string` | `heartbeat` 제외 | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
 | `tool` | `string` | 선택 | 호출된 도구 이름 |
 | `channel` | `string` | `agent_delta`만 | `"thought"` (내부 추론) \| `"main"` (실제 답변) |
-| `delta` | `string` | `agent_delta`만 | 텍스트 청크 |
+| `delta` | `string` | `agent_delta`만 | 텍스트 청크 (짧은 단위로 자주 전송됨) |
 | `final` | `bool` | `done`만 | 항상 `true` |
-| `data` | `object` | `done`만 | 결과 데이터 (아래 상세 참고) |
+| `data` | `object` | `done`만 | 결과 데이터 (§5 참고) |
 | `message` | `string` | `error`만 | 오류 메시지 |
 
-### 4.2 이벤트 흐름 예시 (설명 생성)
+### 4.2 이벤트 흐름 예시 (퀴즈 생성)
 
 ```jsonl
-{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "강의 자료 분석 중..."}
-{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main", "delta": "소프트웨어 프로세스란 "}
-{"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main", "delta": "소프트웨어를 개발하는 일련의 활동입니다."}
-{"type": "done", "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
+{"type": "agent_delta", "agent": "quiz", "tool": "GENERATE_QUIZ", "channel": "thought", "delta": "Five_Choice 유형 퀴즈 5문항을 생성 중입니다..."}
+{"type": "heartbeat"}
+{"type": "heartbeat"}
+{"type": "done", "agent": "quiz", "tool": "GENERATE_QUIZ", "final": true, "data": {"quiz": [...], "quiz_type": "Five_Choice"}}
 ```
 
-### 4.3 Spring Boot 처리 권장 패턴
+### 4.3 오류 보장
 
 ```
-line.type == "agent_delta" && line.channel == "main"  → UI에 delta 스트리밍 출력
-line.type == "agent_delta" && line.channel == "thought" → 로딩 인디케이터 표시 (선택)
-line.type == "done"                                    → data 파싱 후 UI 갱신
-line.type == "error"                                   → 오류 처리
+# 어떤 오류가 발생해도 스트림 마지막 줄은 반드시 type:error 이벤트
+{"type": "error", "agent": "quiz", "message": "퀴즈 생성 실패 (Five_Choice): ..."}
+```
+
+### 4.4 Spring Boot 처리 권장 패턴
+
+```java
+for (String line : ndjsonLines) {
+    JsonNode node = objectMapper.readTree(line);
+    String type = node.get("type").asText();
+
+    switch (type) {
+        case "agent_delta":
+            if ("main".equals(node.path("channel").asText())) {
+                // UI에 delta 스트리밍 출력
+            }
+            // "thought" 채널 → 로딩 인디케이터 (선택)
+            break;
+        case "done":
+            // data 파싱 후 UI 갱신 (§5 참고)
+            break;
+        case "error":
+            // 오류 처리 (message 필드 참고)
+            break;
+        case "heartbeat":
+            // 무시 (연결 유지용)
+            break;
+    }
+}
 ```
 
 ---
 
-## 5. done.data 상세 스펙
+## 5. done.data 상세 스펙 (필드명 계약)
 
-### 5.1 퀴즈 생성 `done.data.quiz`
+> **⚠️ 계약 공지**: 이 섹션에 명시된 모든 필드명은 **Breaking Change 없이 변경되지 않습니다.**  
+> 새 필드가 추가되더라도 기존 필드는 그대로 유지됩니다. 파싱 시 미지정 필드는 무시해주세요.
 
-`/bridge/quiz` 또는 세션 이벤트 중 퀴즈 생성 완료 시:
+---
+
+### 5.1 퀴즈 생성 완료 이벤트
+
+트리거: `/bridge/quiz` 완료 또는 세션 내 퀴즈 생성 완료
 
 ```json
 {
@@ -283,24 +325,33 @@ line.type == "error"                                   → 오류 처리
   "tool": "GENERATE_QUIZ",
   "final": true,
   "data": {
-    "quiz": [ /* 문제 배열 — exam_type에 따라 구조 상이 */ ],
+    "quiz": [ /* 문제 배열 */ ],
     "quiz_type": "Five_Choice"
   }
 }
 ```
 
-| 필드 | 타입 | 설명 |
-|---|---|---|
-| `data.quiz` | `array` | **채점 요청 시 `problems` 필드로 그대로 전달해야 함** |
-| `data.quiz_type` | `string` | 생성된 퀴즈 유형 |
+**`data` 최상위 필드 (계약)**
 
-`data.quiz` 배열 내부 구조는 `exam_type`에 따라 다릅니다. 자세한 구조는 `TEST_GEN_API.md` §4 참고.
+| 필드명 | 타입 | 설명 |
+|---|---|---|
+| `quiz` | `array` | 문제 배열. **채점 시 `/bridge/grade`의 `problems` 필드로 그대로 전달** |
+| `quiz_type` | `string` | 생성된 퀴즈 유형 (`Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer` \| `Debate`) |
+
+`data.quiz` 배열 내부 구조는 `quiz_type`별로 다릅니다. 상세 필드는 `TEST_GEN_API.md` §4 참고.
+
+**`data.quiz` 공통 필드 (모든 유형에 포함)**
+
+| 필드명 | 타입 | 설명 |
+|---|---|---|
+| `id` | `int` | 문제 고유 ID. 채점 시 `problem_id`에 이 값을 사용 |
+| `question_content` | `string` | 문제 내용 |
 
 ---
 
-### 5.2 채점 `done.data.grading`
+### 5.2 채점 완료 이벤트
 
-`/bridge/grade` 또는 세션 이벤트 중 채점 완료 시:
+트리거: `/bridge/grade` 완료 또는 세션 내 채점 완료
 
 ```json
 {
@@ -315,35 +366,54 @@ line.type == "error"                                   → 오류 처리
           "question_index": 0,
           "score": 1.0,
           "passed": true,
-          "feedback": "정답입니다!"
+          "feedback": "정답입니다!",
+          "user_answer": "2",
+          "correct_answer": "2"
         }
       ],
       "total_score": 0.8,
-      "overall_feedback": "전반적으로 잘 이해하고 있습니다."
+      "overall_feedback": "5문항 중 4문항 정답 (80점)"
     },
     "passed": true
   }
 }
 ```
 
-**`data.grading` 필드**
+**`data` 최상위 필드 (계약)**
 
-| 필드 | 타입 | 설명 |
+| 필드명 | 타입 | 설명 |
 |---|---|---|
-| `results` | `array` | 문제별 채점 결과 |
-| `results[].question_index` | `int` | 문제 인덱스 (0-indexed) |
-| `results[].score` | `float` | 문제별 점수 (0.0 ~ 1.0) |
-| `results[].passed` | `bool` | 문제별 통과 여부 (score ≥ 0.6) |
-| `results[].feedback` | `string` | 문제별 피드백 |
+| `grading` | `object` | 채점 결과 상세 |
+| `passed` | `bool` | 합격 여부 (`total_score ≥ 0.6` → `true`) |
+
+**`data.grading` 필드 (계약)**
+
+| 필드명 | 타입 | 설명 |
+|---|---|---|
+| `results` | `array` | 문제별 채점 결과 배열 |
 | `total_score` | `float` | 전체 평균 점수 (0.0 ~ 1.0) |
-| `overall_feedback` | `string` | 전체 총평 |
+| `overall_feedback` | `string` | 전체 총평 문자열 |
 
-**`data.passed` (최상위)**
+**`data.grading.results[]` 필드 (계약)**
 
-| 값 | 의미 |
-|---|---|
-| `true` | 합격 (total_score ≥ 0.6) |
-| `false` | 불합격 → `data.ui.widget == "REVIEW_DECISION"` 함께 전달됨 |
+| 필드명 | 타입 | 설명 |
+|---|---|---|
+| `question_index` | `int` | 문제 인덱스 (0-indexed, `problems` 배열 기준) |
+| `score` | `float` | 문제별 점수 (0.0 ~ 1.0) |
+| `passed` | `bool` | 문제별 통과 여부 (score ≥ 0.6) |
+| `feedback` | `string` | 문제별 피드백 |
+| `user_answer` | `string` | 학생이 제출한 답 (MCQ/OX만 포함) |
+| `correct_answer` | `string` | 정답 (MCQ/OX만 포함) |
+
+> **참고**: `user_answer`와 `correct_answer`는 MCQ/OX 자동 채점 시만 포함됩니다.  
+> 단답/서술형 LLM 채점 시에는 이 필드가 없을 수 있습니다.
+
+**`data.passed` 해석**
+
+| 값 | 의미 | 이후 동작 |
+|---|---|---|
+| `true` | 합격 (≥60점) | NEXT_PAGE_DECISION 위젯 표시 |
+| `false` | 불합격 (<60점) | REVIEW_DECISION 위젯 표시 |
 
 ---
 

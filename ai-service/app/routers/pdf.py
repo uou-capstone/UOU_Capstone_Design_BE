@@ -1,6 +1,8 @@
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
 import asyncio
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
 from app.services.pdf_splitter import analyze_and_split
 
 
@@ -13,8 +15,14 @@ router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
 @router.post("/analyze")
 async def analyze_pdf(req: PdfAnalyzeRequest):
-    # 동기 함수를 스레드 풀에서 실행하여 블로킹 방지
-    result = await asyncio.to_thread(analyze_and_split, req.pdf_path)
-    return {"items": result}
+    try:
+        result = await asyncio.to_thread(analyze_and_split, req.pdf_path)
+        return {"items": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"파일을 찾을 수 없습니다: {req.pdf_path}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF 분석 실패: {str(e)}")
 
 

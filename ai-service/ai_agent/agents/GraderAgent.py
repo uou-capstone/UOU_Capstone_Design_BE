@@ -9,11 +9,14 @@ GraderAgent
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+
+_HEARTBEAT_INTERVAL = 10.0
 
 GRADING_SYSTEM_PROMPT = """# [Role]
 당신은 전문 채점관입니다. 학생의 단답형/서술형 답변을 공정하게 채점해야 합니다.
@@ -81,16 +84,37 @@ class GraderAgent:
         try:
             if quiz_type in ("Five_Choice", "OX_Problem"):
                 result = self._grade_auto(problems, user_answers)
+                yield NdjsonEvent(
+                    type=NdjsonEventType.DONE,
+                    agent="grader",
+                    tool="GRADE",
+                    final=True,
+                    data={"grading": result, "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO},
+                )
             else:
-                result = await self._grade_llm(problems, user_answers, lecture_content)
-
-            yield NdjsonEvent(
-                type=NdjsonEventType.DONE,
-                agent="grader",
-                tool="GRADE",
-                final=True,
-                data={"grading": result, "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO},
-            )
+                # LLM 채점은 시간이 걸리므로 heartbeat 삽입
+                grade_task = asyncio.ensure_future(
+                    self._grade_llm(problems, user_answers, lecture_content)
+                )
+                try:
+                    while True:
+                        try:
+                            result = await asyncio.wait_for(
+                                asyncio.shield(grade_task), timeout=_HEARTBEAT_INTERVAL
+                            )
+                            break
+                        except asyncio.TimeoutError:
+                            yield NdjsonEvent(type=NdjsonEventType.HEARTBEAT)
+                    yield NdjsonEvent(
+                        type=NdjsonEventType.DONE,
+                        agent="grader",
+                        tool="GRADE",
+                        final=True,
+                        data={"grading": result, "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO},
+                    )
+                except Exception as exc:
+                    grade_task.cancel()
+                    raise exc
         except Exception as exc:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
@@ -109,7 +133,11 @@ class GraderAgent:
 
         for idx, (problem, user_answer) in enumerate(zip(problems, user_answers)):
             correct = problem.get("answer") or problem.get("correct_answer")
-            is_correct = str(user_answer).strip().upper() == str(correct).strip().upper()
+            # dict 형식 {"index": i, "answer": "..."} 또는 단순 문자열 모두 처리
+            answer_str = (
+                user_answer.get("answer", "") if isinstance(user_answer, dict) else str(user_answer)
+            )
+            is_correct = answer_str.strip().upper() == str(correct).strip().upper()
             if is_correct:
                 correct_count += 1
 
@@ -118,6 +146,8 @@ class GraderAgent:
                 "score": 1.0 if is_correct else 0.0,
                 "passed": is_correct,
                 "feedback": "정답입니다!" if is_correct else f"오답입니다. 정답은 '{correct}' 입니다.",
+                "user_answer": answer_str,
+                "correct_answer": str(correct),
             })
 
         total = correct_count / max(len(problems), 1)

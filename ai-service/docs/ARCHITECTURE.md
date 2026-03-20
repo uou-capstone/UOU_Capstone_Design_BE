@@ -1,7 +1,7 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.3 (Spring Boot 피드백 2차 반영 — 필드명 통일, lecture_id optional, API 계약 문서화)  
-> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-18  
+> **버전**: v2.4 (스트리밍 heartbeat 추가, done.data 계약 확정, 채점 버그 수정)  
+> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-12  
 > **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
 > **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
 
@@ -319,32 +319,39 @@ POST /bridge/grade
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `type` | string | `"agent_delta"` \| `"done"` \| `"error"` |
-| `agent` | string | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
+| `type` | string | `"agent_delta"` \| `"done"` \| `"error"` \| `"heartbeat"` |
+| `agent` | string | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` (`heartbeat` 제외) |
 | `tool` | string? | 호출 툴 (e.g. `"EXPLAIN_PAGE"`, `"ANSWER_QUESTION"`, `"GENERATE_QUIZ"`, `"GRADE"`) |
 | `channel` | string? | `agent_delta` 전용 — `"thought"` (내부 추론) \| `"main"` (실제 답변) |
-| `delta` | string? | `agent_delta` 텍스트 청크 |
+| `delta` | string? | `agent_delta` 텍스트 청크 (짧은 단위로 자주 전송) |
 | `final` | bool? | `done` 이벤트에서 `true` |
 | `data` | object? | `done` 이벤트 부가 데이터 |
 | `message` | string? | `error` 이벤트 오류 메시지 |
 
+> **heartbeat**: LLM 응답 대기 중 10초마다 자동 전송되는 연결 유지 이벤트.  
+> `{"type": "heartbeat"}` 한 줄만 포함. 클라이언트가 무시해도 됩니다.  
+> **error 종료 보장**: 스트림이 오류로 끝날 때 반드시 `type: "error"` 이벤트가 마지막에 전송됩니다.
+
 ### 이벤트 타입별 예시
 
-```json
+```jsonl
 {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "강의 자료 분석 중..."}
 {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "소프트웨어 프로세스란..."}
+{"type": "heartbeat"}
 {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
 {"type": "error",       "agent": "system",    "message": "서버 오류가 발생했습니다."}
 ```
 
 #### `done.data` 필드 상세
 
+> **계약**: 아래 필드명은 Breaking Change 없이 변경되지 않습니다. 상세 스펙은 [`docs/BRIDGE_API.md §5`](docs/BRIDGE_API.md) 참고.
+
 | 상황 | data 내용 |
 |---|---|
 | 설명 완료 후 퀴즈 제안 | `{"ui": {"widget": "QUIZ_DECISION"}}` |
-| 퀴즈 생성 완료 | `{"quiz": {...}, "quiz_type": "Five_Choice"}` |
-| 채점 완료 (통과) | `{"grading": {...}, "passed": true}` |
-| 채점 완료 (미통과) | `{"grading": {...}, "passed": false, "ui": {"widget": "REVIEW_DECISION"}}` |
+| 퀴즈 생성 완료 | `{"quiz": [...], "quiz_type": "Five_Choice"}` |
+| 채점 완료 (통과) | `{"grading": {"results": [...], "total_score": 0.8, "overall_feedback": "..."}, "passed": true}` |
+| 채점 완료 (미통과) | `{"grading": {...}, "passed": false}` |
 | 다음 페이지 결정 | `{"ui": {"widget": "NEXT_PAGE_DECISION"}}` |
 | 퀴즈 유형 선택 요청 | `{"ui": {"modal": "QUIZ_TYPE_PICKER"}}` |
 
@@ -381,6 +388,10 @@ POST /bridge/grade
 | `EventRequest.lecture_id` | 매 요청 필수 | 신규 세션 생성 시에만 필수, 이후 생략 가능 |
 | `/bridge/quiz` 필드명 | `quiz_type`, `count`, `profile` | `exam_type`, `target_count`, `user_profile` |
 | `/bridge/grade` 답안 형식 | `List[Any]` (인덱스 순) | `List[UserAnswer]` (problem_id 기준) |
+| 스트리밍 heartbeat | 없음 | `{"type":"heartbeat"}` 10초마다 자동 전송 |
+| 스트림 오류 종료 | 연결 끊김 | 반드시 `type:error` 이벤트 후 종료 보장 |
+| `done.data` 필드명 | 미확정 | `BRIDGE_API.md §5` 계약으로 고정 |
+| 채점 결과 필드 | `question_index`, `score`, `passed`, `feedback` | 동일 + `user_answer`, `correct_answer` 추가 |
 
 ### 7.2 Spring Boot 연동 패턴
 

@@ -182,6 +182,7 @@ class NdjsonEventType(str, Enum):
     AGENT_DELTA = "agent_delta"   # 텍스트 스트리밍 (channel: "thought"|"main")
     DONE = "done"
     ERROR = "error"
+    HEARTBEAT = "heartbeat"       # 연결 유지용 keep-alive (클라이언트가 무시해도 됨)
 
 
 class NdjsonEvent(BaseModel):

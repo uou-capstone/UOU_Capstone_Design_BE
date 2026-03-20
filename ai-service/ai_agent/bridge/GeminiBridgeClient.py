@@ -29,6 +29,7 @@ from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
 load_dotenv()
 
 _STREAM_TIMEOUT = float(os.getenv("GEMINI_STREAM_TIMEOUT", "300"))
+_HEARTBEAT_INTERVAL = float(os.getenv("GEMINI_HEARTBEAT_INTERVAL", "10"))
 
 
 class GeminiBridgeClient:
@@ -158,28 +159,42 @@ class GeminiBridgeClient:
 
         future = loop.run_in_executor(None, _iterate_in_thread)
 
+        _heartbeat = NdjsonEvent(type=NdjsonEventType.HEARTBEAT)
+        total_waited = 0.0
+        timed_out = False
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=_STREAM_TIMEOUT)
-                if event is _SENTINEL:
-                    break
-                yield event
-        except asyncio.TimeoutError:
-            yield NdjsonEvent(
-                type=NdjsonEventType.ERROR,
-                agent=agent,
-                message=f"Gemini 스트리밍 타임아웃 ({_STREAM_TIMEOUT}초)",
-            )
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_HEARTBEAT_INTERVAL
+                    )
+                    if event is _SENTINEL:
+                        break
+                    yield event
+                    total_waited = 0.0
+                except asyncio.TimeoutError:
+                    total_waited += _HEARTBEAT_INTERVAL
+                    if total_waited >= _STREAM_TIMEOUT:
+                        timed_out = True
+                        yield NdjsonEvent(
+                            type=NdjsonEventType.ERROR,
+                            agent=agent,
+                            message=f"Gemini 스트리밍 타임아웃 ({_STREAM_TIMEOUT}초)",
+                        )
+                        break
+                    # 연결 유지 heartbeat (10초마다)
+                    yield _heartbeat
         finally:
             await future
 
-        yield NdjsonEvent(
-            type=NdjsonEventType.DONE,
-            agent=agent,
-            tool=tool,
-            final=True,
-            data=done_data or {},
-        )
+        if not timed_out:
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent=agent,
+                tool=tool,
+                final=True,
+                data=done_data or {},
+            )
 
     # ------------------------------------------------------------------
     # 파일 로더 (공통 유틸) - PDF는 LRU 캐시로 중복 읽기 방지
