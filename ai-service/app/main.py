@@ -8,6 +8,8 @@ from app.routers.pdf import router as pdf_router
 from app.routers.upload import router as upload_router
 from app.routers.note_gen import router as note_gen_router
 from app.routers.test_gen import router as test_gen_router
+from app.routers.lecture import router as lecture_router   # [v2] Classic Track
+from app.routers.qa import router as qa_router             # [v2] Classic Track
 from app.core.redis_client import redis_manager
 
 def create_app() -> FastAPI:
@@ -49,12 +51,19 @@ def create_app() -> FastAPI:
         expose_headers=["*"],
     )
     
+    # [v3] Integrated Track — 통합 에이전트 (세션 기반 오케스트레이션)
     app.include_router(session_router)
     app.include_router(bridge_router)
-    app.include_router(pdf_router)
-    app.include_router(upload_router)
+
+    # [v2] Classic Track — 개별 에이전트 직접 호출
+    app.include_router(lecture_router)
+    app.include_router(qa_router)
     app.include_router(note_gen_router)
     app.include_router(test_gen_router)
+
+    # 공용 유틸
+    app.include_router(pdf_router)
+    app.include_router(upload_router)
     
     @app.get("/health")
     async def health():

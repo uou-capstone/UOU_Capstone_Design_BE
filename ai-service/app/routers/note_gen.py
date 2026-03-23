@@ -39,8 +39,8 @@ class Phase3Request(BaseModel):
 
 
 router = APIRouter(
-    prefix="/api/lecture-gen",
-    tags=["Lecture Note Generator"],
+    prefix="/api/v2/lecture-gen",
+    tags=["[v2] Lecture Note Generator"],
 )
 
 

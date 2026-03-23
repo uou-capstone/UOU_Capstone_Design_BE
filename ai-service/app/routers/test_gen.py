@@ -26,7 +26,7 @@ from ai_agent.LectureTestGenerator.profile import (
 )
 
 
-router = APIRouter(prefix="/api/test-gen", tags=["Test Generator"])
+router = APIRouter(prefix="/api/v2/test-gen", tags=["[v2] Test Generator"])
 
 # 전역 Generator 인스턴스 (싱글톤)
 generator: Optional[LectureTestGenerator] = None

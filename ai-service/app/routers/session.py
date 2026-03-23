@@ -2,9 +2,9 @@
 Session Router
 
 설계서 §3.2 API 진입점:
-  GET  /api/session/by-lecture/:lectureId  → 세션 조회/생성
-  POST /api/session/:sessionId/event       → 단건 이벤트 처리 (비스트리밍)
-  POST /api/session/:sessionId/event/stream → NDJSON 스트리밍 이벤트 처리
+  GET  /api/v3/session/by-lecture/:lectureId  → 세션 조회/생성
+  POST /api/v3/session/:sessionId/event       → 단건 이벤트 처리 (비스트리밍)
+  POST /api/v3/session/:sessionId/event/stream → NDJSON 스트리밍 이벤트 처리
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from app.core.session_store import session_store
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/session", tags=["session"])
+router = APIRouter(prefix="/api/v3/session", tags=["[v3] Session"])
 
 _engine = OrchestrationEngine(session_store)
 

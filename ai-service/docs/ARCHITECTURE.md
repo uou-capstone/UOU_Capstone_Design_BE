@@ -1,6 +1,6 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.5 (Redis 네임스페이스 통일, /bridge/*/result 비스트리밍 엔드포인트 추가)  
+> **버전**: v2.6 (v2/v3 듀얼 트랙 URL 버전 접두사 적용 — /api/v2/*, /api/v3/*)  
 > **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-12  
 > **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
 > **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
@@ -12,22 +12,29 @@
 MergeEduAgent는 학습자에게 강의 설명, 질의응답, 퀴즈 생성/채점, 복습 루프를 제공하는 **멀티 에이전트 오케스트레이션 시스템**입니다.
 
 ```
-Spring Boot / Web ──POST /api/session/{id}/event/stream──► FastAPI OrchestrationEngine
-  (세션 기반 학습 흐름)                                    ┌────────┼────────┐
-                                                      StateReducer Orchestrator ToolDispatcher
-                                                                              │
-                                                                   Explainer · QA · Quiz · Grader
-                                                                              │
-Spring Boot ──────────POST /bridge/quiz  (단건 위임)───────────────► QuizAgents
-Spring Boot ──────────POST /bridge/grade (단건 위임)───────────────► GraderAgent
-                                                                              │
-                                                                   GeminiBridgeClient → Gemini API
+[v2 Classic Track]
+Spring Boot ──POST /api/v2/lectures/generate──► ExplainerAgent (단건, 세션 없음)
+Spring Boot ──POST /api/v2/qa/evaluate       ──► QA Evaluator  (단건, 세션 없음)
+Spring Boot ──POST /api/v2/test-gen/generate ──► LectureTestGenerator
+
+[v3 Integrated Track]
+Spring Boot ──POST /api/v3/session/{id}/event/stream──► FastAPI OrchestrationEngine
+  (세션 기반 학습 흐름)                                  ┌────────┼────────┐
+                                                    StateReducer Orchestrator ToolDispatcher
+                                                                            │
+                                                                 Explainer · QA · Quiz · Grader
+
+Spring Boot ──POST /api/v3/bridge/quiz  (단건 위임)────► QuizAgents
+Spring Boot ──POST /api/v3/bridge/grade (단건 위임)────► GraderAgent
+                                                                            │
+                                                                 GeminiBridgeClient → Gemini API
 ```
 
 > **핵심 원칙**: Spring Boot는 오케스트레이션을 담당하지 않습니다.  
-> - **세션 흐름**: `/api/session/{id}/event/stream` 단일 진입점으로 이벤트 전달 → FastAPI가 에이전트 호출 순서 결정  
-> - **단건 위임**: `/bridge/quiz`, `/bridge/grade`는 "퀴즈 만들어줘", "채점해줘" 같은 원자 작업 전용  
-> - `/bridge/*`를 순서대로 여러 번 호출해 오케스트레이션을 구현하는 것은 **금지** 패턴입니다.
+> - **v2**: 개별 버튼 클릭 시 각 엔드포인트 독립 호출 (세션 없음)  
+> - **v3 세션 흐름**: `/api/v3/session/{id}/event/stream` 단일 진입점 → FastAPI가 에이전트 순서 결정  
+> - **v3 단건 위임**: `/api/v3/bridge/quiz`, `/api/v3/bridge/grade`는 원자 작업 전용  
+> - `/api/v3/bridge/*`를 순서대로 여러 번 호출해 오케스트레이션을 구현하는 것은 **금지** 패턴입니다.
 
 ---
 
@@ -222,17 +229,17 @@ Spring Boot는 학습 세션의 모든 AI 흐름을 이 단일 진입점으로�
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| `GET` | `/api/session/by-lecture/{lectureId}` | 세션 조회/생성 |
-| `POST` | `/api/session/{sessionId}/event` | 단건 이벤트 (비스트리밍) |
-| `POST` | `/api/session/{sessionId}/event/stream` | NDJSON 스트리밍 이벤트 **← 주 진입점** |
-| `GET` | `/api/session/{sessionId}/state` | 세션 상태 전체 조회 |
-| `DELETE` | `/api/session/{sessionId}` | 세션 삭제 |
+| `GET` | `/api/v3/session/by-lecture/{lectureId}` | 세션 조회/생성 |
+| `POST` | `/api/v3/session/{sessionId}/event` | 단건 이벤트 (비스트리밍) |
+| `POST` | `/api/v3/session/{sessionId}/event/stream` | NDJSON 스트리밍 이벤트 **← 주 진입점** |
+| `GET` | `/api/v3/session/{sessionId}/state` | 세션 상태 전체 조회 |
+| `DELETE` | `/api/v3/session/{sessionId}` | 세션 삭제 |
 
 #### 이벤트 요청 형식
 
 ```json
 // 세션 진입 시 (신규 세션이면 lecture_id 필수)
-POST /api/session/123/event/stream
+POST /api/v3/session/123/event/stream
 {
   "type": "SESSION_ENTERED",
   "lecture_id": 456,
@@ -240,7 +247,7 @@ POST /api/session/123/event/stream
 }
 
 // 이후 이벤트 (lecture_id 생략 가능 — 세션에 이미 저장됨)
-POST /api/session/123/event/stream
+POST /api/v3/session/123/event/stream
 {
   "type": "USER_MESSAGE",
   "payload": { "question": "소프트웨어 프로세스의 4가지 활동은?" }
@@ -257,22 +264,24 @@ POST /api/session/123/event/stream
 {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
 ```
 
-### 4.2 Bridge API (`/bridge`) — 단건 태스크 위임 전용
+### 4.2 Bridge API (`/api/v3/bridge`) — 단건 태스크 위임 전용
 
 Spring Boot가 학습 세션 흐름과 무관하게 단건 AI 작업만 필요할 때 사용합니다.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| `POST` | `/bridge/quiz` | 강의 내용 → 퀴즈 생성 |
-| `POST` | `/bridge/grade` | 답안 → 채점 결과 |
+| `POST` | `/api/v3/bridge/quiz` | 강의 내용 → 퀴즈 생성 (NDJSON 스트리밍) |
+| `POST` | `/api/v3/bridge/grade` | 답안 → 채점 결과 (NDJSON 스트리밍) |
+| `POST` | `/api/v3/bridge/quiz/result` | 강의 내용 → 퀴즈 생성 (JSON 직접 반환) |
+| `POST` | `/api/v3/bridge/grade/result` | 답안 → 채점 결과 (JSON 직접 반환) |
 
-> **⚠ 금지 패턴**: `/bridge/*`를 순서대로 여러 번 호출해 흐름을 구성하는 것은 Spring Boot가 오케스트레이션을 수행하는 것과 동일하므로 허용하지 않습니다.
+> **⚠ 금지 패턴**: `/api/v3/bridge/*`를 순서대로 여러 번 호출해 흐름을 구성하는 것은 Spring Boot가 오케스트레이션을 수행하는 것과 동일하므로 허용하지 않습니다.
 
 #### 요청/응답 예시
 
 ```json
 // 퀴즈 생성
-POST /bridge/quiz
+POST /api/v3/bridge/quiz
 {
   "exam_type": "Five_Choice",
   "lecture_content": "...",
@@ -287,7 +296,7 @@ POST /bridge/quiz
 
 ```json
 // 채점
-POST /bridge/grade
+POST /api/v3/bridge/grade
 {
   "exam_type": "Five_Choice",
   "problems": [ /* done.data.quiz 배열 그대로 */ ],
@@ -300,13 +309,20 @@ POST /bridge/grade
 
 > 상세 필드 명세는 [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) §3 참고
 
-### 4.3 기타 API
+### 4.3 v2 Classic API (`/api/v2`)
 
 | 경로 | 설명 |
 |---|---|
-| `/api/lecture-gen/phase3-5/auto` | 강의 노트 자동 생성 (Phase3~5) |
-| `/api/test-gen/profile` | 시험 프로필 분석 |
-| `/api/test-gen/generate` | 시험 문항 생성 |
+| `POST /api/v2/lectures/generate` | 개별 강의 설명 생성 (스트리밍) |
+| `POST /api/v2/qa/evaluate` | QA 답안 평가 |
+| `GET  /api/v2/lecture-gen/phase3-5/auto` | 강의 노트 자동 생성 (Phase3~5) |
+| `POST /api/v2/test-gen/profile` | 시험 프로필 분석 |
+| `POST /api/v2/test-gen/generate` | 시험 문항 생성 |
+
+### 4.4 공용 유틸 API (버전 없음)
+
+| 경로 | 설명 |
+|---|---|
 | `/api/pdf/analyze` | PDF 챕터 분석 |
 | `/api/files/upload` | 파일 업로드 |
 | `/health` | 헬스 체크 (Redis 상태 포함) |
@@ -428,10 +444,14 @@ Spring Boot / FastAPI 공동 Redis 사용 시 **키 충돌 방지 및 소유권 
 
 | 항목 | 변경 전 | 변경 후 |
 |---|---|---|
-| 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/session/{id}/event/stream` |
-| 세션 생성/조회 | 없음 | `GET /api/session/by-lecture/{lectureId}` |
-| 단건 퀴즈/채점 (스트리밍) | 없음 | `POST /bridge/quiz`, `POST /bridge/grade` |
-| 단건 퀴즈/채점 (JSON) | 없음 | `POST /bridge/quiz/result`, `POST /bridge/grade/result` |
+| 강의 이벤트 API | `POST /api/delegator/dispatch` | `POST /api/v3/session/{id}/event/stream` |
+| 세션 생성/조회 | 없음 | `GET /api/v3/session/by-lecture/{lectureId}` |
+| 단건 퀴즈/채점 (스트리밍) | 없음 | `POST /api/v3/bridge/quiz`, `POST /api/v3/bridge/grade` |
+| 단건 퀴즈/채점 (JSON) | 없음 | `POST /api/v3/bridge/quiz/result`, `POST /api/v3/bridge/grade/result` |
+| 개별 강의 설명 | 없음 | `POST /api/v2/lectures/generate` |
+| 개별 QA 평가 | 없음 | `POST /api/v2/qa/evaluate` |
+| 개별 시험 생성 | `/api/test-gen/generate` | `POST /api/v2/test-gen/generate` |
+| 강의 노트 생성 | `/api/lecture-gen/*` | `POST /api/v2/lecture-gen/*` |
 | 스트리밍 포맷 | SSE (`data: ...\n\n`) | NDJSON (`{...}\n`) |
 | 이벤트 타입 | `thought_delta` / `answer_delta` | `agent_delta` (channel 필드로 구분) |
 | 이벤트 모델 | `stage` 문자열 | `AppEventType` Enum |
@@ -446,19 +466,24 @@ Spring Boot / FastAPI 공동 Redis 사용 시 **키 충돌 방지 및 소유권 
 ### 7.2 Spring Boot 연동 패턴
 
 ```
-✅ 허용: 학습 세션 흐름
-  1) GET /api/session/by-lecture/{lectureId}?pdf_path=... → session_id 수령
-  2) POST /api/session/{id}/event/stream  {"type": "SESSION_ENTERED", "lecture_id": 456}
-  3) POST /api/session/{id}/event/stream  {"type": "USER_MESSAGE", "payload": {...}}
+✅ 허용: v2 Classic — 개별 에이전트 직접 호출 (세션 없음)
+  POST /api/v2/lectures/generate   (단건 설명)
+  POST /api/v2/qa/evaluate         (단건 QA)
+  POST /api/v2/test-gen/generate   (단건 시험 생성)
+
+✅ 허용: v3 통합 — 학습 세션 흐름
+  1) GET  /api/v3/session/by-lecture/{lectureId}?pdf_path=... → session_id 수령
+  2) POST /api/v3/session/{id}/event/stream  {"type": "SESSION_ENTERED", "lecture_id": 456}
+  3) POST /api/v3/session/{id}/event/stream  {"type": "USER_MESSAGE", "payload": {...}}
      ← 이후 요청은 lecture_id 생략 가능
 
-✅ 허용: 단건 태스크 위임
-  POST /bridge/quiz  {"exam_type": "OX_Problem", "lecture_content": "...", "target_count": 5}
-  POST /bridge/grade {"exam_type": "OX_Problem", "problems": [...],
-                      "user_answers": [{"problem_id": 1, "user_response": "O"}]}
+✅ 허용: v3 단건 태스크 위임
+  POST /api/v3/bridge/quiz  {"exam_type": "OX_Problem", "lecture_content": "...", "target_count": 5}
+  POST /api/v3/bridge/grade {"exam_type": "OX_Problem", "problems": [...],
+                             "user_answers": [{"problem_id": 1, "user_response": "O"}]}
 
 ❌ 금지: Spring Boot가 bridge를 순서대로 호출해 흐름 구성
-  /bridge/quiz → 결과 수령 → /bridge/grade  (오케스트레이션 금지)
+  /api/v3/bridge/quiz → 결과 수령 → /api/v3/bridge/grade  (오케스트레이션 금지)
 ```
 
 > 전체 API 계약 및 `done.data` 스펙 상세: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md)

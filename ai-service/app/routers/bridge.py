@@ -5,14 +5,16 @@ Bridge Router
 Spring Boot가 단건 태스크를 FastAPI에 위임하는 엔드포인트.
 
 허용 패턴:  Spring Boot → FastAPI 단건 요청 → 결과 수령
-금지 패턴:  Spring Boot가 /bridge/* 를 순서대로 여러 번 호출해 오케스트레이션 수행
+금지 패턴:  Spring Boot가 /api/v3/bridge/* 를 순서대로 여러 번 호출해 오케스트레이션 수행
 
 엔드포인트:
-  POST /bridge/quiz   → 퀴즈 생성 (단건 태스크 위임)
-  POST /bridge/grade  → 채점     (단건 태스크 위임)
+  POST /api/v3/bridge/quiz         → 퀴즈 생성 (단건 태스크 위임, 스트리밍)
+  POST /api/v3/bridge/grade        → 채점     (단건 태스크 위임, 스트리밍)
+  POST /api/v3/bridge/quiz/result  → 퀴즈 생성 (비스트리밍 JSON)
+  POST /api/v3/bridge/grade/result → 채점     (비스트리밍 JSON)
 
 세션 기반 학습 흐름(설명 → Q&A → 퀴즈 → 채점)은
-반드시 /api/session/{id}/event/stream 을 사용해야 합니다.
+반드시 /api/v3/session/{id}/event/stream 을 사용해야 합니다.
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
 from ai_agent.LectureTestGenerator.schemas import UserAnswer
 
-router = APIRouter(prefix="/bridge", tags=["bridge"])
+router = APIRouter(prefix="/api/v3/bridge", tags=["[v3] Bridge"])
 
 _bridge = GeminiBridgeClient()
 _quiz = QuizAgents(_bridge)
@@ -93,7 +95,7 @@ async def bridge_quiz(req: QuizRequest):
     완료 시 done.data.quiz 에 문제 배열이 포함됩니다.
 
     ⚠ 이 엔드포인트는 단건 요청 전용입니다.
-      학습 세션 흐름에서의 퀴즈 생성은 /api/session/{id}/event/stream 을 사용하세요.
+      학습 세션 흐름에서의 퀴즈 생성은 /api/v3/session/{id}/event/stream 을 사용하세요.
     """
     async def _gen():
         try:
@@ -114,7 +116,7 @@ async def bridge_quiz_result(req: QuizRequest):
     퀴즈 생성 단건 태스크 — 비스트리밍 버전.
 
     Spring Boot 서버 저장 로직 단순화용.
-    스트리밍 UI는 /bridge/quiz, 결과 저장은 이 엔드포인트로 분리 가능.
+    스트리밍 UI는 /api/v3/bridge/quiz, 결과 저장은 이 엔드포인트로 분리 가능.
 
     응답:
     {
@@ -141,7 +143,7 @@ async def bridge_grade_result(req: GradeRequest):
     채점 단건 태스크 — 비스트리밍 버전.
 
     Spring Boot 서버 저장 로직 단순화용.
-    스트리밍 UI는 /bridge/grade, 결과 저장은 이 엔드포인트로 분리 가능.
+    스트리밍 UI는 /api/v3/bridge/grade, 결과 저장은 이 엔드포인트로 분리 가능.
 
     응답:
     {
@@ -177,7 +179,7 @@ async def bridge_grade(req: GradeRequest):
     완료 시 done.data.grading 에 채점 결과가 포함됩니다.
 
     ⚠ 이 엔드포인트는 단건 요청 전용입니다.
-      학습 세션 흐름에서의 채점은 /api/session/{id}/event/stream 을 사용하세요.
+      학습 세션 흐름에서의 채점은 /api/v3/session/{id}/event/stream 을 사용하세요.
     """
     async def _gen():
         try:
