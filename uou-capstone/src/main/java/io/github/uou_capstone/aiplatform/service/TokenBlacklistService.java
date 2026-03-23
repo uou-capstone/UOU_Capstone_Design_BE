@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
 public class TokenBlacklistService {
 
     private final StringRedisTemplate redisTemplate;
-    private static final String BLACKLIST_PREFIX = "blacklist:token:";
+    private static final String BLACKLIST_PREFIX = "sb:blacklist:token:";
 
     /**
      * 토큰을 블랙리스트에 추가

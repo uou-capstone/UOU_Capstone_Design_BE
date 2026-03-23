@@ -25,7 +25,7 @@ public class PlanningAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase1/planning";
+        return "/api/v2/lecture-gen/phase1/planning";
     }
 
     @Override

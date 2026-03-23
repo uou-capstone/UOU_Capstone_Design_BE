@@ -28,7 +28,7 @@ public class UpdateAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase2/update";
+        return "/api/v2/lecture-gen/phase2/update";
     }
 
     @Override

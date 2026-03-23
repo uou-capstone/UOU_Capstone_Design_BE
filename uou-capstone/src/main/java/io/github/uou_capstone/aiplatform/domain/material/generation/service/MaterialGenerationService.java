@@ -19,6 +19,7 @@ import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSe
 import io.github.uou_capstone.aiplatform.domain.material.generation.dto.*;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiNoteGenClient;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
 import io.github.uou_capstone.aiplatform.service.CacheService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
@@ -27,13 +28,10 @@ import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import org.springframework.web.reactive.function.BodyInserters;
 
 import java.util.HashMap;
 import java.util.List;
@@ -69,7 +67,7 @@ public class MaterialGenerationService {
     private final ObjectMapper objectMapper;  // JSON 변환용
     private final AsyncTaskService asyncTaskService;  // 비동기 작업 상태 추적
     private final SessionRecoveryService sessionRecoveryService;  // 세션 복구 서비스
-    private final WebClient aiServiceWebClient;  // FastAPI 호출용 WebClient
+    private final FastApiNoteGenClient fastApiNoteGenClient;
     private final CacheService cacheService;  // Redis 캐싱 서비스
     private final StringRedisTemplate redisTemplate;  // Redis Pub/Sub 발행용
 
@@ -156,7 +154,7 @@ public class MaterialGenerationService {
         generationSessionRepository.save(session);
 
         // ✅ Redis에 DraftPlan 캐싱 (FastAPI와 공유, 24시간 TTL)
-        String draftPlanCacheKey = "draft_plan:" + session.getId();
+        String draftPlanCacheKey = "shared:draft_plan:" + session.getId();
         cacheService.set(draftPlanCacheKey, draftPlan, 86400); // 24시간
 
         // ========== 7단계: 응답 반환 ==========
@@ -256,7 +254,7 @@ public class MaterialGenerationService {
             generationSessionRepository.save(session);
 
             // ✅ Redis에 FinalizedBrief 캐싱 (FastAPI와 공유, 24시간 TTL)
-            String finalizedBriefCacheKey = "finalized_brief:" + session.getId();
+            String finalizedBriefCacheKey = "shared:finalized_brief:" + session.getId();
             cacheService.set(finalizedBriefCacheKey, finalizedBrief, 86400); // 24시간
 
             return MaterialGenerationPhase2ResponseDto.builder()
@@ -303,7 +301,7 @@ public class MaterialGenerationService {
             generationSessionRepository.save(session);
 
             // ✅ Redis에 FinalizedBrief 캐싱 (FastAPI와 공유, 24시간 TTL)
-            String finalizedBriefCacheKey = "finalized_brief:" + session.getId();
+            String finalizedBriefCacheKey = "shared:finalized_brief:" + session.getId();
             cacheService.set(finalizedBriefCacheKey, finalizedBrief, 86400); // 24시간
             
             return MaterialGenerationPhase2ResponseDto.builder()
@@ -453,7 +451,7 @@ public class MaterialGenerationService {
 
     /**
      * 강의 자료 생성 세션 전체 삭제 (Phase 1~5). 기획안·확정안·챕터·검증·최종문서 등 모든 산출물 제거.
-     * 해당 강의 소유(교사)만 삭제 가능. Redis 캐시(draft_plan, finalized_brief)도 함께 제거.
+     * 해당 강의 소유(교사)만 삭제 가능. Redis 캐시(shared:draft_plan, shared:finalized_brief)도 함께 제거.
      */
     @Transactional
     public void deleteGenerationSession(Long sessionId) {
@@ -465,8 +463,8 @@ public class MaterialGenerationService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
         AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
 
-        cacheService.delete("draft_plan:" + sessionId);
-        cacheService.delete("finalized_brief:" + sessionId);
+        cacheService.delete("shared:draft_plan:" + sessionId);
+        cacheService.delete("shared:finalized_brief:" + sessionId);
         generationSessionRepository.delete(session);
         generationSessionRepository.flush();
     }
@@ -836,8 +834,8 @@ public class MaterialGenerationService {
             }
             
             // ========== 2단계: ko 브랜치 통합 엔드포인트 호출 ==========
-            // ko FastAPI는 요청 본문이 아닌 Redis 키 finalized_brief:{sessionId} 로 기획안을 조회하므로, 호출 전 반드시 Redis에 저장.
-            String finalizedBriefCacheKey = "finalized_brief:" + sessionId;
+            // FastAPI와 공유하는 shared:finalized_brief:{sessionId} 키에 기획안을 저장한 뒤 호출한다.
+            String finalizedBriefCacheKey = "shared:finalized_brief:" + sessionId;
             cacheService.set(finalizedBriefCacheKey, finalizedBriefMap, 86400); // 24시간
 
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 20, "Phase 3-5 시작: 콘텐츠 생성 중...");
@@ -850,40 +848,16 @@ public class MaterialGenerationService {
             requestBody.put("finalized_brief", finalizedBriefMap);
             
             // FastAPI 통합 엔드포인트 호출
-            Map<String, Object> response;
-            try {
-                response = aiServiceWebClient.post()
-                        .uri("/api/lecture-gen/phase3-5/auto")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(BodyInserters.fromValue(requestBody))
-                        .retrieve()
-                        .bodyToMono(Map.class)
-                        .block();
-            } catch (WebClientResponseException wce) {
-                // 400/500 등 FastAPI가 내려준 상세 에러를 그대로 남겨서 원인 파악이 가능하게 한다.
-                String body = null;
-                try {
-                    body = wce.getResponseBodyAsString();
-                } catch (Exception ignored) {}
-                String detail = (body != null && !body.isBlank()) ? body : wce.getMessage();
-                String msg = "FastAPI /api/lecture-gen/phase3-5/auto 호출 실패 (status=" + wce.getStatusCode().value() + "): " + detail;
-                log.error(msg, wce);
-
-                // ✅ Redis Pub/Sub으로 실패 진행 상황 발행
-                publishProgress(sessionId, 0, msg, "ERROR");
-                // Task에도 상세 메시지 저장
-                asyncTaskService.updateTaskStatus(taskId, TaskStatus.FAILED, null, msg);
-                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, msg);
-            }
+            Map<String, Object> response = fastApiNoteGenClient.startPhase3To5Auto(requestBody);
             
             // ko 브랜치: status=accepted, session_id 반환 (task_id 없음). han 등: task_id, status_url 반환.
             boolean koBranch = response != null && "accepted".equals(response.get("status")) && !response.containsKey("task_id");
             if (koBranch) {
-                // ========== ko 브랜치: Redis final_result:{sessionId} 폴링 ==========
+                // ========== ko 브랜치: Redis fa:result:{sessionId} 폴링 ==========
                 log.info("FastAPI Phase 3-5 (ko 브랜치) 작업 수락됨: sessionId={}", sessionId);
                 asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 30, "FastAPI에서 콘텐츠 생성 중...");
                 publishProgress(sessionId, 30, "FastAPI에서 콘텐츠 생성 중...", "PHASE3");
-                String finalResultKey = "final_result:" + sessionId;
+                String finalResultKey = "fa:result:" + sessionId;
                 int maxAttempts = 240;
                 int attempt = 0;
                 boolean completed = false;
@@ -936,11 +910,7 @@ public class MaterialGenerationService {
                     }
                     attempt++;
                     try {
-                        Map<String, Object> statusResponse = aiServiceWebClient.get()
-                                .uri(statusUrl)
-                                .retrieve()
-                                .bodyToMono(Map.class)
-                                .block();
+                        Map<String, Object> statusResponse = fastApiNoteGenClient.getStatusByUrl(statusUrl);
                         if (statusResponse != null) {
                             String status = (String) statusResponse.get("status");
                             Integer progress = statusResponse.get("progress") != null
@@ -1012,7 +982,7 @@ public class MaterialGenerationService {
      */
     private void publishProgress(Long sessionId, int progress, String message, String phase) {
         try {
-            String channel = "progress:session:" + sessionId;
+            String channel = "shared:progress:" + sessionId;
             Map<String, Object> progressData = new HashMap<>();
             progressData.put("progress", progress);
             progressData.put("message", message);

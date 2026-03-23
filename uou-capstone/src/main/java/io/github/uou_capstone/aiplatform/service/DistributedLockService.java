@@ -37,7 +37,7 @@ public class DistributedLockService {
      * @return 작업 결과
      */
     public <T> T executeWithLock(String lockKey, long waitTime, long leaseTime, Supplier<T> supplier) {
-        RLock lock = redissonClient.getLock("lock:" + lockKey);
+        RLock lock = redissonClient.getLock("sb:lock:" + lockKey);
         
         try {
             // 락 획득 시도

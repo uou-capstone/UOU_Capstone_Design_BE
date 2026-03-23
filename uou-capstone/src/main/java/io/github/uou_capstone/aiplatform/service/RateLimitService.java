@@ -31,7 +31,7 @@ public class RateLimitService {
     private final java.util.concurrent.atomic.AtomicLong blockedRequests = new java.util.concurrent.atomic.AtomicLong(0);
 
     // ========== Rate Limit 설정 ==========
-    private static final String RATE_LIMIT_PREFIX = "rate_limit:";
+    private static final String RATE_LIMIT_PREFIX = "sb:rate_limit:";
     private static final int DEFAULT_MAX_REQUESTS_PER_MINUTE = 100;  // 기본: 분당 100회 (개발/테스트 환경)
     private static final Duration RATE_LIMIT_WINDOW = Duration.ofMinutes(1);  // 1분 윈도우
 

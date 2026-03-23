@@ -24,7 +24,7 @@ public class ValidationAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase4/validation";
+        return "/api/v2/lecture-gen/phase4/validation";
     }
 
     @Override

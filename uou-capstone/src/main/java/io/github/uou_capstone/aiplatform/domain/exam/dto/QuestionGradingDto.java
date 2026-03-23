@@ -14,6 +14,7 @@ import java.util.Map;
 public class QuestionGradingDto {
     private Long questionId;
     private String userAnswer; // 사용자 답변
+    private String correctAnswer; // 정답 (MCQ/OX UI 비교용)
     private Boolean isCorrect; // 정답 여부
     private BigDecimal score; // 획득 점수
     private String feedback; // 개별 피드백

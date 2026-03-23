@@ -3,12 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.lecture.controller;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureCreateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureDetailResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureStreamAnswerRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureUpdateRequestDto;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingAnswerResponse;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingContentResponse;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingInitializeResponse;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingSessionDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.service.LectureService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,9 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.Map;
-
-@Tag(name = "강의 API", description = "강의 생성, AI 콘텐츠 생성 등 강의 관련 API")
+@Tag(name = "강의 API", description = "강의 생성/조회/수정/삭제 API")
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -70,62 +63,4 @@ public class LectureController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "AI 강의 콘텐츠 생성", description = "특정 강의의 PDF를 기반으로 AI 콘텐츠(대본, 요약 등) 생성을 요청합니다.")
-    @PostMapping("/lectures/{lectureId}/generate-content")
-    @PreAuthorize("hasAuthority('TEACHER')")
-    public ResponseEntity<String> generateAiContent(@PathVariable Long lectureId) {
-        lectureService.generateAiContent(lectureId);
-        return ResponseEntity.ok("AI 콘텐츠 생성 작업이 시작되었습니다.");
-    }
-
-    // AI 작업 상태 폴링(Polling) API
-    @Operation(summary = "AI 콘텐츠 생성 상태 조회", description = "AI 작업 상태를 조회합니다. (PROCESSING, COMPLETED, FAILED)")
-    @GetMapping("/lectures/{lectureId}/ai-status")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<Map<String, String>> getAiContentStatus(@PathVariable Long lectureId) {
-        String status = lectureService.getLectureAiStatus(lectureId);
-        return ResponseEntity.ok(Map.of("status", status));
-    }
-
-    @Operation(summary = "AI 스트리밍 초기화", description = "스트리밍 모드를 시작하기 위해 PDF 분석을 수행하고 세션을 초기화합니다.")
-    @PostMapping("/lectures/{lectureId}/stream/initialize")
-    @PreAuthorize("hasAuthority('TEACHER')")
-    public ResponseEntity<StreamingInitializeResponse> initializeLectureStream(@PathVariable Long lectureId) {
-        StreamingInitializeResponse response = lectureService.initializeLectureStream(lectureId);
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(summary = "AI 스트리밍 다음 콘텐츠", description = "스트리밍 세션에서 다음 콘텐츠 세그먼트를 가져옵니다.")
-    @PostMapping("/lectures/{lectureId}/stream/next")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<StreamingContentResponse> getNextLectureStreamContent(@PathVariable Long lectureId) {
-        StreamingContentResponse response = lectureService.getNextLectureStreamContent(lectureId);
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(summary = "AI 스트리밍 세션 조회", description = "현재 스트리밍 세션 정보를 조회합니다.")
-    @GetMapping("/lectures/{lectureId}/stream/session")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<StreamingSessionDto> getLectureStreamSession(@PathVariable Long lectureId) {
-        StreamingSessionDto response = lectureService.getLectureStreamSession(lectureId);
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(summary = "AI 스트리밍 질문 답변", description = "스트리밍 중 AI가 제시한 질문에 대한 사용자의 답변을 전송하고 보충 설명을 받습니다.")
-    @PostMapping("/lectures/{lectureId}/stream/answer")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<StreamingAnswerResponse> answerLectureStreamQuestion(
-            @PathVariable Long lectureId,
-            @Valid @RequestBody LectureStreamAnswerRequestDto requestDto) {
-        StreamingAnswerResponse response = lectureService.answerLectureStreamQuestion(lectureId, requestDto);
-        return ResponseEntity.ok(response);
-    }
-
-    @Operation(summary = "AI 스트리밍 취소", description = "진행 중인 스트리밍 세션을 취소합니다.")
-    @PostMapping("/lectures/{lectureId}/stream/cancel")
-    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<Void> cancelLectureStream(@PathVariable Long lectureId) {
-        lectureService.cancelLectureStream(lectureId);
-        return ResponseEntity.noContent().build();
-    }
 }

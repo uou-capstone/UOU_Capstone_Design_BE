@@ -25,7 +25,7 @@ public class DecompositionAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase3/decomposition";
+        return "/api/v2/lecture-gen/phase3/decomposition";
     }
 
     @Override

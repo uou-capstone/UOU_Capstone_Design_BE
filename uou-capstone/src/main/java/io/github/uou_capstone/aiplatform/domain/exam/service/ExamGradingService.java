@@ -1,30 +1,39 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
-import io.github.uou_capstone.aiplatform.domain.exam.dto.*;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.FiveChoiceProblemDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.GradingResponseDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.OxProblemDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.QuestionGradingDto;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.ShortAnswerProblemDto;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
+import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * 시험 채점 서비스 (v3)
  *
- * FastAPI POST /bridge/grade 단건 호출로 채점 + 피드백을 한 번에 위임한다.
+ * FastAPI POST /api/v3/bridge/grade/result 단건 호출로 채점 결과를 직접 반환받는다.
  * DB 저장 및 응답 구성은 Spring Boot가 계속 담당한다.
  */
 @Slf4j
@@ -36,19 +45,18 @@ public class ExamGradingService {
     private final ExamResultRepository examResultRepository;
     private final ObjectMapper objectMapper;
     private final AsyncTaskService asyncTaskService;
-    private final WebClient aiServiceWebClient;
+    private final FastApiBridgeClient fastApiBridgeClient;
 
     /**
      * 시험 채점 (동기)
      *
-     * FastAPI POST /bridge/grade 를 호출하여 채점 결과를 반환한다.
-     * 채점 + 피드백 생성이 FastAPI 내부에서 한 번에 처리된다.
+     * FastAPI POST /api/v3/bridge/grade/result 를 호출하여 채점 결과를 반환한다.
      *
-     * 요청: { exam_type, exam_content, user_answers, prior_profile }
-     * 응답: { total_score, max_score, overall_feedback, question_gradings, feedback_profile }
+     * 요청: { exam_type, problems, user_answers, lecture_content }
+     * 응답: { grading: { results, total_score, overall_feedback }, passed }
      */
     @Transactional(readOnly = true)
-    public GradingResponseDto gradeExam(Long examSessionId, Map<String, Object> userAnswers) {
+    public GradingResponseDto gradeExam(Long examSessionId, List<Map<String, Object>> userAnswers) {
         log.info("시험 채점 시작: examSessionId={}", examSessionId);
 
         ExamSession examSession = examSessionRepository.findById(examSessionId)
@@ -60,10 +68,9 @@ public class ExamGradingService {
         }
 
         GradingResponseDto result = callBridgeGrade(
-                examSession.getExamType().name(),
+                examSession.getExamType(),
                 examContent,
-                userAnswers,
-                examSession.getPriorProfileJson()
+                userAnswers
         );
         result.setExamSessionId(examSessionId);
 
@@ -76,7 +83,7 @@ public class ExamGradingService {
      * 시험 채점 및 피드백 생성 (비동기)
      */
     @org.springframework.scheduling.annotation.Async("examGradingExecutor")
-    public void gradeExamAsync(String taskId, Long examSessionId, Map<String, Object> userAnswers, Long examResultId) {
+    public void gradeExamAsync(String taskId, Long examSessionId, List<Map<String, Object>> userAnswers, Long examResultId) {
         try {
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.PROCESSING, 10, "시험 채점 중...");
 
@@ -123,7 +130,7 @@ public class ExamGradingService {
      * 시험 채점 및 결과 저장
      */
     @Transactional
-    public GradingResponseDto gradeAndSaveResult(ExamResult examResult, Map<String, Object> userAnswers) {
+    public GradingResponseDto gradeAndSaveResult(ExamResult examResult, List<Map<String, Object>> userAnswers) {
         log.info("시험 채점 및 결과 저장: examResultId={}", examResult.getId());
 
         GradingResponseDto gradingResult = gradeExam(examResult.getExamSession().getId(), userAnswers);
@@ -154,44 +161,125 @@ public class ExamGradingService {
     }
 
     /**
-     * FastAPI POST /bridge/grade 단건 호출.
+     * FastAPI POST /api/v3/bridge/grade/result 단건 호출.
      *
-     * 요청: { exam_type, exam_content, user_answers, prior_profile }
-     * 응답: GradingResponseDto 구조 + evaluationMetadata.feedback_profile 포함
+     * 요청: { exam_type, problems, user_answers, lecture_content }
+     * 응답: { grading: { results, total_score, overall_feedback }, passed }
      */
     private GradingResponseDto callBridgeGrade(
-            String examType,
+            ExamType examType,
             Map<String, Object> examContent,
-            Map<String, Object> userAnswers,
-            Map<String, Object> priorProfile) {
+            List<Map<String, Object>> userAnswers) {
 
         Map<String, Object> body = new HashMap<>();
-        body.put("exam_type", examType);
-        body.put("exam_content", examContent);
+        body.put("exam_type", toBridgeExamType(examType));
+        body.put("problems", extractProblems(examType, examContent));
         body.put("user_answers", userAnswers);
-        body.put("prior_profile", priorProfile);
+        body.put("lecture_content", "");
 
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
 
-        String raw = aiServiceWebClient.post()
-                .uri("/bridge/grade")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .onErrorMap(e -> new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
-                        "채점 서비스 호출 실패: " + e.getMessage()))
-                .block();
+        String raw = fastApiBridgeClient.gradeResult(body);
 
         if (raw == null || raw.isBlank()) {
             throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "채점 서비스 응답이 비어 있습니다.");
         }
 
         try {
-            return snakeMapper.readValue(raw, GradingResponseDto.class);
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode gradingNode = root.has("grading") ? root.get("grading") : root;
+            if (gradingNode == null || gradingNode.isMissingNode() || gradingNode.isNull()) {
+                throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "채점 응답에 grading 필드가 없습니다.");
+            }
+
+            GradingResponseDto dto = new GradingResponseDto();
+            dto.setTotalScore(readScore(gradingNode.get("total_score")));
+            dto.setMaxScore(readScore(gradingNode.get("max_score")));
+            dto.setOverallFeedback(readText(gradingNode.get("overall_feedback")));
+            dto.setQuestionGradings(parseQuestionGradings(snakeMapper, gradingNode.get("results")));
+
+            Map<String, Object> metadata = new HashMap<>();
+            if (root.has("passed")) {
+                metadata.put("passed", root.get("passed").asBoolean());
+            }
+            if (root.has("feedback_profile")) {
+                metadata.put("feedback_profile",
+                        objectMapper.convertValue(root.get("feedback_profile"), new TypeReference<Map<String, Object>>() {}));
+            }
+            dto.setEvaluationMetadata(metadata.isEmpty() ? null : metadata);
+            return dto;
         } catch (Exception e) {
             log.error("채점 응답 파싱 실패: {}", e.getMessage());
             throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "채점 결과 파싱에 실패했습니다.");
         }
+    }
+
+    private String toBridgeExamType(ExamType examType) {
+        return switch (examType) {
+            case FLASH_CARD -> "Flash_Card";
+            case OX_PROBLEM -> "OX_Problem";
+            case FIVE_CHOICE -> "Five_Choice";
+            case SHORT_ANSWER -> "Short_Answer";
+            case DEBATE -> "Debate";
+        };
+    }
+
+    private List<Map<String, Object>> extractProblems(ExamType examType, Map<String, Object> examContent) {
+        Object key = switch (examType) {
+            case FLASH_CARD -> examContent.get("flashCards");
+            case OX_PROBLEM -> examContent.get("oxProblems");
+            case FIVE_CHOICE -> examContent.get("fiveChoiceProblems");
+            case SHORT_ANSWER -> examContent.get("shortAnswerProblems");
+            case DEBATE -> examContent.get("debateTopics");
+        };
+
+        if (key == null) {
+            return List.of();
+        }
+
+        return objectMapper.convertValue(key, new TypeReference<List<Map<String, Object>>>() {});
+    }
+
+    private List<QuestionGradingDto> parseQuestionGradings(ObjectMapper snakeMapper, JsonNode resultsNode) {
+        if (resultsNode == null || !resultsNode.isArray()) {
+            return List.of(); // FastAPI가 results를 생략할 수 있으므로 빈 리스트 허용
+        }
+
+        List<QuestionGradingDto> questionGradings = new ArrayList<>();
+        for (JsonNode resultNode : resultsNode) {
+            QuestionGradingDto questionGrading = new QuestionGradingDto();
+            if (resultNode.has("question_index")) {
+                questionGrading.setQuestionId(resultNode.get("question_index").asLong());
+            }
+            questionGrading.setScore(readScore(resultNode.get("score")));
+            questionGrading.setFeedback(readText(resultNode.get("feedback")));
+            if (resultNode.has("passed")) {
+                questionGrading.setIsCorrect(resultNode.get("passed").asBoolean());
+            }
+            if (resultNode.has("user_answer")) {
+                questionGrading.setUserAnswer(readText(resultNode.get("user_answer")));
+            }
+            if (resultNode.has("correct_answer")) {
+                questionGrading.setCorrectAnswer(readText(resultNode.get("correct_answer")));
+            }
+
+            Map<String, Object> details = snakeMapper.convertValue(
+                    resultNode, new TypeReference<Map<String, Object>>() {});
+            questionGrading.setEvaluationDetails(details);
+            questionGradings.add(questionGrading);
+        }
+        return questionGradings;
+    }
+
+    private BigDecimal readScore(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return BigDecimal.ZERO;
+        }
+        return node.decimalValue();
+    }
+
+    private String readText(JsonNode node) {
+        return (node == null || node.isNull()) ? null : node.asText();
     }
 }

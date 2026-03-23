@@ -116,17 +116,18 @@ public class ExamSubmissionService {
         }
 
         // ========== 6단계: 답변 데이터 구성 ==========
-        // ExamGraderAgent에 전달할 답변 데이터 구성
-        Map<String, Object> examContent = examSession.getExamContentJson();
-        Map<String, Object> userAnswers = new HashMap<>();
-        
-        // 답변을 Map으로 변환 (questionId를 키로 사용)
+        // FastAPI 공식 계약(UserAnswer[])에 맞춰 문제별 답변 배열로 변환
+        List<Map<String, Object>> userAnswers = new java.util.ArrayList<>();
+
         for (AnswerSubmissionDto answer : requestDto.getAnswers()) {
             Map<String, Object> answerData = new HashMap<>();
-            answerData.put("answerText", answer.getAnswerText());
-            answerData.put("selectedOptionId", answer.getSelectedOptionId());
-            answerData.put("additionalData", answer.getAdditionalData());
-            userAnswers.put(String.valueOf(answer.getQuestionId()), answerData);
+            answerData.put("problem_id", answer.getQuestionId());
+            answerData.put("user_response",
+                    answer.getSelectedOptionId() != null ? answer.getSelectedOptionId() : answer.getAnswerText());
+            if (answer.getAdditionalData() != null && !answer.getAdditionalData().isEmpty()) {
+                answerData.put("additional_data", answer.getAdditionalData());
+            }
+            userAnswers.add(answerData);
         }
 
         // ========== 7단계: ExamResult 엔티티 생성 ==========

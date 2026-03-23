@@ -25,7 +25,7 @@ public class ReviewAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase4/review";
+        return "/api/v2/lecture-gen/phase4/review";
     }
 
     @Override

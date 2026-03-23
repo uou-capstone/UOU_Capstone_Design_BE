@@ -1,7 +1,5 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.*;
@@ -10,12 +8,12 @@ import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamStatus;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,8 +38,7 @@ public class DebateService {
 
     private final ExamSessionRepository examSessionRepository;
     private final MaterialRepository materialRepository;
-    private final ObjectMapper objectMapper;
-    private final WebClient aiServiceWebClient;
+    private final FastApiSessionClient fastApiSessionClient;
 
     /**
      * Phase 1: 토론형 시험 시작
@@ -191,10 +188,13 @@ public class DebateService {
      * PDF가 있으면 텍스트 추출, 없으면 강의 설명 사용.
      */
     private String resolveLectureContent(ExamSession session) {
-        var pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        session.getLecture().getId(), "PDF")
-                .orElse(null);
+        var pdfMaterial = session.getMaterial();
+        if (pdfMaterial == null) {
+            pdfMaterial = materialRepository
+                    .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
+                            session.getLecture().getId(), "PDF")
+                    .orElse(null);
+        }
 
         if (pdfMaterial != null) {
             String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor
@@ -208,31 +208,13 @@ public class DebateService {
     }
 
     /**
-     * FastAPI POST /api/session/{sessionId}/event 단건(비스트리밍) 호출.
+     * FastAPI POST /api/v3/session/{sessionId}/event 단건(비스트리밍) 호출.
      *
      * @param sessionId  FastAPI 세션 ID
      * @param eventBody  이벤트 바디 (type 포함)
      * @return FastAPI 응답 Map
      */
     private Map<String, Object> callSessionEvent(String sessionId, Map<String, Object> eventBody) {
-        String raw = aiServiceWebClient.post()
-                .uri("/api/session/{sessionId}/event", sessionId)
-                .bodyValue(eventBody)
-                .retrieve()
-                .bodyToMono(String.class)
-                .onErrorMap(e -> new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
-                        "토론 세션 이벤트 호출 실패: " + e.getMessage()))
-                .block();
-
-        if (raw == null || raw.isBlank()) {
-            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "토론 세션 응답이 비어 있습니다.");
-        }
-
-        try {
-            return objectMapper.readValue(raw, new TypeReference<Map<String, Object>>() {});
-        } catch (Exception e) {
-            log.error("토론 세션 응답 파싱 실패: {}", e.getMessage());
-            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "토론 세션 응답 파싱에 실패했습니다.");
-        }
+        return fastApiSessionClient.callEvent(sessionId, eventBody);
     }
 }

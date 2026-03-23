@@ -35,7 +35,7 @@ public class AsyncTaskService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    private static final String TASK_PREFIX = "task:";
+    private static final String TASK_PREFIX = "sb:task:";
     private static final Duration TASK_TTL = Duration.ofHours(24); // 24시간
 
     /**

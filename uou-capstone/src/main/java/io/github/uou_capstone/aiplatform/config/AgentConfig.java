@@ -18,7 +18,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 /**
  * Agent Bean 등록 Configuration (v3)
  *
- * v3 전환 후 exam Agent(13개)는 FastAPI /bridge/quiz, /bridge/grade, /api/session/event 위임으로 대체되어 삭제됨.
+ * v3 전환 후 exam Agent(13개)는 FastAPI /api/v3/bridge/quiz, /api/v3/bridge/grade, /api/v3/session/... 위임으로 대체되어 삭제됨.
  * material Agent(8개)는 강의 자료 생성 파이프라인에서 그대로 유지됨.
  */
 @Configuration

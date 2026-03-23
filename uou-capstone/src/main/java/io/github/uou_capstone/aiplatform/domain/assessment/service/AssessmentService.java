@@ -171,7 +171,7 @@ public class AssessmentService {
         AiQuizGenerateRequestDto aiRequest = new AiQuizGenerateRequestDto(assessment.getId(), pdfPath);
 
         aiServiceWebClient.post()
-                .uri("/api/test-gen/generate") // ai-service(ko) 시험 생성 엔드포인트
+                .uri("/api/v2/test-gen/generate") // ai-service(ko) 시험 생성 엔드포인트
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(BodyInserters.fromValue(aiRequest))
                 .retrieve()

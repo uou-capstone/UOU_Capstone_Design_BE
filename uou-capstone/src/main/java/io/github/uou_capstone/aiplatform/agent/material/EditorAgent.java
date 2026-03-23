@@ -24,7 +24,7 @@ public class EditorAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase5/editor";
+        return "/api/v2/lecture-gen/phase5/editor";
     }
 
     @Override

@@ -49,4 +49,8 @@ public class SessionEventRequest {
     public Map<String, Object> getExtra() {
         return extra;
     }
+
+    public Map<String, Object> toPayload() {
+        return new LinkedHashMap<>(extra);
+    }
 }

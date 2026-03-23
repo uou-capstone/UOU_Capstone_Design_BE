@@ -24,7 +24,7 @@ public class WriteAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase3/write";
+        return "/api/v2/lecture-gen/phase3/write";
     }
 
     @Override

@@ -14,6 +14,12 @@ import lombok.Setter;
 public class ExamGenerationRequestDto {
     @NotNull(message = "강의 ID는 필수입니다.")
     private Long lectureId;
+
+    /**
+     * 시험 기준이 되는 PDF/자료 ID.
+     * 없으면 강의의 최신 PDF를 사용한다.
+     */
+    private Long materialId;
     
     @NotNull(message = "시험 유형은 필수입니다.")
     private ExamType examType; // FLASH_CARD, OX_PROBLEM, FIVE_CHOICE, SHORT_ANSWER, DEBATE

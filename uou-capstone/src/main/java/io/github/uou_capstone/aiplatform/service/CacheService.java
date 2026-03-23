@@ -19,9 +19,9 @@ import java.util.concurrent.TimeUnit;
  * 3. 캐시 키 생성: MD5 해시 기반 캐시 키 생성
  * 
  * 캐시 키 명명 규칙:
- * - profile:{contentHash} - Profile 캐시
- * - session:{sessionId} - 세션 상태 캐시
- * - exam:{examSessionId} - 시험 세션 캐시
+ * - sb:cache:profile:{contentHash} - Profile 캐시
+ * - sb:cache:session:{sessionId} - 세션 상태 캐시
+ * - sb:cache:exam:{examSessionId} - 시험 세션 캐시
  */
 @Slf4j
 @Service
@@ -37,9 +37,9 @@ public class CacheService {
     private final CacheMetrics examSessionMetrics = CacheMetrics.builder().build();
 
     // ========== 캐시 키 접두사 ==========
-    private static final String PROFILE_CACHE_PREFIX = "profile:";
-    private static final String SESSION_CACHE_PREFIX = "session:";
-    private static final String EXAM_SESSION_CACHE_PREFIX = "exam:";
+    private static final String PROFILE_CACHE_PREFIX = "sb:cache:profile:";
+    private static final String SESSION_CACHE_PREFIX = "sb:cache:session:";
+    private static final String EXAM_SESSION_CACHE_PREFIX = "sb:cache:exam:";
 
     // ========== TTL (Time To Live) 설정 ==========
     private static final long PROFILE_TTL = 86400; // 24시간 (초)

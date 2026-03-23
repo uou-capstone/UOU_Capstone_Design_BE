@@ -24,7 +24,7 @@ public class ConfirmAgent extends AbstractAgent {
 
     @Override
     protected String getEndpoint() {
-        return "/api/lecture-gen/phase2/confirm";
+        return "/api/v2/lecture-gen/phase2/confirm";
     }
 
     @Override

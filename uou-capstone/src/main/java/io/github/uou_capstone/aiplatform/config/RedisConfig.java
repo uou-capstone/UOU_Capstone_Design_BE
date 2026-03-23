@@ -89,10 +89,10 @@ public class RedisConfig {
         container.setConnectionFactory(connectionFactory);
         
         // Material Generation 진행 상황 채널 구독
-        // 패턴: "progress:session:*" (모든 세션의 진행 상황)
+        // 패턴: "shared:progress:*" (모든 세션의 진행 상황)
         container.addMessageListener(
             new MessageListenerAdapter(progressListener),
-            new PatternTopic("progress:session:*")
+            new PatternTopic("shared:progress:*")
         );
         
         return container;

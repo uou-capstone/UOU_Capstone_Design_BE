@@ -41,14 +41,14 @@ public class LearningSessionController {
      * 엔드포인트: POST /api/learning/sessions/{lectureId}
      *
      * 강의 ID로 기존 학습 세션을 조회하거나 신규 세션을 생성한다.
-     * 내부적으로 FastAPI GET /api/session/by-lecture/{lectureId} 를 호출한다.
+     * 내부적으로 FastAPI GET /api/v3/session/by-lecture/{lectureId} 를 호출한다.
      *
      * 응답 예시:
      * {
-     *   "sessionId": "abc123",
-     *   "lectureId": 1,
-     *   "state": { "currentPage": 1, "messages": [], "quizzes": [] },
-     *   "aiStatus": { "connected": true }
+     *   "session_id": 1,
+     *   "lecture_id": 1,
+     *   "current_page": 0,
+     *   "ai_status_connected": true
      * }
      */
     @Operation(
@@ -58,8 +58,10 @@ public class LearningSessionController {
     @PostMapping("/{lectureId}")
     @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
     public Mono<ResponseEntity<Map<String, Object>>> createOrGetSession(
-            @Parameter(description = "강의 ID") @PathVariable Long lectureId) {
-        return learningSessionService.getOrCreateSession(lectureId)
+            @Parameter(description = "강의 ID") @PathVariable Long lectureId,
+            @Parameter(description = "PDF 경로(신규 세션 생성 시 선택)")
+            @RequestParam(required = false, name = "pdfPath") String pdfPath) {
+        return learningSessionService.getOrCreateSession(lectureId, pdfPath)
                 .map(ResponseEntity::ok);
     }
 
@@ -71,10 +73,12 @@ public class LearningSessionController {
      * 학습 세션에 AppEvent를 전송하고, FastAPI OrchestrationEngine의 처리 결과를
      * SSE(Server-Sent Events) 스트리밍으로 실시간 수신한다.
      *
-     * 요청 예시:
-     * { "type": "USER_MESSAGE", "text": "이 페이지 설명해줘" }
-     * { "type": "QUIZ_TYPE_SELECTED", "quizType": "MCQ" }
-     * { "type": "QUIZ_SUBMITTED", "answers": { "q1": "A", "q2": "B" } }
+     * 요청 예시 (Spring → FastAPI 변환 후):
+     * {
+     *   "type": "USER_MESSAGE",
+     *   "lecture_id": 1,
+     *   "payload": { "text": "이 페이지 설명해줘" }
+     * }
      *
      * SSE 응답 포맷 (NDJSON 라인별 data 필드):
      * data: {"type":"agent_delta","agent":"explainer","delta":"설명 텍스트..."}
@@ -88,8 +92,10 @@ public class LearningSessionController {
     @PostMapping(value = "/{sessionId}/event", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<String>> sendEvent(
-            @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable String sessionId,
+            @Parameter(description = "강의 ID (신규 세션 생성 직후 이벤트에서만 필요, 이후 생략 가능)")
+            @RequestParam(required = false) Long lectureId,
+            @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable Long sessionId,
             @Valid @RequestBody SessionEventRequest eventRequest) {
-        return learningSessionService.streamSessionEvent(sessionId, eventRequest);
+        return learningSessionService.streamSessionEvent(lectureId, sessionId, eventRequest);
     }
 }

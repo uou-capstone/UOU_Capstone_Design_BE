@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 
  * Redis Pub/Sub을 통해 받은 진행 상황 메시지를 SSE로 클라이언트에게 전달합니다.
  * 
- * 채널 형식: "progress:session:{sessionId}"
+ * 채널 형식: "shared:progress:{sessionId}"
  */
 @Slf4j
 @Component
@@ -37,9 +37,9 @@ public class MaterialGenerationProgressListener implements MessageListener {
             
             log.debug("Redis Pub/Sub 메시지 수신: channel={}, body={}", channel, body);
             
-            // 채널 형식: "progress:session:{sessionId}"
-            if (channel.startsWith("progress:session:")) {
-                String sessionId = channel.substring("progress:session:".length());
+            // 채널 형식: "shared:progress:{sessionId}"
+            if (channel.startsWith("shared:progress:")) {
+                String sessionId = channel.substring("shared:progress:".length());
                 SseEmitter emitter = activeEmitters.get(sessionId);
                 
                 if (emitter != null) {

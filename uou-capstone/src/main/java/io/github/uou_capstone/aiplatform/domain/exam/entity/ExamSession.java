@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.exam.entity;
 
 import io.github.uou_capstone.aiplatform.domain.BaseTimeEntity;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
+import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -31,6 +32,10 @@ public class ExamSession extends BaseTimeEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "lecture_id", nullable = false)
     private Lecture lecture;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "material_id")
+    private Material material;  // 시험 기준 PDF/자료 (선택)
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
@@ -69,8 +74,9 @@ public class ExamSession extends BaseTimeEntity {
     private Map<String, Object> debateHistoryJson;  // 토론 대화 기록 (Phase 2)
 
     @Builder
-    public ExamSession(Lecture lecture, User user, ExamType examType, Integer targetCount) {
+    public ExamSession(Lecture lecture, Material material, User user, ExamType examType, Integer targetCount) {
         this.lecture = lecture;
+        this.material = material;
         this.user = user;
         this.examType = examType;
         this.targetCount = targetCount != null ? targetCount : 10;

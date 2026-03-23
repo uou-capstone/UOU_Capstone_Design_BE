@@ -1,21 +1,25 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.agent.StreamingEvent;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.util.NdjsonLineFilters;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
@@ -24,8 +28,7 @@ import java.util.Map;
 /**
  * 시험 생성 스트리밍 서비스 (v3)
  *
- * 개별 GeneratorAgent 호출을 제거하고 FastAPI POST /bridge/quiz/stream 으로 위임한다.
- * FastAPI의 NDJSON 스트림을 StreamingEvent로 변환하여 클라이언트에 전달한다.
+ * FastAPI POST /api/v3/bridge/quiz 스트림을 그대로 받아 NDJSON 이벤트를 StreamingEvent로 변환한다.
  */
 @Slf4j
 @Service
@@ -36,12 +39,13 @@ public class ExamGenerationStreamService {
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
     private final GenerationSessionRepository generationSessionRepository;
-    private final WebClient aiServiceWebClient;
+    private final ObjectMapper objectMapper;
+    private final FastApiBridgeClient fastApiBridgeClient;
 
     /**
      * 시험 생성 스트리밍
      *
-     * FastAPI POST /bridge/quiz/stream 을 호출하여 NDJSON 스트림을 StreamingEvent Flux로 변환한다.
+     * FastAPI POST /api/v3/bridge/quiz 를 호출하여 NDJSON 스트림을 StreamingEvent Flux로 변환한다.
      *
      * @param examSessionId 시험 세션 ID
      * @return 스트리밍 이벤트 Flux
@@ -54,7 +58,7 @@ public class ExamGenerationStreamService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
         validateSessionOwner(session);
 
-        String lectureContent = getLectureContent(session.getLecture().getId());
+        String lectureContent = getLectureContent(session);
 
         Map<String, Object> body = new HashMap<>();
         body.put("exam_type", session.getExamType().name());
@@ -64,16 +68,10 @@ public class ExamGenerationStreamService {
             body.put("user_profile", session.getPriorProfileJson());
         }
 
-        return aiServiceWebClient.post()
-                .uri("/bridge/quiz/stream")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToFlux(String.class)
+        return fastApiBridgeClient.streamQuiz(body)
                 .filter(line -> !line.isBlank())
-                .map(line -> StreamingEvent.builder()
-                        .type("answer")
-                        .delta(line)
-                        .build())
+                .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
+                .map(this::toStreamingEvent)
                 .onErrorResume(e -> {
                     log.error("시험 생성 스트리밍 오류: examSessionId={}", examSessionId, e);
                     return Flux.just(StreamingEvent.builder()
@@ -83,10 +81,13 @@ public class ExamGenerationStreamService {
                 });
     }
 
-    private String getLectureContent(Long lectureId) {
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lectureId, "PDF")
-                .orElse(null);
+    private String getLectureContent(ExamSession session) {
+        Material pdfMaterial = session.getMaterial();
+        if (pdfMaterial == null) {
+            pdfMaterial = materialRepository
+                    .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(session.getLecture().getId(), "PDF")
+                    .orElse(null);
+        }
 
         if (pdfMaterial != null) {
             String pdfText = io.github.uou_capstone.aiplatform.util.PdfTextExtractor
@@ -96,7 +97,7 @@ public class ExamGenerationStreamService {
         }
 
         io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession generationSession =
-                generationSessionRepository.findByLectureIdOrderByCreatedAtDesc(lectureId)
+                generationSessionRepository.findByLectureIdOrderByCreatedAtDesc(session.getLecture().getId())
                         .stream()
                         .filter(s -> s.getFinalDocument() != null)
                         .findFirst()
@@ -117,6 +118,30 @@ public class ExamGenerationStreamService {
 
         if (!session.getUser().getId().equals(currentUser.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+    }
+
+    private StreamingEvent toStreamingEvent(String line) {
+        try {
+            JsonNode root = objectMapper.readTree(line);
+            String type = root.path("type").asText("unknown");
+
+            Map<String, Object> metadata = objectMapper.convertValue(
+                    root, new TypeReference<Map<String, Object>>() {});
+            metadata.remove("type");
+            metadata.remove("delta");
+
+            return StreamingEvent.builder()
+                    .type(type)
+                    .delta(root.has("delta") ? root.get("delta").asText() : null)
+                    .metadata(metadata.isEmpty() ? null : metadata)
+                    .build();
+        } catch (Exception e) {
+            log.warn("시험 생성 NDJSON 파싱 실패: {}", line, e);
+            return StreamingEvent.builder()
+                    .type("raw")
+                    .delta(line)
+                    .build();
         }
     }
 }

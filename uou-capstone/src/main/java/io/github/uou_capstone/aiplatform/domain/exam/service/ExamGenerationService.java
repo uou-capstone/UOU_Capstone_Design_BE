@@ -16,6 +16,7 @@ import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.service.CacheService;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
@@ -25,7 +26,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 
@@ -36,7 +36,7 @@ import java.util.Map;
 /**
  * 시험 생성 서비스 (v3)
  *
- * 5가지 시험 유형 생성을 FastAPI /bridge/quiz 단건 호출로 위임한다.
+ * 5가지 시험 유형 생성을 FastAPI POST /api/v3/bridge/quiz/result 단건 호출로 위임한다.
  * DB 저장 및 응답 구성은 Spring Boot가 계속 담당한다.
  */
 @Slf4j
@@ -52,7 +52,7 @@ public class ExamGenerationService {
     private final CacheService cacheService;
     private final AsyncTaskService asyncTaskService;
     private final SessionRecoveryService sessionRecoveryService;
-    private final WebClient aiServiceWebClient;
+    private final FastApiBridgeClient fastApiBridgeClient;
 
     /**
      * 시험 생성 요청 처리
@@ -99,14 +99,22 @@ public class ExamGenerationService {
         io.github.uou_capstone.aiplatform.util.AuthorizationUtil.requireLectureOwner(currentUser, lecture);
 
         // ========== 3단계: 강의 자료 조회 ==========
-        // 강의에 업로드된 최신 PDF 또는 생성된 강의 자료 조회
-        // 먼저 PDF를 찾고, 없으면 생성된 강의 자료를 찾음
-        Material pdfMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
-                        requestDto.getLectureId(), 
-                        "PDF"
-                )
-                .orElse(null);
+        // materialId가 오면 해당 자료를 우선 사용, 없으면 강의의 최신 PDF 사용
+        Material pdfMaterial = null;
+        if (requestDto.getMaterialId() != null) {
+            pdfMaterial = materialRepository.findById(requestDto.getMaterialId())
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "요청한 자료를 찾을 수 없습니다."));
+            if (!pdfMaterial.getLecture().getId().equals(lecture.getId())) {
+                throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "materialId가 lectureId와 일치하지 않습니다.");
+            }
+        } else {
+            pdfMaterial = materialRepository
+                    .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(
+                            requestDto.getLectureId(),
+                            "PDF"
+                    )
+                    .orElse(null);
+        }
         
         String lectureContent;
         if (pdfMaterial != null) {
@@ -143,6 +151,7 @@ public class ExamGenerationService {
                 : requestedCount;
         ExamSession session = ExamSession.builder()
                 .lecture(lecture)
+                .material(pdfMaterial)
                 .user(currentUser)
                 .examType(requestDto.getExamType())
                 .targetCount(targetCount)
@@ -163,7 +172,7 @@ public class ExamGenerationService {
         session.updatePriorProfile(profileMap);
 
         // ========== 6단계: 시험 문제 생성 ==========
-        // FastAPI /bridge/quiz 단건 호출로 위임 (exam type, lecture content, target count 전달)
+        // FastAPI /api/v3/bridge/quiz/result 단건 호출로 위임 (exam type, lecture content, target count 전달)
         List<FlashCardDto> flashCards = null;
         List<OxProblemDto> oxProblems = null;
         List<FiveChoiceProblemDto> fiveChoiceProblems = null;
@@ -243,6 +252,7 @@ public class ExamGenerationService {
 
         return ExamGenerationResponseDto.builder()
                 .examSessionId(session.getId())
+                .materialId(session.getMaterial() != null ? session.getMaterial().getId() : null)
                 .examType(requestDto.getExamType())
                 .flashCards(flashCards)
                 .oxProblems(oxProblems)
@@ -339,6 +349,7 @@ public class ExamGenerationService {
 
         return ExamGenerationResponseDto.builder()
                 .examSessionId(session.getId())
+                .materialId(session.getMaterial() != null ? session.getMaterial().getId() : null)
                 .examType(session.getExamType())
                 .flashCards(flashCards)
                 .oxProblems(oxProblems)
@@ -442,7 +453,7 @@ public class ExamGenerationService {
     }
 
     /**
-     * FastAPI POST /bridge/quiz 단건 호출.
+     * FastAPI POST /api/v3/bridge/quiz/result 단건 호출.
      *
      * 요청: { exam_type, target_count, lecture_content, user_profile }
      * 응답: { problems: { flash_cards | ox_problems | mcq_problems | short_answer_problems | ... } }
@@ -468,25 +479,35 @@ public class ExamGenerationService {
         body.put("lecture_content", lectureContent);
         body.put("user_profile", profileMap);
 
-        return aiServiceWebClient.post()
-                .uri("/bridge/quiz")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
+        return fastApiBridgeClient.quizResult(body);
+    }
+
+    private JsonNode readQuizResponseRoot(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "퀴즈 생성 응답이 비어 있습니다.");
+        }
+        try {
+            return objectMapper.readTree(raw);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR, "퀴즈 생성 응답 파싱에 실패했습니다.");
+        }
     }
 
     private List<FlashCardDto> parseUnifiedGenerateFlashCards(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = readQuizResponseRoot(raw);
+            JsonNode quiz = root.get("quiz");
             JsonNode problems = root.get("problems");
-            JsonNode list = (problems != null && problems.has("flash_cards")) ? problems.get("flash_cards") : (root.has("flash_cards") ? root.get("flash_cards") : null);
+            JsonNode list = quiz != null && quiz.isArray()
+                    ? quiz
+                    : (problems != null && problems.has("flash_cards"))
+                    ? problems.get("flash_cards")
+                    : (root.has("flash_cards") ? root.get("flash_cards") : null);
             if (list == null || !list.isArray()) return List.of();
             return snakeMapper.convertValue(list, new TypeReference<List<FlashCardDto>>() {});
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             log.warn("통합 generate 응답 파싱 실패(flash_cards): {}", e.getMessage());
             return List.of();
         }
@@ -494,16 +515,20 @@ public class ExamGenerationService {
 
     /** ko 브랜치 TestGenerationResponse: problems.ox_problems 배열 */
     private List<OxProblemDto> parseUnifiedGenerateOxProblems(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = readQuizResponseRoot(raw);
+            JsonNode quiz = root.get("quiz");
             JsonNode problems = root.get("problems");
-            JsonNode list = (problems != null && problems.has("ox_problems")) ? problems.get("ox_problems") : (root.has("ox_problems") ? root.get("ox_problems") : null);
+            JsonNode list = quiz != null && quiz.isArray()
+                    ? quiz
+                    : (problems != null && problems.has("ox_problems"))
+                    ? problems.get("ox_problems")
+                    : (root.has("ox_problems") ? root.get("ox_problems") : null);
             if (list == null || !list.isArray()) return List.of();
             return snakeMapper.convertValue(list, new TypeReference<List<OxProblemDto>>() {});
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             log.warn("통합 generate 응답 파싱 실패(ox_problems): {}", e.getMessage());
             return List.of();
         }
@@ -511,16 +536,20 @@ public class ExamGenerationService {
 
     /** ko 브랜치 TestGenerationResponse: problems.mcq_problems 배열 */
     private List<FiveChoiceProblemDto> parseUnifiedGenerateFiveChoice(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = readQuizResponseRoot(raw);
+            JsonNode quiz = root.get("quiz");
             JsonNode problems = root.get("problems");
-            JsonNode list = (problems != null && problems.has("mcq_problems")) ? problems.get("mcq_problems") : (root.has("mcq_problems") ? root.get("mcq_problems") : null);
+            JsonNode list = quiz != null && quiz.isArray()
+                    ? quiz
+                    : (problems != null && problems.has("mcq_problems"))
+                    ? problems.get("mcq_problems")
+                    : (root.has("mcq_problems") ? root.get("mcq_problems") : null);
             if (list == null || !list.isArray()) return List.of();
             return snakeMapper.convertValue(list, new TypeReference<List<FiveChoiceProblemDto>>() {});
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             log.warn("통합 generate 응답 파싱 실패(mcq_problems): {}", e.getMessage());
             return List.of();
         }
@@ -528,16 +557,20 @@ public class ExamGenerationService {
 
     /** ko 브랜치 TestGenerationResponse: problems.short_answer_problems 배열 */
     private List<ShortAnswerProblemDto> parseUnifiedGenerateShortAnswer(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = readQuizResponseRoot(raw);
+            JsonNode quiz = root.get("quiz");
             JsonNode problems = root.get("problems");
-            JsonNode list = (problems != null && problems.has("short_answer_problems")) ? problems.get("short_answer_problems") : (root.has("short_answer_problems") ? root.get("short_answer_problems") : null);
+            JsonNode list = quiz != null && quiz.isArray()
+                    ? quiz
+                    : (problems != null && problems.has("short_answer_problems"))
+                    ? problems.get("short_answer_problems")
+                    : (root.has("short_answer_problems") ? root.get("short_answer_problems") : null);
             if (list == null || !list.isArray()) return List.of();
             return snakeMapper.convertValue(list, new TypeReference<List<ShortAnswerProblemDto>>() {});
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             log.warn("통합 generate 응답 파싱 실패(short_answer_problems): {}", e.getMessage());
             return List.of();
         }
@@ -545,16 +578,23 @@ public class ExamGenerationService {
 
     /** ko 브랜치 TestGenerationResponse: problems는 단일 DebateTopic 객체 */
     private List<DebateTopicDto> parseUnifiedGenerateDebate(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = readQuizResponseRoot(raw);
+            JsonNode quiz = root.get("quiz");
             JsonNode problems = root.get("problems");
-            if (problems == null || !problems.isObject()) return List.of();
-            DebateTopicDto one = snakeMapper.convertValue(problems, DebateTopicDto.class);
+            JsonNode debateNode = quiz != null
+                    ? quiz
+                    : problems;
+            if (debateNode == null) return List.of();
+            if (debateNode.isArray() && !debateNode.isEmpty()) {
+                return snakeMapper.convertValue(debateNode, new TypeReference<List<DebateTopicDto>>() {});
+            }
+            if (!debateNode.isObject()) return List.of();
+            DebateTopicDto one = snakeMapper.convertValue(debateNode, DebateTopicDto.class);
             return List.of(one);
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
             log.warn("통합 generate 응답 파싱 실패(debate): {}", e.getMessage());
             return List.of();
         }

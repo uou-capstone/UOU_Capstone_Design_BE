@@ -15,6 +15,7 @@ import java.util.Map;
 @Builder
 public class ExamGenerationResponseDto {
     private Long examSessionId;
+    private Long materialId;
     private ExamType examType;
     private List<FlashCardDto> flashCards; // FLASH_CARD 유형일 때
     private List<OxProblemDto> oxProblems; // OX_PROBLEM 유형일 때
