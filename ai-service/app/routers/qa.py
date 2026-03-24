@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.qa_service import evaluate_answer
+from app.core.path_validator import validate_pdf_path
 
 router = APIRouter(prefix="/api/v2/qa", tags=["[v2] QA"])
 
@@ -29,8 +30,9 @@ async def evaluate(req: QAEvaluateRequest):
     Returns:
         평가 결과 JSON (score, feedback, model_answer 등)
     """
+    safe_path = validate_pdf_path(req.pdf_path)
     try:
-        text = await asyncio.to_thread(evaluate_answer, req.original_q, req.user_answer, req.pdf_path)
+        text = await asyncio.to_thread(evaluate_answer, req.original_q, req.user_answer, safe_path)
         return json.loads(text)
     except json.JSONDecodeError:
         # LLM이 JSON이 아닌 텍스트를 반환한 경우 래핑

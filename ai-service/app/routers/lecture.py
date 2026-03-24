@@ -16,9 +16,10 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ai_agent.agents.ExplainerAgent import ExplainerAgent
+from ai_agent.v3.agents.ExplainerAgent import ExplainerAgent
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+from app.core.path_validator import validate_pdf_path
 
 router = APIRouter(prefix="/api/v2/lectures", tags=["[v2] Lecture"])
 
@@ -33,9 +34,9 @@ _NDJSON_HEADERS = {
 
 
 class LectureGenerateRequest(BaseModel):
-    chapter_title: str = Field(..., description="챕터 제목")
+    page_number: int = Field(..., ge=1, description="현재 사용자가 보고 있는 페이지 번호 (1부터 시작)")
     pdf_path: str = Field(..., description="강의 PDF 파일 경로")
-    md_path: Optional[str] = Field(default=None, description="강의 대본 MD 파일 경로 (선택)")
+    chapter_title: Optional[str] = Field(default=None, description="챕터 제목 (없으면 '페이지 N'으로 자동 설정)")
     detail: str = Field(default="NORMAL", description="설명 수준: NORMAL | DETAILED")
 
 
@@ -45,33 +46,36 @@ async def generate(req: LectureGenerateRequest):
     비스트리밍 강의 설명 생성.
     전체 텍스트를 JSON으로 반환합니다.
     """
+    safe_path = validate_pdf_path(req.pdf_path)
     content = await _explainer.run(
+        page_number=req.page_number,
+        pdf_path=safe_path,
         chapter_title=req.chapter_title,
-        pdf_path=req.pdf_path,
-        md_path=req.md_path,
         detail=req.detail,
     )
-    return {"chapter_title": req.chapter_title, "content": content}
+    return {"page_number": req.page_number, "chapter_title": req.chapter_title, "content": content}
 
 
 @router.post("/generate-stream")
 async def generate_stream(req: LectureGenerateRequest):
     """
-    NDJSON 스트리밍 강의 설명 생성.
+    NDJSON 스트리밍 강의 설명 생성 (페이지 단위).
 
     이벤트 포맷 (agent_delta 규격):
       {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "thought", "delta": "..."}
       {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "..."}
-      {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {...}}
+      {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {}}
       {"type": "error",       "agent": "explainer", "message": "..."}
       {"type": "heartbeat"}
     """
+    safe_path = validate_pdf_path(req.pdf_path)
+
     async def _gen():
         try:
             async for event in _explainer.run_stream(
+                page_number=req.page_number,
+                pdf_path=safe_path,
                 chapter_title=req.chapter_title,
-                pdf_path=req.pdf_path,
-                md_path=req.md_path,
                 detail=req.detail,
             ):
                 yield event.to_ndjson_line()

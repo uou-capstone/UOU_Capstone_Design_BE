@@ -1,7 +1,7 @@
 # Bridge & Session API 계약 문서
 
 > **대상**: Spring Boot 백엔드 개발자  
-> **최종 수정**: 2026-03-12  
+> **최종 수정**: 2026-03-24  
 > **원칙**: Spring Boot는 이 문서에 명시된 필드명·타입·구조만 참고하면 됩니다.
 
 > **📌 done.data 필드명 계약**: `§5`에 명시된 모든 필드명은 **변경되지 않습니다**.  
@@ -29,12 +29,12 @@
 
 ---
 
-## 2. 세션 API `/api/session`
+## 2. 세션 API `/api/v3/session`
 
 ### 2.1 세션 생성/조회
 
 ```
-GET /api/session/by-lecture/{lecture_id}
+GET /api/v3/session/by-lecture/{lecture_id}
 ```
 
 **Query Parameters**
@@ -71,7 +71,7 @@ GET /api/session/by-lecture/{lecture_id}
 ### 2.2 이벤트 전송 (스트리밍) ★ 주 진입점
 
 ```
-POST /api/session/{session_id}/event/stream
+POST /api/v3/session/{session_id}/event/stream
 Content-Type: application/json
 ```
 
@@ -116,7 +116,7 @@ Content-Type: application/json
 ### 2.3 이벤트 전송 (비스트리밍)
 
 ```
-POST /api/session/{session_id}/event
+POST /api/v3/session/{session_id}/event
 Content-Type: application/json
 ```
 
@@ -138,7 +138,7 @@ Content-Type: application/json
 ### 2.4 세션 상태 조회
 
 ```
-GET /api/session/{session_id}/state
+GET /api/v3/session/{session_id}/state
 ```
 
 전체 세션 상태를 JSON으로 반환합니다. 프론트 초기화나 디버깅용.
@@ -148,7 +148,7 @@ GET /api/session/{session_id}/state
 ### 2.5 세션 삭제
 
 ```
-DELETE /api/session/{session_id}
+DELETE /api/v3/session/{session_id}
 ```
 
 ```json
@@ -157,7 +157,7 @@ DELETE /api/session/{session_id}
 
 ---
 
-## 3. Bridge API `/bridge`
+## 3. Bridge API `/api/v3/bridge`
 
 > 단건 AI 작업을 위임하는 엔드포인트입니다.  
 > 학습 세션 흐름과 무관한 독립 작업에만 사용하세요.
@@ -165,7 +165,7 @@ DELETE /api/session/{session_id}
 ### 3.1 퀴즈 생성
 
 ```
-POST /bridge/quiz
+POST /api/v3/bridge/quiz
 Content-Type: application/json
 ```
 
@@ -182,10 +182,12 @@ Content-Type: application/json
 
 | 필드 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---|---|---|
-| `exam_type` | `string` | ✅ | — | `Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer` \| `Debate` |
+| `exam_type` | `string` | ✅ | — | `Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer` |
 | `lecture_content` | `string` | ✅ | — | 강의 자료 텍스트 (Markdown 권장) |
 | `target_count` | `int` | 선택 | `5` | 생성할 문제 수 (1~20) |
 | `user_profile` | `TestProfile \| null` | 선택 | `null` | 사용자 프로필. 없으면 기본 설정 사용 |
+
+> **⚠ `exam_type: "Debate"`는 현재 비활성화 상태입니다.** 해당 값으로 요청 시 `HTTP 400`을 반환합니다.
 
 **응답**: NDJSON 스트리밍. `done` 이벤트의 `data` → [5.1 퀴즈 done.data](#51-퀴즈-생성-donedataquiz) 참고
 
@@ -194,7 +196,7 @@ Content-Type: application/json
 ### 3.2 채점
 
 ```
-POST /bridge/grade
+POST /api/v3/bridge/grade
 Content-Type: application/json
 ```
 
@@ -207,14 +209,15 @@ Content-Type: application/json
     {
       "id": 1,
       "question_content": "SJF의 특징은?",
-      "options": [...],
+      "options": ["...", "...", "...", "...", "..."],
       "correct_answer": "2"
     }
   ],
   "user_answers": [
     { "problem_id": 1, "user_response": "2" }
   ],
-  "lecture_content": "..."
+  "lecture_content": "...",
+  "pdf_path": "/uploads/lecture.pdf"
 }
 ```
 
@@ -223,7 +226,8 @@ Content-Type: application/json
 | `exam_type` | `string` | ✅ | 시험 유형 |
 | `problems` | `array` | ✅ | **퀴즈 생성 응답의 `done.data.quiz` 배열 그대로 전달** |
 | `user_answers` | `UserAnswer[]` | ✅ | 사용자 답안 목록 |
-| `lecture_content` | `string` | 선택 | 단답/서술형 채점 시 참고용 강의 자료 |
+| `lecture_content` | `string` | 선택 | 단답/서술형 채점 시 참고 텍스트 |
+| `pdf_path` | `string` | 선택 | **단답/서술형 채점 시 PDF 경로 — 있으면 `lecture_content`보다 우선 사용** (정확도 향상) |
 
 **`UserAnswer` 구조**
 
@@ -369,6 +373,14 @@ for (String line : ndjsonLines) {
           "feedback": "정답입니다!",
           "user_answer": "2",
           "correct_answer": "2"
+        },
+        {
+          "question_index": 1,
+          "score": 0.7,
+          "passed": true,
+          "feedback": "핵심 개념은 맞지만 세부 설명이 부족합니다.",
+          "reason": "주요 키워드(명세, 검증)를 포함하였으나 '진화' 단계 설명이 누락되었습니다.",
+          "deduction_reason": "'진화' 단계 미언급으로 0.3점 감점"
         }
       ],
       "total_score": 0.8,
@@ -396,17 +408,20 @@ for (String line : ndjsonLines) {
 
 **`data.grading.results[]` 필드 (계약)**
 
-| 필드명 | 타입 | 설명 |
-|---|---|---|
-| `question_index` | `int` | 문제 인덱스 (0-indexed, `problems` 배열 기준) |
-| `score` | `float` | 문제별 점수 (0.0 ~ 1.0) |
-| `passed` | `bool` | 문제별 통과 여부 (score ≥ 0.6) |
-| `feedback` | `string` | 문제별 피드백 |
-| `user_answer` | `string` | 학생이 제출한 답 (MCQ/OX만 포함) |
-| `correct_answer` | `string` | 정답 (MCQ/OX만 포함) |
+| 필드명 | 타입 | 포함 조건 | 설명 |
+|---|---|---|---|
+| `question_index` | `int` | 항상 | 문제 인덱스 (0-indexed, `problems` 배열 기준) |
+| `score` | `float` | 항상 | 문제별 점수 (0.0 ~ 1.0, **0.1 단위**) |
+| `passed` | `bool` | 항상 | 문제별 통과 여부 (score ≥ 0.6) |
+| `feedback` | `string` | 항상 | 학생에게 전달할 구체적·건설적 피드백 |
+| `reason` | `string` | **단답/서술만** | 해당 점수를 부여한 채점 근거 |
+| `deduction_reason` | `string` | **단답/서술만** | 감점 사유 (만점이면 빈 문자열 `""`) |
+| `user_answer` | `string` | **MCQ/OX만** | 학생이 제출한 답 |
+| `correct_answer` | `string` | **MCQ/OX만** | 정답 |
 
-> **참고**: `user_answer`와 `correct_answer`는 MCQ/OX 자동 채점 시만 포함됩니다.  
-> 단답/서술형 LLM 채점 시에는 이 필드가 없을 수 있습니다.
+> **유형별 차이**:  
+> - MCQ/OX: 서버 내부 정답 비교 → `user_answer`, `correct_answer` 포함  
+> - 단답/서술: Gemini LLM 채점 → `reason`, `deduction_reason` 포함 (PDF 직접 전달로 정확도 향상)
 
 **`data.passed` 해석**
 
@@ -446,14 +461,14 @@ FastAPI가 특정 UI 요소를 표시하도록 Spring Boot에 신호를 보낼 �
 ### ✅ 학습 세션 전체 흐름
 
 ```
-1. GET /api/session/by-lecture/{lectureId}?pdf_path=...
+1. GET /api/v3/session/by-lecture/{lectureId}?pdf_path=...
    → session_id 수령
 
-2. POST /api/session/{session_id}/event/stream
+2. POST /api/v3/session/{session_id}/event/stream
    body: { "type": "SESSION_ENTERED", "lecture_id": 456 }
    → 환영 메시지 + QUIZ_DECISION 위젯 수신
 
-3. POST /api/session/{session_id}/event/stream
+3. POST /api/v3/session/{session_id}/event/stream
    body: { "type": "START_EXPLANATION_DECISION", "payload": {"accept": true} }
    ← lecture_id 생략 가능 (세션에 저장됨)
    → 강의 설명 스트리밍 수신
@@ -464,15 +479,16 @@ FastAPI가 특정 UI 요소를 표시하도록 Spring Boot에 신호를 보낼 �
 ### ✅ 단건 퀴즈 생성 + 채점
 
 ```
-1. POST /bridge/quiz
+1. POST /api/v3/bridge/quiz
    body: { "exam_type": "OX_Problem", "lecture_content": "...", "target_count": 5 }
    → done.data.quiz 배열 수신 (저장해둠)
 
-2. POST /bridge/grade
+2. POST /api/v3/bridge/grade
    body: {
      "exam_type": "OX_Problem",
      "problems": [/* done.data.quiz 그대로 */],
-     "user_answers": [{ "problem_id": 1, "user_response": "O" }, ...]
+     "user_answers": [{ "problem_id": 1, "user_response": "O" }, ...],
+     "pdf_path": "/uploads/lecture.pdf"   ← 단답/서술형 시 정확도 향상
    }
    → done.data.grading 수신
 ```
@@ -481,5 +497,5 @@ FastAPI가 특정 UI 요소를 표시하도록 Spring Boot에 신호를 보낼 �
 
 ```
 # Spring Boot가 bridge를 순서대로 호출해 흐름 구성 → FastAPI의 오케스트레이션 원칙 위반
-POST /bridge/explain → POST /bridge/qa → POST /bridge/grade
+POST /api/v3/bridge/explain → POST /api/v3/bridge/qa → POST /api/v3/bridge/grade
 ```

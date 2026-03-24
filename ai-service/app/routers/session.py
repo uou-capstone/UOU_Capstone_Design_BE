@@ -15,9 +15,10 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ai_agent.engine.OrchestrationEngine import OrchestrationEngine
+from ai_agent.v3.engine.OrchestrationEngine import OrchestrationEngine
 from ai_agent.types.domain import AppEvent, AppEventType
 from app.core.session_store import session_store
+from app.core.path_validator import validate_pdf_path_optional
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ async def get_or_create_session(
     state = await session_store.get_or_create(sid, lecture_id)
 
     if pdf_path and not state.pdf_path:
-        state.pdf_path = pdf_path
+        state.pdf_path = validate_pdf_path_optional(pdf_path)
         await session_store.set(state)
 
     return SessionResponse(
@@ -84,18 +85,25 @@ async def get_or_create_session(
 async def _resolve_lecture_id(session_id: int, req: EventRequest) -> int:
     """
     lecture_id 결정 로직.
-    요청에 lecture_id가 있으면 그것을 사용하고,
-    없으면 기존 세션에서 조회한다.
+    기존 세션이 있으면 세션의 lecture_id를 그대로 사용한다.
+    신규 세션이면 요청의 lecture_id가 필수다.
+    요청 lecture_id와 세션 lecture_id가 다를 경우 세션 값을 우선한다 (IDOR 방지).
     """
-    if req.lecture_id is not None:
-        return req.lecture_id
     state = await session_store.get(session_id)
     if state is not None:
+        if req.lecture_id is not None and req.lecture_id != state.lecture_id:
+            logger.warning(
+                "lecture_id mismatch: session=%d has lecture_id=%d, request sent %d — using session value",
+                session_id, state.lecture_id, req.lecture_id,
+            )
         return state.lecture_id
-    raise HTTPException(
-        status_code=400,
-        detail="신규 세션 생성 시 lecture_id가 필요합니다.",
-    )
+    # 세션이 없으면 신규 생성 → lecture_id 필수
+    if req.lecture_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="신규 세션 생성 시 lecture_id가 필요합니다.",
+        )
+    return req.lecture_id
 
 
 @router.post("/{session_id}/event")

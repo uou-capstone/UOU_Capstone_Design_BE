@@ -11,14 +11,14 @@ from typing import Optional, List, Dict, Any
 from redis.asyncio import Redis
 
 from app.core.redis_client import get_redis
-from ai_agent.LectureTestGenerator.main import LectureTestGenerator
-from ai_agent.LectureTestGenerator.schemas import (
+from ai_agent.v2.test_gen.main import LectureTestGenerator
+from ai_agent.v2.test_gen.schemas import (
     ProblemRequest,
     TestGenerationResponse,
     TestProfile,
     ExamType,
 )
-from ai_agent.LectureTestGenerator.profile import (
+from ai_agent.v2.test_gen.profile import (
     generate_profile_async,
     update_profile_async,
     analyze_profile_async,
@@ -139,15 +139,18 @@ async def chat_and_update_profile(request: ProfileRequest):
 @router.post("/generate", response_model=TestGenerationResponse)
 async def generate_test_route(
     request: ProblemRequest,
-    redis: Redis = Depends(get_redis)  # [NEW] Redis 주입
+    redis: Redis = Depends(get_redis)
 ):
     """
     시험 문제를 생성합니다.
-    
+
     Redis 캐싱:
     - 프로필이 자동 생성되는 경우, 강의 내용의 해시를 키로 사용하여 캐싱
     - TTL: 24시간 (86400초)
     """
+    if request.exam_type == ExamType.DEBATE:
+        raise HTTPException(status_code=400, detail="토론형(Debate)은 현재 지원하지 않습니다.")
+
     generator_instance = get_generator()
     
     if not generator_instance:

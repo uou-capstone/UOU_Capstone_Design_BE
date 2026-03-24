@@ -1,4 +1,4 @@
-from ai_agent.Lecture_Agent.component.MainQandAAgent import main as run_qa_agent
+from ai_agent.v2.legacy.MainQandAAgent import main as run_qa_agent
 
 
 def evaluate_answer(original_q: str, user_answer: str, pdf_path: str) -> str:

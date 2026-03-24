@@ -12,7 +12,7 @@ else:
     print("[ai_agent] .env not found, using system environment variables.")
 
 # --- 하위 모듈 import ---
-from ai_agent.Lecture_Agent.component import (
+from ai_agent.v2.legacy import (
     MainQandAAgent,
     PdfAnalysis,
 )

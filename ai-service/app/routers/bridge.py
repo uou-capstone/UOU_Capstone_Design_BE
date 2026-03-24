@@ -20,15 +20,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ai_agent.agents.GraderAgent import GraderAgent
-from ai_agent.agents.QuizAgents import QuizAgents
+from ai_agent.v3.agents.GraderAgent import GraderAgent
+from ai_agent.v3.agents.QuizAgents import QuizAgents
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
-from ai_agent.LectureTestGenerator.schemas import UserAnswer
+from app.core.path_validator import validate_pdf_path_optional
+from ai_agent.v2.test_gen.schemas import UserAnswer
 
 router = APIRouter(prefix="/api/v3/bridge", tags=["[v3] Bridge"])
 
@@ -70,7 +71,7 @@ class GradeRequest(BaseModel):
     problems는 퀴즈 생성 응답의 문제 배열을 그대로 전달합니다.
     user_answers는 problem_id 기준으로 매핑됩니다.
     """
-    exam_type: str = Field(description="Five_Choice | OX_Problem | Short_Answer | Debate")
+    exam_type: str = Field(description="Five_Choice | OX_Problem | Short_Answer")
     problems: List[Dict[str, Any]] = Field(
         ...,
         description="퀴즈 생성 응답(done.data.quiz)에서 받은 문제 배열 그대로 전달",
@@ -79,12 +80,16 @@ class GradeRequest(BaseModel):
         ...,
         description="[{problem_id: 1, user_response: '2'}, ...] 형식",
     )
-    lecture_content: str = Field(default="", description="단답/서술 채점 시 참고할 강의 자료")
+    lecture_content: str = Field(default="", description="단답/서술 채점 시 참고할 강의 자료 텍스트")
+    pdf_path: Optional[str] = Field(default=None, description="단답/서술 채점 시 참고할 PDF 경로 (있으면 텍스트보다 우선)")
 
 
 # ---------------------------------------------------------------------------
 # 엔드포인트
 # ---------------------------------------------------------------------------
+
+_DEBATE_DISABLED_MSG = "토론형(Debate)은 현재 지원하지 않습니다."
+
 
 @router.post("/quiz")
 async def bridge_quiz(req: QuizRequest):
@@ -97,6 +102,8 @@ async def bridge_quiz(req: QuizRequest):
     ⚠ 이 엔드포인트는 단건 요청 전용입니다.
       학습 세션 흐름에서의 퀴즈 생성은 /api/v3/session/{id}/event/stream 을 사용하세요.
     """
+    if req.exam_type == "Debate":
+        raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
     async def _gen():
         try:
             async for event in _quiz.run_stream(
@@ -112,6 +119,8 @@ async def bridge_quiz(req: QuizRequest):
 
 @router.post("/quiz/result")
 async def bridge_quiz_result(req: QuizRequest):
+    if req.exam_type == "Debate":
+        raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
     """
     퀴즈 생성 단건 태스크 — 비스트리밍 버전.
 
@@ -151,21 +160,26 @@ async def bridge_grade_result(req: GradeRequest):
       "passed": true
     }
     """
+    if len(req.problems) != len(req.user_answers):
+        raise HTTPException(
+            status_code=400,
+            detail=f"문제 수({len(req.problems)})와 답안 수({len(req.user_answers)})가 일치하지 않습니다.",
+        )
+    safe_pdf = validate_pdf_path_optional(req.pdf_path)
     try:
         answers_raw = [
             {"index": i, "answer": a.user_response}
             for i, a in enumerate(req.user_answers)
         ]
         result = await _grader.run(
-            req.exam_type, req.problems, answers_raw, req.lecture_content
+            req.exam_type, req.problems, answers_raw, req.lecture_content, safe_pdf
         )
-        from ai_agent.agents.GraderAgent import PASS_SCORE_RATIO
+        from ai_agent.v3.agents.GraderAgent import PASS_SCORE_RATIO
         return {
             "grading": result,
             "passed": result.get("total_score", 0) >= PASS_SCORE_RATIO,
         }
     except Exception as exc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"채점 실패: {exc}")
 
 
@@ -181,6 +195,13 @@ async def bridge_grade(req: GradeRequest):
     ⚠ 이 엔드포인트는 단건 요청 전용입니다.
       학습 세션 흐름에서의 채점은 /api/v3/session/{id}/event/stream 을 사용하세요.
     """
+    if len(req.problems) != len(req.user_answers):
+        raise HTTPException(
+            status_code=400,
+            detail=f"문제 수({len(req.problems)})와 답안 수({len(req.user_answers)})가 일치하지 않습니다.",
+        )
+    safe_pdf = validate_pdf_path_optional(req.pdf_path)
+
     async def _gen():
         try:
             answers_raw = [
@@ -188,7 +209,7 @@ async def bridge_grade(req: GradeRequest):
                 for i, a in enumerate(req.user_answers)
             ]
             async for event in _grader.run_stream(
-                req.exam_type, req.problems, answers_raw, req.lecture_content
+                req.exam_type, req.problems, answers_raw, req.lecture_content, safe_pdf
             ):
                 yield event.to_ndjson_line()
         except Exception as exc:

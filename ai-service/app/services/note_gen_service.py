@@ -5,11 +5,11 @@ import asyncio
 import traceback
 from typing import Any, Dict
 
-from ai_agent.LectureContentGenerator.agents.phase1_planning import execute_phase1
-from ai_agent.LectureContentGenerator.agents.phase2_briefing import execute_phase2
-from ai_agent.LectureContentGenerator.agents.phase3_research import execute_phase3_async
-from ai_agent.LectureContentGenerator.agents.phase4_review import execute_phase4_async
-from ai_agent.LectureContentGenerator.agents.phase5_assembly import execute_phase5
+from ai_agent.v2.note_gen.agents.phase1_planning import execute_phase1
+from ai_agent.v2.note_gen.agents.phase2_briefing import execute_phase2
+from ai_agent.v2.note_gen.agents.phase3_research import execute_phase3_async
+from ai_agent.v2.note_gen.agents.phase4_review import execute_phase4_async
+from ai_agent.v2.note_gen.agents.phase5_assembly import execute_phase5
 from app.core.redis_client import redis_manager
 
 

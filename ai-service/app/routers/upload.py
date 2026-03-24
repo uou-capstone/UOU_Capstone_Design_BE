@@ -1,24 +1,37 @@
+import shutil
+import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import FileResponse
 from pathlib import Path
-import shutil
 
 
 router = APIRouter(prefix="/api/files", tags=["files"])
+
+_UPLOADS_DIR = Path("uploads").resolve()
+_ALLOWED_SUFFIXES = {".pdf", ".md", ".txt"}
 
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        uploads_dir = Path("uploads")
-        uploads_dir.mkdir(parents=True, exist_ok=True)
+        _UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-        dest_path = uploads_dir / file.filename
+        original_suffix = Path(file.filename or "").suffix.lower()
+        if original_suffix not in _ALLOWED_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"허용되지 않는 파일 형식입니다. 허용: {', '.join(_ALLOWED_SUFFIXES)}",
+            )
+
+        safe_name = f"{uuid.uuid4()}{original_suffix}"
+        dest_path = _UPLOADS_DIR / safe_name
+
         with dest_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 절대 경로로 반환
-        return {"filename": file.filename, "path": str(dest_path.resolve())}
+        return {"filename": file.filename, "path": str(dest_path)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
