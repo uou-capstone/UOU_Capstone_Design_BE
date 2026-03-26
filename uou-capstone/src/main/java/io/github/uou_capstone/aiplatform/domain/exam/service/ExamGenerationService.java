@@ -458,10 +458,11 @@ public class ExamGenerationService {
     }
 
     /**
-     * FastAPI POST /api/v3/bridge/quiz/result 단건 호출.
+     * FastAPI v2.7 시험 생성 단건 호출.
      *
+     * FastAPI: POST /api/v2/test-gen/generate
      * 요청: { exam_type, target_count, lecture_content, user_profile }
-     * 응답: { problems: { flash_cards | ox_problems | mcq_problems | short_answer_problems | ... } }
+     * 응답: { exam_type, user_profile, problems: { flash_cards | ox_problems | mcq_problems | short_answer_problems | ... } }
      */
     private String callBridgeQuiz(String lectureContent, ExamType examType, TestProfileDto profile, Integer targetCount) {
         String examTypeStr = switch (examType) {
@@ -484,7 +485,7 @@ public class ExamGenerationService {
         body.put("lecture_content", lectureContent);
         body.put("user_profile", profileMap);
 
-        return fastApiBridgeClient.quizResult(body);
+        return fastApiBridgeClient.testGenGenerate(body);
     }
 
     private JsonNode readQuizResponseRoot(String raw) {

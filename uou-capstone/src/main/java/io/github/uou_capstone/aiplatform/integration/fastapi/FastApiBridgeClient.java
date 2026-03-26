@@ -21,6 +21,24 @@ public class FastApiBridgeClient {
 
     private final WebClient aiServiceWebClient;
 
+    /**
+     * FastAPI v2 Test Generator 호출 (비스트리밍).
+     *
+     * FastAPI: POST /api/v2/test-gen/generate
+     */
+    public String testGenGenerate(Map<String, Object> body) {
+        String raw = aiServiceWebClient.post()
+                .uri("/api/v2/test-gen/generate")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .onErrorMap(e -> new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
+                        "v2 시험 생성 서비스 호출 실패: " + e.getMessage()))
+                .block();
+        BridgeResponseLogger.debugBody(log, "POST /api/v2/test-gen/generate", raw);
+        return raw;
+    }
+
     public String quizResult(Map<String, Object> body) {
         String raw = aiServiceWebClient.post()
                 .uri("/api/v3/bridge/quiz/result")
