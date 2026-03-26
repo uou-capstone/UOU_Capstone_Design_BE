@@ -1,5 +1,7 @@
 # 배포용 Backend Docker Compose (EC2 서버)
-# 사용법: docker compose -f docker-compose.backend.prod.yml up -d
+# 사용법:
+# 1) cp env/prod.env.example env/prod.env
+# 2) docker compose --env-file ./env/prod.env -f docker-compose.backend.prod.yml up -d
 
 services:
   # 공유 Redis (Spring + FastAPI 공용)
@@ -46,6 +48,7 @@ services:
       # JWT 설정
       - JWT_SECRET=${JWT_SECRET}
       # 프로파일 (배포 환경)
+      # -prod 파일이지만, 외부 env가 지정되면 그 값을 우선 사용
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-prod}
     networks:
       - backend-network  # Backend 전용 네트워크 (Redis 포함)

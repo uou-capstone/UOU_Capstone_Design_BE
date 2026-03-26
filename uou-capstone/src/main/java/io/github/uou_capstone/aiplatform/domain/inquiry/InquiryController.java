@@ -22,7 +22,11 @@ public class InquiryController {
     private final InquiryService inquiryService;
 
 
-    @Operation(summary = "AI 강의 질문에 답변하기", description = "강의 중 제시된 AI 질문(질문 타임)에 답변하고 보충 설명을 받습니다.")
+    @Operation(
+            summary = "AI 강의 질문에 답변하기",
+            description = "강의 중 제시된 AI 질문(질문 타임)에 답변하고 보충 설명을 받습니다. "
+                    + "강의에 PDF가 여러 개인 경우 body에 materialId(평가 기준 PDF)를 넣어야 합니다."
+    )
     @PostMapping("/answer") //
     @PreAuthorize("hasAuthority('STUDENT')")
     public ResponseEntity<InquiryResponseDto> answerAiQuestion(@Valid @RequestBody InquiryRequestDto requestDto) {

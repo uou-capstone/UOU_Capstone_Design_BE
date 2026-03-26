@@ -67,10 +67,19 @@ public class ExamGradingService {
             throw new BusinessException(CommonErrorCode.DATA_NOT_FOUND, "시험 내용을 찾을 수 없습니다.");
         }
 
+        // v2.7 FastAPI Bridge 계약:
+        // - Debate는 bridge에서 비활성화됨
+        // - problems/user_answers 길이 불일치 시 400 반환
+        if (examSession.getExamType() == ExamType.DEBATE) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "토론형(DEBATE)은 Bridge 채점을 지원하지 않습니다. 토론 전용 API를 사용해 주세요.");
+        }
+
         GradingResponseDto result = callBridgeGrade(
                 examSession.getExamType(),
                 examContent,
-                userAnswers
+                userAnswers,
+                examSession.getMaterial() != null ? examSession.getMaterial().getFilePath() : null
         );
         result.setExamSessionId(examSessionId);
 
@@ -169,13 +178,28 @@ public class ExamGradingService {
     private GradingResponseDto callBridgeGrade(
             ExamType examType,
             Map<String, Object> examContent,
-            List<Map<String, Object>> userAnswers) {
+            List<Map<String, Object>> userAnswers,
+            String pdfPath) {
 
         Map<String, Object> body = new HashMap<>();
         body.put("exam_type", toBridgeExamType(examType));
-        body.put("problems", extractProblems(examType, examContent));
+        List<Map<String, Object>> problems = extractProblems(examType, examContent);
+        body.put("problems", problems);
         body.put("user_answers", userAnswers);
         body.put("lecture_content", "");
+
+        // FastAPI v2.7: problems/user_answers 길이 불일치 시 400
+        int problemCount = problems != null ? problems.size() : 0;
+        int answerCount = userAnswers != null ? userAnswers.size() : 0;
+        if (problemCount != answerCount) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "문제 수(" + problemCount + ")와 답안 수(" + answerCount + ")가 일치하지 않습니다.");
+        }
+
+        // FastAPI v2.7: 단답/서술 채점 시 pdf_path가 있으면 lecture_content보다 우선 사용
+        if (examType == ExamType.SHORT_ANSWER && pdfPath != null && !pdfPath.isBlank()) {
+            body.put("pdf_path", pdfPath);
+        }
 
         ObjectMapper snakeMapper = objectMapper.copy()
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);

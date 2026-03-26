@@ -180,18 +180,23 @@ public class ExamGenerationService {
         List<DebateTopicDto> debateTopics = null;
 
         try {
-            String raw = callBridgeQuiz(lectureContent, requestDto.getExamType(), profile, session.getTargetCount());
+            // FastAPI v2.7: Bridge는 Debate를 비활성화한다.
+            // 토론형은 /api/exams/debate/*에서 FastAPI session event로 시작한다.
+            if (requestDto.getExamType() == ExamType.DEBATE) {
+                debateTopics = List.of();
+            } else {
+                String raw = callBridgeQuiz(lectureContent, requestDto.getExamType(), profile, session.getTargetCount());
 
-            switch (requestDto.getExamType()) {
-                case FLASH_CARD    -> flashCards        = parseUnifiedGenerateFlashCards(raw);
-                case OX_PROBLEM    -> oxProblems        = parseUnifiedGenerateOxProblems(raw);
-                case FIVE_CHOICE   -> fiveChoiceProblems = parseUnifiedGenerateFiveChoice(raw);
-                case SHORT_ANSWER  -> shortAnswerProblems = parseUnifiedGenerateShortAnswer(raw);
-                case DEBATE        -> debateTopics      = parseUnifiedGenerateDebate(raw);
-                default -> throw new BusinessException(
-                        CommonErrorCode.INVALID_PARAMETER,
-                        "지원하지 않는 시험 유형입니다: " + requestDto.getExamType()
-                );
+                switch (requestDto.getExamType()) {
+                    case FLASH_CARD    -> flashCards        = parseUnifiedGenerateFlashCards(raw);
+                    case OX_PROBLEM    -> oxProblems        = parseUnifiedGenerateOxProblems(raw);
+                    case FIVE_CHOICE   -> fiveChoiceProblems = parseUnifiedGenerateFiveChoice(raw);
+                    case SHORT_ANSWER  -> shortAnswerProblems = parseUnifiedGenerateShortAnswer(raw);
+                    default -> throw new BusinessException(
+                            CommonErrorCode.INVALID_PARAMETER,
+                            "지원하지 않는 시험 유형입니다: " + requestDto.getExamType()
+                    );
+                }
             }
         } catch (Exception e) {
             log.error("시험 생성 실패: examSessionId={}, examType={}, error={}", 

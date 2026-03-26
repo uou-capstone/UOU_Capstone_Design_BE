@@ -7,6 +7,7 @@ import io.github.uou_capstone.aiplatform.agent.StreamingEvent;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
+import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
@@ -61,7 +62,8 @@ public class ExamGenerationStreamService {
         String lectureContent = getLectureContent(session);
 
         Map<String, Object> body = new HashMap<>();
-        body.put("exam_type", session.getExamType().name());
+        // 단건 생성(callBridgeQuiz)과 동일한 FastAPI exam_type 문자열 (enum.name() 아님)
+        body.put("exam_type", toBridgeExamType(session.getExamType()));
         body.put("target_count", session.getTargetCount() != null ? session.getTargetCount() : 10);
         body.put("lecture_content", lectureContent);
         if (session.getPriorProfileJson() != null) {
@@ -79,6 +81,16 @@ public class ExamGenerationStreamService {
                             .delta("시험 생성 스트리밍 중 오류가 발생했습니다: " + e.getMessage())
                             .build());
                 });
+    }
+
+    private static String toBridgeExamType(ExamType examType) {
+        return switch (examType) {
+            case FLASH_CARD -> "Flash_Card";
+            case OX_PROBLEM -> "OX_Problem";
+            case FIVE_CHOICE -> "Five_Choice";
+            case SHORT_ANSWER -> "Short_Answer";
+            case DEBATE -> "Debate";
+        };
     }
 
     private String getLectureContent(ExamSession session) {

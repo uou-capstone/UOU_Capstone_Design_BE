@@ -49,6 +49,11 @@ ai-service/.vscode/
 .env.local
 .env.production
 .env.*.local
+env/*.env
+
+# Local-only Spring config (never commit)
+src/main/resources/application-local.private.yml
+env/*.env
 
 # Docker
 docker-compose.override.yml

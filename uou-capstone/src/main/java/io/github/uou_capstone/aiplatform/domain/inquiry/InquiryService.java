@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.inquiry;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
@@ -19,8 +20,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -51,10 +55,8 @@ public class InquiryService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        // 4. ai-service(FastAPI v2.6) 동기 호출: POST /api/v2/qa/evaluate
-        Material sourceMaterial = materialRepository
-                .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lecture.getId(), "PDF")
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "PDF 자료를 찾을 수 없습니다."));
+        // 4. 평가 기준 PDF 결정 (시험 materialId와 동일하게, 다중 PDF 시 명시 권장)
+        Material sourceMaterial = resolveQaPdfMaterial(lecture, requestDto.getMaterialId(), questionContent.getMaterialReferences());
 
         Map<String, Object> qaRequest = Map.of(
                 "original_q", questionContent.getContentData(),
@@ -104,6 +106,76 @@ public class InquiryService {
                 explanation,
                 aiResponse.getSteps()
         );
+    }
+
+    /**
+     * QA에 사용할 PDF 자료를 결정한다.
+     * <ol>
+     *   <li>요청 {@code materialId}가 있으면 해당 자료(같은 강의·PDF 타입) 사용</li>
+     *   <li>없으면 질문 콘텐츠 {@code materialReferences}에서 material ID 파싱 시도</li>
+     *   <li>그래도 없으면 강의당 PDF가 정확히 1개일 때만 자동 선택</li>
+     *   <li>PDF가 2개 이상이면 {@code materialId} 필수</li>
+     * </ol>
+     */
+    private Material resolveQaPdfMaterial(Lecture lecture, Long requestMaterialId, String materialReferencesJson) {
+        Long lectureId = lecture.getId();
+
+        if (requestMaterialId != null) {
+            return loadPdfMaterialForLecture(lectureId, requestMaterialId);
+        }
+
+        Long fromRefs = tryParseMaterialIdFromReferences(materialReferencesJson);
+        if (fromRefs != null) {
+            return loadPdfMaterialForLecture(lectureId, fromRefs);
+        }
+
+        List<Material> pdfs = materialRepository.findByLecture_IdOrderByCreatedAtDesc(lectureId).stream()
+                .filter(m -> "PDF".equals(m.getMaterialType()))
+                .collect(Collectors.toList());
+
+        if (pdfs.isEmpty()) {
+            throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "PDF 자료를 찾을 수 없습니다.");
+        }
+        if (pdfs.size() > 1) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "강의에 PDF가 여러 개입니다. 답변 요청에 materialId를 지정해 주세요.");
+        }
+        return pdfs.get(0);
+    }
+
+    private Material loadPdfMaterialForLecture(Long lectureId, Long materialId) {
+        Material material = materialRepository.findById(materialId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "요청한 자료를 찾을 수 없습니다."));
+        if (!material.getLecture().getId().equals(lectureId)) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "materialId가 해당 강의와 일치하지 않습니다.");
+        }
+        if (!"PDF".equals(material.getMaterialType())) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "QA 평가는 PDF 자료(materialId)만 지원합니다.");
+        }
+        return material;
+    }
+
+    private Long tryParseMaterialIdFromReferences(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String json = raw.trim();
+        try {
+            if (json.startsWith("{")) {
+                JsonNode n = objectMapper.readTree(json);
+                if (n.hasNonNull("materialId")) {
+                    return n.get("materialId").asLong();
+                }
+                if (n.hasNonNull("material_id")) {
+                    return n.get("material_id").asLong();
+                }
+            } else {
+                return Long.parseLong(json);
+            }
+        } catch (Exception e) {
+            log.debug("materialReferences에서 materialId 파싱 실패: {}", raw, e);
+        }
+        return null;
     }
 
 }

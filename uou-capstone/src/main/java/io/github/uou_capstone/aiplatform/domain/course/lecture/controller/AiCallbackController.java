@@ -1,7 +1,5 @@
 package io.github.uou_capstone.aiplatform.domain.course.lecture.controller;
 
-import io.github.uou_capstone.aiplatform.domain.assessment.service.AssessmentService;
-import io.github.uou_capstone.aiplatform.domain.assessment.dto.QuestionCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.AiResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.service.LegacyLectureFlowService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,7 +22,6 @@ public class AiCallbackController {
     // Legacy 강의 AI 콜백은 제거 예정인 흐름으로, 신규 기능 연동 금지.
     @SuppressWarnings("deprecation")
     private final LegacyLectureFlowService legacyLectureFlowService;
-    private final AssessmentService assessmentService;
 
     //비밀키 주입
     @Value("${ai.service.secret-key}")
@@ -32,7 +29,6 @@ public class AiCallbackController {
 
     @Operation(summary = "AI 콘텐츠 생성 완료 콜백", description = "ai-service가 콘텐츠 생성을 완료하면 이 API를 호출하여 결과를 전달합니다.")
     @PostMapping("/lectures/{lectureId}")
-    @SuppressWarnings("deprecation")
     public ResponseEntity<String> onAiContentGenerated(
             @PathVariable Long lectureId,
             @RequestBody List<AiResponseDto> aiResults, HttpServletRequest request) { // AI가 보내준 결과
@@ -45,23 +41,5 @@ public class AiCallbackController {
 
         legacyLectureFlowService.saveAiContentCallback(lectureId, aiResults);
         return ResponseEntity.ok("Callback received successfully.");
-    }
-
-
-    @Operation(summary = "AI 퀴즈 생성 완료 콜백", description = "ai-service가 퀴즈 생성을 완료하면 이 API를 호출하여 결과를 전달합니다.")
-    @PostMapping("/assessments/{assessmentId}")
-    public ResponseEntity<String> onAiQuizGenerated(
-            @PathVariable Long assessmentId,
-            @RequestBody List<QuestionCreateDto> quizResults, // AI가 보낸 문제 목록
-            HttpServletRequest request) {
-
-        // 비밀키 검증
-        String secretKeyHeader = request.getHeader("X-AI-SECRET-KEY");
-        if (secretKeyHeader == null || !secretKeyHeader.equals(aiServiceSecretKey)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid secret key");
-        }
-
-        assessmentService.saveAiQuizCallback(assessmentId, quizResults);
-        return ResponseEntity.ok("Quiz callback received successfully.");
     }
 }

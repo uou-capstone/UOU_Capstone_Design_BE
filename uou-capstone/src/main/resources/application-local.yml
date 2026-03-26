@@ -1,7 +1,14 @@
 # 로컬 개발 환경 설정
 # 사용법: SPRING_PROFILES_ACTIVE=local 또는 IDE에서 Active Profile 설정
 
+server:
+  port: 8081
+
 spring:
+  # 로컬에서만 쓰는 민감값/하드코딩은 application-local.private.yml로 분리하고 Git에 올리지 않는다.
+  # - 파일이 없으면 무시(optional)
+  config:
+    import: "optional:classpath:application-local.private.yml"
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/uoucapstone?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8&allowPublicKeyRetrieval=true
@@ -31,9 +38,11 @@ spring:
         registration:
           kakao:
         
-            client-id: ${KAKAO_CLIENT_ID}
-            client-secret: ${KAKAO_CLIENT_SECRET}
-            redirect-uri: "http://localhost:8080/login/oauth2/code/kakao"  # 로컬 리다이렉트
+            # 로컬에서는 OAuth 로그인을 사용하지 않는 경우가 많아, 빈 값이면 부팅이 실패한다.
+            # 필요 시 환경변수(KAKAO_CLIENT_ID/SECRET)로 실제 값을 주입해 덮어쓴다.
+            client-id: ${KAKAO_CLIENT_ID:local-dummy-kakao-client-id}
+            client-secret: ${KAKAO_CLIENT_SECRET:local-dummy-kakao-client-secret}
+            redirect-uri: "http://localhost:8081/login/oauth2/code/kakao"  # 로컬 리다이렉트
 
 logging:
   level:
