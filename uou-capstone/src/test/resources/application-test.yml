@@ -1,0 +1,33 @@
+spring:
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+
+  data:
+    redis:
+      # 테스트에서는 Redis에 붙지 않도록 더미 값
+      host: localhost
+      port: 0
+
+app:
+  redis:
+    enabled: false
+
+jwt:
+  # JwtTokenProvider가 Base64 디코딩을 수행하므로 Base64 문자열을 사용
+  secret: dGVzdC1qd3Qtc2VjcmV0LXN0cmluZy1mb3ItdGVzdHMtMzJjaGFycy1taW4=
+
+ai:
+  service:
+    base-url: http://localhost:9999
+    secret-key: test
+
