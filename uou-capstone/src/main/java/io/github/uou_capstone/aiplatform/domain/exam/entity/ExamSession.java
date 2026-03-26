@@ -37,6 +37,9 @@ public class ExamSession extends BaseTimeEntity {
     @JoinColumn(name = "material_id")
     private Material material;  // 시험 기준 PDF/자료 (선택)
 
+    @Column(name = "display_name")
+    private String displayName; // 시험 목록 표시명 (선택)
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;  // 생성 요청한 사용자
@@ -74,9 +77,10 @@ public class ExamSession extends BaseTimeEntity {
     private Map<String, Object> debateHistoryJson;  // 토론 대화 기록 (Phase 2)
 
     @Builder
-    public ExamSession(Lecture lecture, Material material, User user, ExamType examType, Integer targetCount) {
+    public ExamSession(Lecture lecture, Material material, String displayName, User user, ExamType examType, Integer targetCount) {
         this.lecture = lecture;
         this.material = material;
+        this.displayName = displayName;
         this.user = user;
         this.examType = examType;
         this.targetCount = targetCount != null ? targetCount : 10;

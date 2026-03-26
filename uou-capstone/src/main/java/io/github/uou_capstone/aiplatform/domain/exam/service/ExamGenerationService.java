@@ -36,7 +36,7 @@ import java.util.Map;
 /**
  * 시험 생성 서비스 (v3)
  *
- * 5가지 시험 유형 생성을 FastAPI POST /api/v3/bridge/quiz/result 단건 호출로 위임한다.
+ * 5가지 시험 유형 생성을 FastAPI POST /api/v2/test-gen/generate 단건 호출로 위임한다.
  * DB 저장 및 응답 구성은 Spring Boot가 계속 담당한다.
  */
 @Slf4j
@@ -152,6 +152,7 @@ public class ExamGenerationService {
         ExamSession session = ExamSession.builder()
                 .lecture(lecture)
                 .material(pdfMaterial)
+                .displayName(requestDto.getDisplayName())
                 .user(currentUser)
                 .examType(requestDto.getExamType())
                 .targetCount(targetCount)
@@ -172,7 +173,7 @@ public class ExamGenerationService {
         session.updatePriorProfile(profileMap);
 
         // ========== 6단계: 시험 문제 생성 ==========
-        // FastAPI /api/v3/bridge/quiz/result 단건 호출로 위임 (exam type, lecture content, target count 전달)
+        // FastAPI /api/v2/test-gen/generate 단건 호출로 위임 (exam_type, lecture_content, target_count, user_profile 전달)
         List<FlashCardDto> flashCards = null;
         List<OxProblemDto> oxProblems = null;
         List<FiveChoiceProblemDto> fiveChoiceProblems = null;

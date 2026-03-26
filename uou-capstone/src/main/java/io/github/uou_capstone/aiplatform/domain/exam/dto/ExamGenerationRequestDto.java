@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.exam.dto;
 
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
@@ -14,6 +15,13 @@ import lombok.Setter;
 public class ExamGenerationRequestDto {
     @NotNull(message = "강의 ID는 필수입니다.")
     private Long lectureId;
+
+    /**
+     * 시험 목록 표시명(사용자 입력).
+     * 프론트가 displayName(camel) / display_name(snake) 중 하나로 보낼 수 있다.
+     */
+    @JsonAlias({"display_name"})
+    private String displayName;
 
     /**
      * 시험 기준이 되는 PDF/자료 ID.
