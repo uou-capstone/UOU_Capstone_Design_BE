@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 
 _HEARTBEAT_INTERVAL = 10.0
 
@@ -81,6 +82,7 @@ class GraderAgent:
             lecture_content: 강의 자료 텍스트 (단답/서술 채점용)
             pdf_path: 강의 PDF 경로 (단답/서술 채점 시 Gemini에 함께 전달)
         """
+        quiz_type = normalize_exam_type_string(quiz_type)
         yield NdjsonEvent(
             type=NdjsonEventType.AGENT_DELTA,
             agent="grader",
@@ -238,6 +240,7 @@ class GraderAgent:
         pdf_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """비스트리밍 버전"""
+        quiz_type = normalize_exam_type_string(quiz_type)
         if quiz_type in ("Five_Choice", "OX_Problem"):
             return self._grade_auto(problems, user_answers)
         return await self._grade_llm(problems, user_answers, lecture_content, pdf_path)

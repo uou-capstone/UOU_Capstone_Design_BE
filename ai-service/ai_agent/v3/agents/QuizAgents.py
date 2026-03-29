@@ -14,6 +14,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 
 _HEARTBEAT_INTERVAL = 10.0
 
@@ -105,7 +106,8 @@ class QuizAgents:
             "Short_Answer": ExamType.SHORT_ANSWER,
             "Debate": ExamType.DEBATE,
         }
-        exam_type = exam_type_map.get(quiz_type, ExamType.FIVE_CHOICE)
+        qt = normalize_exam_type_string(quiz_type)
+        exam_type = exam_type_map.get(qt, ExamType.FIVE_CHOICE)
 
         test_profile = TestProfile.model_validate(profile) if profile else TestProfile()
         request = ProblemRequest(

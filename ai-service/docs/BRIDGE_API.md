@@ -1,7 +1,7 @@
 # Bridge & Session API 계약 문서
 
 > **대상**: Spring Boot 백엔드 개발자  
-> **최종 수정**: 2026-03-24  
+> **최종 수정**: 2026-03-24 (Spring `exam_type` 별칭 수용 · §7 연동 검토 추가)  
 > **원칙**: Spring Boot는 이 문서에 명시된 필드명·타입·구조만 참고하면 됩니다.
 
 > **📌 done.data 필드명 계약**: `§5`에 명시된 모든 필드명은 **변경되지 않습니다**.  
@@ -17,6 +17,7 @@
 4. [스트리밍 이벤트 포맷 (agent_delta 규격)](#4-스트리밍-이벤트-포맷)
 5. [done.data 상세 스펙](#5-donedata-상세-스펙)
 6. [호출 패턴 가이드](#6-호출-패턴-가이드)
+7. [Spring Boot 연동 검토 (v2.7·코드 정합)](#7-spring-boot-연동-검토-v27코드-정합)
 
 ---
 
@@ -26,6 +27,10 @@
 - 스트리밍 응답은 `Content-Type: application/x-ndjson` (줄마다 JSON 한 줄)
 - 필드명: **snake_case** (Spring에서 camelCase로 변환 필요 시 Jackson 설정 사용)
 - `session_id`, `lecture_id`: **정수(int)** 타입 고정
+
+### 1.1 `pdf_path` (채점 등)
+
+`pdf_path`를 보낼 때는 서버의 **`uploads/` 아래 실제 파일**만 허용됩니다. 업로드 API 응답의 `path`를 그대로 쓰는 것을 권장합니다. 위반 시 **`HTTP 400`**, 없으면 **`HTTP 404`**. 상세는 `docs/ARCHITECTURE.md` §9.1 참고.
 
 ---
 
@@ -182,8 +187,8 @@ Content-Type: application/json
 
 | 필드 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---|---|---|
-| `exam_type` | `string` | ✅ | — | `Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer` |
-| `lecture_content` | `string` | ✅ | — | 강의 자료 텍스트 (Markdown 권장) |
+| `exam_type` | `string` | ✅ | — | **권장(계약)**: `Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer`. **호환**: Java `Enum.name()` 형태(`FIVE_CHOICE`, `OX_PROBLEM` 등)도 FastAPI가 내부적으로 동일 값으로 정규화합니다. |
+| `lecture_content` | `string` | ✅ | — | 강의 자료 **텍스트** (Markdown 권장). PDF 바이너리가 아님 — `pdf_path` 필드는 **현재 퀴즈 생성 요청에 없음** (§7.1 참고) |
 | `target_count` | `int` | 선택 | `5` | 생성할 문제 수 (1~20) |
 | `user_profile` | `TestProfile \| null` | 선택 | `null` | 사용자 프로필. 없으면 기본 설정 사용 |
 
@@ -499,3 +504,28 @@ FastAPI가 특정 UI 요소를 표시하도록 Spring Boot에 신호를 보낼 �
 # Spring Boot가 bridge를 순서대로 호출해 흐름 구성 → FastAPI의 오케스트레이션 원칙 위반
 POST /api/v3/bridge/explain → POST /api/v3/bridge/qa → POST /api/v3/bridge/grade
 ```
+
+---
+
+## 7. Spring Boot 연동 검토 (v2.7·코드 정합)
+
+FastAPI v2.7과 Spring 쪽 구현을 맞출 때 코드상 차이가 나기 쉬운 지점입니다.
+
+### 7.1 Bridge 퀴즈 생성과 `pdf_path`
+
+- **채점** (`POST /api/v3/bridge/grade`, `/grade/result`): 선택 필드 `pdf_path`로 PDF를 넘기면 단답/서술 채점 정확도에 유리합니다 (§1.1 경로 검증 적용).
+- **퀴즈 생성** (`POST /api/v3/bridge/quiz`, `/quiz/result`): 요청 스키마는 **`lecture_content` 문자열만** 있으며 **`pdf_path`는 없습니다**. Spring이 PDF 경로 문자열만 넣는 것은 LLM 입장에선 의미 없는 문자열일 수 있으므로, **텍스트 추출은 Spring/BFF에서 한 뒤** `lecture_content`로 보내는 패턴이 맞습니다.
+- 향후 FastAPI에서 퀴즈 API에도 `pdf_path`를 추가할지는 **별도 설계(업로드 검증·생성 파이프라인)** 가 필요합니다. 당장 v2.7 필수 수정은 **아님** — 백로그 후보로 두기 적합합니다.
+
+### 7.2 `exam_type` 문자열 (스트리밍 vs 동기)
+
+- **계약상 권장 값**: `Five_Choice`, `OX_Problem`, `Flash_Card`, `Short_Answer` (`ExamType`의 **value**와 동일).
+- **Spring 이슈**: `session.getExamType().name()` 처럼 **`FIVE_CHOICE`** 형태가 나가면, 과거 FastAPI는 퀴즈 매핑 실패 시 **기본값 `Five_Choice`로만 동작**해 OX 등이 잘못 처리될 수 있었습니다.
+- **v2.7 대응**: `QuizAgents` / `GraderAgent` / Bridge 퀴즈 라우터에서 **`FIVE_CHOICE` → `Five_Choice` 등 별칭을 정규화**합니다. 그래도 신규 코드는 **문서의 권장 문자열**을 쓰는 것이 안전합니다.
+
+구현 참고: `ai_agent/v3/exam_type_aliases.py` 의 `normalize_exam_type_string`.
+
+### 7.3 레거시 `/api/delegator/dispatch`
+
+- v2.6+ URL 버전·세션 단일 진입점(`/api/v3/session/...`)으로 이전한 흐름과 연관된 **별도 마이그레이션**입니다.
+- **v2.7 보안·경로 검증 패치와는 독립**이며, `FastApiDelegatorClient` 등 레거시 클라이언트 정리는 **레거시 제거 작업**으로 분리하는 것이 좋습니다.

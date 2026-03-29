@@ -1,13 +1,14 @@
 # FE API 연동 가이드
 
-> 최종 수정: 2026-03-24  
-> 대상: 프론트엔드 개발자  
-> Base URL: `http://{서버주소}`
+> **최종 수정**: 2026-03-29 (코드 정합: §0 `pdf_path`, 세션 `payload` 키, `done.data.ui` widget/modal, Bridge 채점 길이 검증, v2 lecture-gen·헬스, `test-gen` Debate 400)  
+> **대상**: 프론트엔드 개발자  
+> **Base URL**: `http://{서버주소}`
 
 ---
 
 ## 목차
 
+0. [공통 — `pdf_path` · 업로드](#0-공통--pdf_path--업로드)
 1. [스트리밍 이벤트 공통 포맷](#1-스트리밍-이벤트-공통-포맷)
 2. [v2 — 강의 설명 (단건)](#2-v2--강의-설명-단건)
 3. [v2 — QA 평가](#3-v2--qa-평가)
@@ -16,6 +17,15 @@
 6. [v3 — Bridge (단건 퀴즈/채점)](#6-v3--bridge-단건-퀴즈채점)
 7. [공용 — PDF 분석 / 파일 업로드](#7-공용--pdf-분석--파일-업로드)
 8. [스트리밍 처리 예시 코드](#8-스트리밍-처리-예시-코드)
+9. [v2 — 강의 노트 생성 (요약)](#9-v2--강의-노트-생성-요약)
+
+---
+
+## 0. 공통 — `pdf_path` · 업로드
+
+- **`pdf_path`**: 서버의 **`uploads/` 아래 실제 파일**만 허용 (경로 순회 `../` 거부 → `400`, 없으면 `404`). v2 강의/QA, PDF 분석, v3 세션 쿼리, Bridge 채점 등에 공통 적용.
+- **권장**: `POST /api/files/upload` 응답의 **`path` 문자열을 그대로** 이후 API에 넣기 (아래 §7 참고).
+- 이 문서 예시의 `/uploads/lecture.pdf` 는 **의미 설명용**이며, 실제로는 UUID 파일명 경로가 옵니다.
 
 ---
 
@@ -84,7 +94,8 @@
 }
 ```
 
-> `error` 이벤트가 수신되면 스트림이 **반드시 종료**됩니다. 연결을 끊고 오류를 표시하세요.
+> `error` 이벤트가 수신되면 스트림이 **반드시 종료**됩니다. 연결을 끊고 오류를 표시하세요.  
+> `agent`는 `"system"` \| `"quiz"` \| `"grader"` \| `"explainer"` 등 호출 주체에 따라 달라질 수 있습니다.
 
 ---
 
@@ -121,7 +132,7 @@ Content-Type: application/json
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `page_number` | int (≥1) | ✅ | 현재 사용자가 보고 있는 페이지 번호 |
-| `pdf_path` | string | ✅ | 서버에 업로드된 PDF 경로 |
+| `pdf_path` | string | ✅ | 업로드된 PDF — **§0** 규칙 (응답 `path` 그대로 권장) |
 | `chapter_title` | string | ❌ | 챕터 제목 (없으면 "페이지 N"으로 자동 설정) |
 | `detail` | `"NORMAL"` \| `"DETAILED"` | ❌ | 설명 수준 (기본: `"NORMAL"`) |
 
@@ -181,7 +192,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `original_q` | string | ✅ | 원본 질문 |
 | `user_answer` | string | ✅ | 사용자 답변 |
-| `pdf_path` | string | ✅ | 강의 PDF 경로 |
+| `pdf_path` | string | ✅ | 강의 PDF — **§0** 규칙 |
 
 **응답** (LLM이 생성하는 JSON)
 
@@ -226,7 +237,7 @@ Content-Type: application/json
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `context.lecture_content` | string | ✅ | 강의 내용 텍스트 |
-| `context.exam_type` | string | ✅ | 시험 유형 (아래 참고) |
+| `context.exam_type` | string | ❌ | 시험 유형 (아래 참고). 스키마상 선택 — 프론트에서 이미 고른 유형을 넘기면 프로필 에이전트가 재질문하지 않음 |
 | `context.topic` | string | ❌ | 출제 주제 |
 | `context.problem_count` | int | ❌ | 문제 수 |
 | `context.existing_profile` | object \| null | ❌ | 이전 프로필 (없으면 null) |
@@ -309,6 +320,8 @@ Content-Type: application/json
 
 > 문제 구조는 `exam_type`에 따라 다릅니다. 상세 필드는 `docs/TEST_GEN_API.md` 참고.
 
+`exam_type`이 **Debate**이면 이 엔드포인트는 **`HTTP 400`** 을 반환합니다.
+
 ---
 
 ## 5. v3 — 통합 세션 (오케스트레이션)
@@ -319,8 +332,13 @@ Content-Type: application/json
 ### 5-1. 세션 조회/생성
 
 ```
-GET /api/v3/session/by-lecture/{lectureId}?pdf_path={pdf_path}
+GET /api/v3/session/by-lecture/{lectureId}?session_id={optional}&pdf_path={optional}
 ```
+
+| Query | 설명 |
+|---|---|
+| `session_id` | 선택. 없으면 `lecture_id`로 신규 세션 키 사용 |
+| `pdf_path` | 선택. **§0** 검증. 세션에 아직 PDF가 없을 때만 저장; 이미 있으면 무시 |
 
 **응답**
 
@@ -335,7 +353,10 @@ GET /api/v3/session/by-lecture/{lectureId}?pdf_path={pdf_path}
 }
 ```
 
-> `ai_status_connected: false`이면 PDF 경로가 없는 상태입니다.
+> `ai_status_connected: false`이면 세션에 `pdf_path`가 없는 상태입니다.
+
+**`lecture_id` (이벤트 API)**  
+이미 Redis에 세션이 있으면, 요청 바디의 `lecture_id`와 달라도 **저장된 세션의 `lecture_id`가 항상 사용**됩니다 (에러 없음, 서버 로그만).
 
 ---
 
@@ -359,46 +380,61 @@ Content-Type: application/json
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `type` | AppEventType | ✅ | 이벤트 타입 (아래 표 참고) |
-| `lecture_id` | int | 신규 세션만 필수 | 기존 세션에서는 생략 가능 |
-| `payload` | object | ❌ | 이벤트별 추가 데이터 |
+| `lecture_id` | int | 신규 세션만 필수 | 기존 세션에서는 생략 가능 (§5-1 참고) |
+| `payload` | object | ❌ | 이벤트별 추가 데이터 (`AppEvent.get()`이 **payload**만 읽음) |
 
-**AppEventType 목록**
+**AppEventType 목록** (payload 키는 서버 `Orchestrator` / `StateReducer`와 **반드시 일치**)
 
 | 이벤트 | payload 예시 | 설명 |
 |---|---|---|
 | `SESSION_ENTERED` | `{}` | 세션 최초 진입 |
-| `PAGE_CHANGED` | `{"page_number": 2}` | 사용자가 페이지 이동 |
-| `START_EXPLANATION_DECISION` | `{"decision": "YES"}` | 설명 시작 여부 |
-| `USER_MESSAGE` | `{"question": "질문 내용"}` | 사용자 질문 |
-| `QUIZ_DECISION` | `{"decision": "YES"}` | 퀴즈 시작 여부 |
-| `QUIZ_TYPE_SELECTED` | `{"quiz_type": "Five_Choice"}` | 퀴즈 유형 선택 |
-| `QUIZ_SUBMITTED` | `{"answers": [...]}` | 퀴즈 답안 제출 |
-| `NEXT_PAGE_DECISION` | `{"decision": "YES"}` | 다음 페이지 이동 여부 |
+| `PAGE_CHANGED` | `{"page": 2}` | 페이지 이동 — 키는 **`page`** (정수). `page_number` 아님 |
+| `START_EXPLANATION_DECISION` | `{"accept": true}` | 설명 시작 동의 — 키는 **`accept`** (boolean) |
+| `USER_MESSAGE` | `{"text": "질문 본문"}` | 자유 질문 — 키는 **`text`** (`question` 아님) |
+| `QUIZ_DECISION` | `{"accept": true}` | 퀴즈 진행 동의 |
+| `QUIZ_TYPE_SELECTED` | `{"quizType": "OX_Problem"}` | 유형 선택 — 키는 **`quizType`** (camelCase). `Debate`면 안내 메시지 후 유형 선택 UI 재표시 |
+| `QUIZ_SUBMITTED` | `{"answers": [...], "quizType": "Five_Choice"}` | 답안 제출 — `answers` 필수. `quizType` 생략 시 `Five_Choice` 가정 |
+| `REVIEW_DECISION` | `{"accept": true}` | 복습 동의 |
+| `RETEST_DECISION` | `{"accept": true}` | 재시험 동의 |
+| `NEXT_PAGE_DECISION` | `{"accept": true}` | 다음 페이지 이동 동의 |
 | `SAVE_AND_EXIT` | `{}` | 저장 후 종료 |
 
 ---
 
 ### 5-3. done.data — UI 위젯 힌트
 
-`done` 이벤트의 `data.ui.widget`으로 FE에 다음 화면 상태를 알립니다.
+서버는 `done.data.ui`에 **`widget`** 또는 **`modal`** 을 둡니다 (동시에 올 수 있음).
 
 ```json
 {"type": "done", "final": true, "data": {"ui": {"widget": "NEXT_PAGE_DECISION"}}}
 ```
 
-| widget 값 | FE 동작 |
-|---|---|
-| `"NEXT_PAGE_DECISION"` | "다음 페이지로 넘어갈까요?" 버튼 표시 |
-| `"QUIZ_DECISION"` | "퀴즈를 풀어볼까요?" 버튼 표시 |
-| `"QUIZ_TYPE_SELECT"` | 퀴즈 유형 선택 UI 표시 |
-| `"QUIZ_RESULT"` | 채점 결과 화면 표시 |
-| `"FREE_CHAT"` | 일반 질문 입력창 유지 |
+```json
+{"type": "done", "final": true, "data": {"ui": {"modal": "QUIZ_TYPE_PICKER"}}}
+```
+
+| 키 | 값 | FE 동작 |
+|---|---|---|
+| `widget` | `START_EXPLANATION_DECISION` | 설명 시작 여부 UI |
+| `widget` | `QUIZ_DECISION` | "퀴즈를 풀어볼까요?" |
+| `widget` | `NEXT_PAGE_DECISION` | "다음 페이지로 넘어갈까요?" |
+| `widget` | `REVIEW_DECISION` | 복습 제안 (채점 미달 시 등) |
+| `widget` | `RETEST_DECISION` | 재시험 제안 |
+| `modal` | `QUIZ_TYPE_PICKER` | 퀴즈 유형 선택 모달 |
+
+> 상세 계약은 [`BRIDGE_API.md`](BRIDGE_API.md) §5.3 과 동일합니다.
 
 ---
 
 ## 6. v3 — Bridge (단건 퀴즈/채점)
 
 > 세션 흐름 없이 독립적으로 퀴즈 생성 또는 채점만 필요할 때 사용합니다.
+
+### 6-0. Bridge만의 참고 (v2.7)
+
+- **`exam_type`**: 계약은 `Five_Choice` 등; Java `FIVE_CHOICE`는 서버가 정규화. [`BRIDGE_API.md`](BRIDGE_API.md) §7.2.
+- **퀴즈 생성**에는 `pdf_path` 없음 — `lecture_content`는 텍스트만. §7.1 동일 문서.
+- **`pdf_path`**: 공통 규칙은 위 **§0**.
 
 ### 6-1. 퀴즈 생성 (스트리밍)
 
@@ -456,7 +492,8 @@ Content-Type: application/json
 | `problem_id` | int | 문제 번호 (1부터 시작) |
 | `user_response` | string | MCQ/OX: 선택 번호 문자열, 단답/서술: 답변 텍스트 |
 | `lecture_content` | string | 단답/서술 채점 참고 텍스트 (선택) |
-| `pdf_path` | string | 단답/서술 채점 시 PDF 경로 — **있으면 텍스트보다 우선 사용** (선택) |
+| `pdf_path` | string | 단답/서술 채점 시 PDF — **있으면 텍스트보다 우선** (선택, **§0** 검증) |
+| (검증) | — | `problems` 개수와 `user_answers` 개수가 **다르면 HTTP 400** |
 
 **done.data**
 
@@ -491,7 +528,7 @@ Content-Type: application/json
 | 퀴즈 생성 결과만 필요할 때 | `POST /api/v3/bridge/quiz/result` |
 | 채점 결과만 필요할 때 | `POST /api/v3/bridge/grade/result` |
 
-요청 필드는 스트리밍 버전과 동일합니다.
+요청 필드는 스트리밍 버전과 동일합니다. 채점 단건(`grade/result`)도 **`problems`/`user_answers` 길이 일치** 및 `pdf_path` **§0** 규칙이 동일합니다.
 
 ---
 
@@ -535,10 +572,14 @@ file: (binary)
 **응답**
 
 ```json
-{ "path": "/uploads/abc123.pdf", "filename": "lecture.pdf" }
+{
+  "filename": "lecture.pdf",
+  "path": "C:\\\\app\\\\uploads\\\\550e8400-e29b-41d4-a716-446655440000.pdf"
+}
 ```
 
-> 업로드된 `path` 값을 이후 API의 `pdf_path` 필드에 사용하세요.
+- **허용 확장자**: `.pdf`, `.md`, `.txt` 만 (`400` 그 외).
+- 디스크 저장명은 **UUID + 확장자**; **`path`를 그대로** 이후 `pdf_path`에 사용하고, UI 표시는 **`filename`** 사용.
 
 ---
 
@@ -597,6 +638,22 @@ async function streamLecture(req: LectureRequest) {
 
 ---
 
-> 전체 API 계약 상세: `docs/BRIDGE_API.md`  
-> 시험 문제 스키마 상세: `docs/TEST_GEN_API.md`  
-> 아키텍처 개요: `docs/ARCHITECTURE.md`
+## 9. v2 — 강의 노트 생성 (요약)
+
+`main.py`에 등록된 **Classic Track** 엔드포인트입니다. 통합 세션(v3)과 별개입니다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `POST` | `/api/v2/lecture-gen/phase1/planning` | 기획 단계 |
+| `POST` | `/api/v2/lecture-gen/phase2/update` | 브리핑 갱신 |
+| `POST` | `/api/v2/lecture-gen/phase3-5/auto` | Phase3~5 자동 생성 |
+| `GET` | `/api/v2/lecture-gen/status/{task_id}` | 비동기 작업 상태 |
+
+요청/응답 필드는 `app/routers/note_gen.py` 및 `docs/ARCHITECTURE.md` §2 참고.
+
+---
+
+> **헬스**: `GET /health` — `redis` 연결 여부 포함.  
+> 전체 API 계약 상세: [`BRIDGE_API.md`](BRIDGE_API.md)  
+> 시험 문제 스키마 상세: [`TEST_GEN_API.md`](TEST_GEN_API.md)  
+> 아키텍처 개요: [`ARCHITECTURE.md`](ARCHITECTURE.md)

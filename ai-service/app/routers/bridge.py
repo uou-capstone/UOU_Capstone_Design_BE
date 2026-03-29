@@ -30,6 +30,7 @@ from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
 from app.core.path_validator import validate_pdf_path_optional
 from ai_agent.v2.test_gen.schemas import UserAnswer
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 
 router = APIRouter(prefix="/api/v3/bridge", tags=["[v3] Bridge"])
 
@@ -102,12 +103,14 @@ async def bridge_quiz(req: QuizRequest):
     ⚠ 이 엔드포인트는 단건 요청 전용입니다.
       학습 세션 흐름에서의 퀴즈 생성은 /api/v3/session/{id}/event/stream 을 사용하세요.
     """
-    if req.exam_type == "Debate":
+    exam_type = normalize_exam_type_string(req.exam_type)
+    if exam_type == "Debate":
         raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
+
     async def _gen():
         try:
             async for event in _quiz.run_stream(
-                req.exam_type, req.lecture_content, req.user_profile, req.target_count
+                exam_type, req.lecture_content, req.user_profile, req.target_count
             ):
                 yield event.to_ndjson_line()
         except Exception as exc:
@@ -119,8 +122,6 @@ async def bridge_quiz(req: QuizRequest):
 
 @router.post("/quiz/result")
 async def bridge_quiz_result(req: QuizRequest):
-    if req.exam_type == "Debate":
-        raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
     """
     퀴즈 생성 단건 태스크 — 비스트리밍 버전.
 
@@ -133,14 +134,17 @@ async def bridge_quiz_result(req: QuizRequest):
       "quiz_type": "Five_Choice"
     }
     """
+    exam_type = normalize_exam_type_string(req.exam_type)
+    if exam_type == "Debate":
+        raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
     try:
         quiz_data = await _quiz.run(
-            req.exam_type, req.lecture_content, req.user_profile, req.target_count
+            exam_type, req.lecture_content, req.user_profile, req.target_count
         )
         result = quiz_data if isinstance(quiz_data, dict) else (
             quiz_data.model_dump() if hasattr(quiz_data, "model_dump") else quiz_data
         )
-        return {"quiz": result, "quiz_type": req.exam_type}
+        return {"quiz": result, "quiz_type": exam_type}
     except Exception as exc:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"퀴즈 생성 실패: {exc}")
