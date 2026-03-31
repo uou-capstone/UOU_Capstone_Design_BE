@@ -2,7 +2,6 @@ package io.github.uou_capstone.aiplatform.domain.course.lecture.controller;
 
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureStreamAnswerRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingAnswerResponse;
-import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingContentResponse;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingInitializeResponse;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingSessionDto;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.service.LegacyLectureFlowService;
@@ -10,9 +9,12 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
 import java.util.Map;
 
@@ -48,12 +50,21 @@ public class LegacyLectureFlowController {
         return ResponseEntity.ok(response);
     }
 
-    @Operation(summary = "AI 스트리밍 다음 콘텐츠", description = "스트리밍 세션에서 다음 콘텐츠 세그먼트를 가져옵니다.")
-    @PostMapping("/lectures/{lectureId}/stream/next")
+    @Operation(
+            summary = "AI 스트리밍 다음 콘텐츠 (SSE)",
+            description = """
+                    FastAPI NDJSON 청크를 실시간으로 SSE 이벤트로 중계합니다.
+
+                    이벤트 종류:
+                    - event=message : {"type":"delta","delta":"텍스트 조각"}
+                    - event=done    : {"type":"done","lectureId":N,"hasMore":false,"waitingForAnswer":false}
+                    - event=done    : {"type":"done","status":"WAITING_FOR_ANSWER","waitingForAnswer":true,...}
+                    - event=error   : {"type":"error","message":"..."}
+                    """)
+    @GetMapping(value = "/lectures/{lectureId}/stream/next", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<StreamingContentResponse> getNextLectureStreamContent(@PathVariable Long lectureId) {
-        StreamingContentResponse response = legacyLectureFlowService.getNextLectureStreamContent(lectureId);
-        return ResponseEntity.ok(response);
+    public Flux<ServerSentEvent<Map<String, Object>>> streamNextLectureContent(@PathVariable Long lectureId) {
+        return legacyLectureFlowService.streamNextContent(lectureId);
     }
 
     @Operation(summary = "AI 스트리밍 세션 조회", description = "현재 스트리밍 세션 정보를 조회합니다.")

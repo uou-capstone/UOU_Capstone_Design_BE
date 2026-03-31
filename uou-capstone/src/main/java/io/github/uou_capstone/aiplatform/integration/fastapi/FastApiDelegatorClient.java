@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -61,6 +62,33 @@ public class FastApiDelegatorClient {
             case "cancel" -> buildCancelResponse(payload);
             default -> throw new StreamingApiException(HttpStatus.BAD_REQUEST, "지원하지 않는 legacy stage: " + stage);
         };
+    }
+
+    /**
+     * FastAPI /api/v2/lectures/generate-stream 의 NDJSON 델타를 그대로 Flux 로 중계.
+     * reduce 없이 청크 단위로 방출하므로 SSE 실시간 전달에 사용한다.
+     */
+    public Flux<String> streamLectureContent(Map<String, Object> payload, String secretKey) {
+        Map<String, Object> lectureReq = buildLectureGenerateRequest(payload);
+        return aiServiceWebClient.post()
+                .uri("/api/v2/lectures/generate-stream")
+                .contentType(MediaType.APPLICATION_JSON)
+                .headers(headers -> applyCommonHeaders(headers, secretKey))
+                .body(BodyInserters.fromValue(lectureReq))
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, cr -> cr.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .flatMap(body -> Mono.error(new StreamingApiException(
+                                cr.statusCode(), extractErrorMessage(body, cr.statusCode())))))
+                .onStatus(HttpStatusCode::is5xxServerError, cr -> cr.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .flatMap(body -> Mono.error(new StreamingApiException(
+                                cr.statusCode(), extractErrorMessage(body, cr.statusCode())))))
+                .bodyToFlux(String.class)
+                .filter(line -> !line.isBlank())
+                .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
+                .map(this::extractMainDelta)
+                .filter(text -> text != null && !text.isBlank());
     }
 
     private Map<String, Object> callLectureGenerate(Map<String, Object> payload, String secretKey) {

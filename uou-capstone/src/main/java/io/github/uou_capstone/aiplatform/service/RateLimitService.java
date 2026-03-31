@@ -36,6 +36,14 @@ public class RateLimitService {
     private static final Duration RATE_LIMIT_WINDOW = Duration.ofMinutes(1);  // 1분 윈도우
 
     /**
+     * Rate Limit 확인 (이메일 키).
+     * DB 조회 없이 SecurityContext 의 이메일을 그대로 키로 사용한다.
+     */
+    public boolean isAllowedByEmail(String email) {
+        return isAllowedInternal("email:" + email, DEFAULT_MAX_REQUESTS_PER_MINUTE);
+    }
+
+    /**
      * Rate Limit 확인 (사용자별)
      * 
      * @param userId 사용자 ID

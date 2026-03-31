@@ -20,8 +20,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
 import java.util.List;
@@ -52,7 +54,7 @@ public class LegacyLectureFlowService {
 
     @Transactional
     public void generateAiContent(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         Teacher currentTeacher = currentUserResolver.getTeacher();
@@ -75,7 +77,7 @@ public class LegacyLectureFlowService {
 
     @Transactional(readOnly = true)
     public StreamingInitializeResponse initializeLectureStream(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         Teacher currentTeacher = currentUserResolver.getTeacher();
@@ -95,7 +97,7 @@ public class LegacyLectureFlowService {
 
     @Transactional(readOnly = true)
     public StreamingContentResponse getNextLectureStreamContent(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         validateLectureParticipant(lecture.getCourse());
@@ -132,9 +134,85 @@ public class LegacyLectureFlowService {
         }
     }
 
+    /**
+     * GET /stream/next 용 SSE 스트리밍 버전.
+     * DB 준비(강의 조회·권한·자료) 는 동기로 처리하고,
+     * FastAPI NDJSON 청크를 reduce 없이 그대로 SSE 이벤트로 방출한다.
+     *
+     * <p>이벤트 구조:
+     * <ul>
+     *   <li>event=message : {"type":"delta","delta":"텍스트 조각"}</li>
+     *   <li>event=done    : {"type":"done","lectureId":N,"hasMore":false,"waitingForAnswer":false}</li>
+     *   <li>event=done    : {"type":"done","status":"WAITING_FOR_ANSWER","waitingForAnswer":true,...}</li>
+     *   <li>event=error   : {"type":"error","message":"..."}</li>
+     * </ul>
+     */
+    @Transactional(readOnly = true)
+    public Flux<ServerSentEvent<Map<String, Object>>> streamNextContent(Long lectureId) {
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
+
+        validateLectureParticipant(lecture.getCourse());
+
+        String pdfPath = getLatestPdfMaterial(lectureId).getFilePath();
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("lecture_id", lectureId);
+        payload.put("lectureId", lectureId);
+        payload.put("pdf_path", pdfPath);
+
+        Map<String, Object> doneData = new HashMap<>();
+        doneData.put("type", "done");
+        doneData.put("lectureId", lectureId);
+        doneData.put("hasMore", false);
+        doneData.put("waitingForAnswer", false);
+        doneData.put("chapterTitle", "페이지 설명");
+
+        return fastApiDelegatorClient.streamLectureContent(payload, aiServiceSecretKey)
+                .map(delta -> {
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("type", "delta");
+                    data.put("delta", delta);
+                    return ServerSentEvent.<Map<String, Object>>builder()
+                            .event("message")
+                            .data(data)
+                            .build();
+                })
+                .concatWith(Flux.just(ServerSentEvent.<Map<String, Object>>builder()
+                        .event("done")
+                        .data(doneData)
+                        .build()))
+                .onErrorResume(e -> {
+                    if (e instanceof StreamingApiException sae
+                            && sae.getStatusCode() == HttpStatus.BAD_REQUEST
+                            && sae.getMessage() != null
+                            && sae.getMessage().contains("Waiting for answer")) {
+                        String aiQuestionId = extractQuestionIdFromMessage(sae.getMessage());
+                        Map<String, Object> waitData = new HashMap<>();
+                        waitData.put("type", "done");
+                        waitData.put("status", "WAITING_FOR_ANSWER");
+                        waitData.put("lectureId", lectureId);
+                        waitData.put("waitingForAnswer", true);
+                        waitData.put("hasMore", true);
+                        waitData.put("aiQuestionId", aiQuestionId);
+                        return Flux.just(ServerSentEvent.<Map<String, Object>>builder()
+                                .event("done")
+                                .data(waitData)
+                                .build());
+                    }
+                    Map<String, Object> errorData = new HashMap<>();
+                    errorData.put("type", "error");
+                    errorData.put("message", e.getMessage());
+                    return Flux.just(ServerSentEvent.<Map<String, Object>>builder()
+                            .event("error")
+                            .data(errorData)
+                            .build());
+                });
+    }
+
     @Transactional(readOnly = true)
     public StreamingSessionDto getLectureStreamSession(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         validateLectureParticipant(lecture.getCourse());
@@ -148,7 +226,7 @@ public class LegacyLectureFlowService {
 
     @Transactional(readOnly = true)
     public StreamingAnswerResponse answerLectureStreamQuestion(Long lectureId, LectureStreamAnswerRequestDto requestDto) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         validateLectureParticipant(lecture.getCourse());
@@ -184,7 +262,7 @@ public class LegacyLectureFlowService {
 
     @Transactional(readOnly = true)
     public void cancelLectureStream(Long lectureId) {
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         validateLectureParticipant(lecture.getCourse());
