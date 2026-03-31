@@ -35,7 +35,6 @@ import java.util.stream.Collectors;
  * 신규 구현은 v3 learning session 또는 v2 단건 API에만 추가한다.
  */
 @Slf4j
-@Deprecated(since = "v2.6", forRemoval = false)
 @Service
 @RequiredArgsConstructor
 public class LegacyLectureFlowService {

@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 
 @Tag(name = "강의 AI Legacy API", description = "v1 legacy 강의 AI 흐름 API (유지보수 전용, 신규 기능 추가 금지)")
-@Deprecated(since = "v2.6", forRemoval = false)
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
