@@ -60,8 +60,10 @@ public class LearningSessionController {
     public Mono<ResponseEntity<Map<String, Object>>> createOrGetSession(
             @Parameter(description = "강의 ID") @PathVariable Long lectureId,
             @Parameter(description = "PDF 경로(신규 세션 생성 시 선택)")
-            @RequestParam(required = false, name = "pdfPath") String pdfPath) {
-        return learningSessionService.getOrCreateSession(lectureId, pdfPath)
+            @RequestParam(required = false, name = "pdfPath") String pdfPath,
+            @Parameter(description = "기존 FastAPI 세션 ID(선택, FastAPI session_id 쿼리와 동일)")
+            @RequestParam(required = false, name = "sessionId") Long sessionId) {
+        return learningSessionService.getOrCreateSession(lectureId, pdfPath, sessionId)
                 .map(ResponseEntity::ok);
     }
 

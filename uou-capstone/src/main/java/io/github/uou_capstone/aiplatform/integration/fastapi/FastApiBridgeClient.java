@@ -12,7 +12,7 @@ import reactor.core.publisher.Flux;
 import java.util.Map;
 
 /**
- * FastAPI v3 Bridge API 전용 클라이언트.
+ * FastAPI 연동: v2 시험 생성(test-gen)과 v3 Bridge(통합 에이전트·스트리밍 퀴즈 등)를 모두 사용한다.
  */
 @Slf4j
 @Component
@@ -22,9 +22,7 @@ public class FastApiBridgeClient {
     private final WebClient aiServiceWebClient;
 
     /**
-     * FastAPI v2 Test Generator 호출 (비스트리밍).
-     *
-     * FastAPI: POST /api/v2/test-gen/generate
+     * v2 시험/퀴즈 생성 (단건 JSON). Spring 동기 시험 생성({@code /api/exams/generation}) 경로에서 사용.
      */
     public String testGenGenerate(Map<String, Object> body) {
         String raw = aiServiceWebClient.post()
@@ -39,6 +37,7 @@ public class FastApiBridgeClient {
         return raw;
     }
 
+    /** v3 Bridge 단건 퀴즈 결과 (필요 시 별도 호출용). */
     public String quizResult(Map<String, Object> body) {
         String raw = aiServiceWebClient.post()
                 .uri("/api/v3/bridge/quiz/result")

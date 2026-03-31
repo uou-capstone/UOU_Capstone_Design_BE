@@ -27,7 +27,7 @@ import java.util.Map;
  * Spring Boot는 인증/인가 처리 후 FastAPI로 요청을 위임한다.
  *
      * 프록시 대상:
-     * - POST /api/learning/sessions/{lectureId}     → GET  FastAPI /api/v3/session/by-lecture/{lectureId}
+     * - POST /api/learning/sessions/{lectureId}     → GET  FastAPI /api/v3/session/by-lecture/{lectureId} (pdf_path, session_id)
      * - POST /api/learning/sessions/{id}/event      → POST FastAPI /api/v3/session/{id}/event/stream (NDJSON→SSE)
  */
 @Slf4j
@@ -47,13 +47,14 @@ public class LearningSessionService {
      * @param lectureId 강의 ID
      * @return FastAPI 세션 응답 (sessionId, state, aiStatus 포함)
      */
-    public Mono<Map<String, Object>> getOrCreateSession(Long lectureId, String pdfPath) {
+    public Mono<Map<String, Object>> getOrCreateSession(Long lectureId, String pdfPath, Long sessionId) {
         if (lectureId == null || lectureId <= 0) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "유효한 강의 ID가 필요합니다.");
         }
-        log.info("학습 세션 조회/생성: lectureId={}, hasPdfPath={}", lectureId, StringUtils.hasText(pdfPath));
+        log.info("학습 세션 조회/생성: lectureId={}, hasPdfPath={}, sessionId={}",
+                lectureId, StringUtils.hasText(pdfPath), sessionId);
 
-        return fastApiSessionClient.getOrCreateByLecture(lectureId, pdfPath)
+        return fastApiSessionClient.getOrCreateByLecture(lectureId, pdfPath, sessionId)
                 .doOnNext(body -> BridgeResponseLogger.debugMapSummary(log, "GET /api/v3/session/by-lecture", body))
                 .onErrorMap(Exception.class, e -> {
                     if (e instanceof BusinessException) return e;

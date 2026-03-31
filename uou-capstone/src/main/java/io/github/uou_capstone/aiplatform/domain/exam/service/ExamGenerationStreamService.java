@@ -62,7 +62,7 @@ public class ExamGenerationStreamService {
         String lectureContent = getLectureContent(session);
 
         Map<String, Object> body = new HashMap<>();
-        // 단건 생성(callBridgeQuiz)과 동일한 FastAPI exam_type 문자열 (enum.name() 아님)
+        // 동기 v2 생성과 동일한 Bridge용 exam_type 문자열 (enum.name() 아님)
         body.put("exam_type", toBridgeExamType(session.getExamType()));
         body.put("target_count", session.getTargetCount() != null ? session.getTargetCount() : 10);
         body.put("lecture_content", lectureContent);

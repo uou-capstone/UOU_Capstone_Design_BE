@@ -34,10 +34,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 시험 생성 서비스 (v3)
+ * 시험 생성 서비스
  *
- * 5가지 시험 유형 생성을 FastAPI POST /api/v2/test-gen/generate 단건 호출로 위임한다.
- * DB 저장 및 응답 구성은 Spring Boot가 계속 담당한다.
+ * <p>v2와 v3 퀴즈 파이프라인은 다르다. 동기 생성은 FastAPI v2 {@code POST /api/v2/test-gen/generate} 를 쓴다.
+ * 비동기 NDJSON 스트림은 v3 Bridge {@code POST /api/v3/bridge/quiz} ({@link ExamGenerationStreamService}).
+ * DB 저장·응답 조립은 Spring이 담당한다.
  */
 @Slf4j
 @Service
@@ -172,8 +173,8 @@ public class ExamGenerationService {
         Map<String, Object> profileMap = objectMapper.convertValue(profile, Map.class);
         session.updatePriorProfile(profileMap);
 
-        // ========== 6단계: 시험 문제 생성 ==========
-        // FastAPI /api/v2/test-gen/generate 단건 호출로 위임 (exam_type, lecture_content, target_count, user_profile 전달)
+        // ========== 6단계: 시험 문제 생성 (v2 test-gen, 동기) ==========
+        // FastAPI POST /api/v2/test-gen/generate
         List<FlashCardDto> flashCards = null;
         List<OxProblemDto> oxProblems = null;
         List<FiveChoiceProblemDto> fiveChoiceProblems = null;
@@ -186,7 +187,7 @@ public class ExamGenerationService {
             if (requestDto.getExamType() == ExamType.DEBATE) {
                 debateTopics = List.of();
             } else {
-                String raw = callBridgeQuiz(lectureContent, requestDto.getExamType(), profile, session.getTargetCount());
+                String raw = callV2TestGenGenerate(lectureContent, requestDto.getExamType(), profile, session.getTargetCount());
 
                 switch (requestDto.getExamType()) {
                     case FLASH_CARD    -> flashCards        = parseUnifiedGenerateFlashCards(raw);
@@ -459,13 +460,13 @@ public class ExamGenerationService {
     }
 
     /**
-     * FastAPI v2.7 시험 생성 단건 호출.
+     * FastAPI v2 시험 생성 단건 호출 (v3 Bridge 와 별도 계약).
      *
      * FastAPI: POST /api/v2/test-gen/generate
      * 요청: { exam_type, target_count, lecture_content, user_profile }
-     * 응답: { exam_type, user_profile, problems: { flash_cards | ox_problems | mcq_problems | short_answer_problems | ... } }
+     * 응답: {@code quiz} 또는 {@code problems.*} 등 — 파서가 v2/v3 유사 형태 모두 수용
      */
-    private String callBridgeQuiz(String lectureContent, ExamType examType, TestProfileDto profile, Integer targetCount) {
+    private String callV2TestGenGenerate(String lectureContent, ExamType examType, TestProfileDto profile, Integer targetCount) {
         String examTypeStr = switch (examType) {
             case FLASH_CARD   -> "Flash_Card";
             case OX_PROBLEM   -> "OX_Problem";

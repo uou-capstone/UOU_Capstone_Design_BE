@@ -104,6 +104,7 @@ public class LegacyLectureFlowService {
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);
         payload.put("lectureId", lectureId);
+        payload.put("pdf_path", getLatestPdfMaterial(lectureId).getFilePath());
 
         try {
             return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);

@@ -27,12 +27,15 @@ public class FastApiSessionClient {
     private final WebClient aiServiceWebClient;
     private final ObjectMapper objectMapper;
 
-    public Mono<Map<String, Object>> getOrCreateByLecture(Long lectureId, String pdfPath) {
+    public Mono<Map<String, Object>> getOrCreateByLecture(Long lectureId, String pdfPath, Long sessionId) {
         return aiServiceWebClient.get()
                 .uri(uriBuilder -> {
                     var builder = uriBuilder.path("/api/v3/session/by-lecture/{lectureId}");
                     if (StringUtils.hasText(pdfPath)) {
                         builder.queryParam("pdf_path", pdfPath);
+                    }
+                    if (sessionId != null) {
+                        builder.queryParam("session_id", sessionId);
                     }
                     return builder.build(lectureId);
                 })
