@@ -165,7 +165,7 @@ public class AuthorizationUtil {
      */
     public static Long getCurrentUserId(io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository userRepository) {
         String email = getCurrentUserEmail();
-        return userRepository.findByEmail(email)
+        return userRepository.findByEmailWithRoles(email)
                 .map(User::getId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
     }

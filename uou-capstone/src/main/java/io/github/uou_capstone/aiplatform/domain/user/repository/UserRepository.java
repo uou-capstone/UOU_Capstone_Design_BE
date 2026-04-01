@@ -15,8 +15,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @param email 사용자 이메일
      * @return Optional<User>
      */
-    @EntityGraph(attributePaths = {"student", "teacher"})
-    Optional<User> findByEmail(String email);
+    @Query("""
+            SELECT u
+            FROM User u
+            LEFT JOIN FETCH u.student
+            LEFT JOIN FETCH u.teacher
+            WHERE u.email = :email
+            """)
+    Optional<User> findByEmail(@Param("email") String email);
 
     /**
      * 이메일로 사용자를 조회할 때 Student, Teacher를 함께 JOIN FETCH

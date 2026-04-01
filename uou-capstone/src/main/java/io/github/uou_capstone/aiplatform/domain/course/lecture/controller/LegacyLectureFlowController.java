@@ -61,7 +61,11 @@ public class LegacyLectureFlowController {
                     - event=done    : {"type":"done","status":"WAITING_FOR_ANSWER","waitingForAnswer":true,...}
                     - event=error   : {"type":"error","message":"..."}
                     """)
-    @GetMapping(value = "/lectures/{lectureId}/stream/next", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RequestMapping(
+            value = "/lectures/{lectureId}/stream/next",
+            method = {RequestMethod.GET, RequestMethod.POST},
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE
+    )
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
     public Flux<ServerSentEvent<Map<String, Object>>> streamNextLectureContent(@PathVariable Long lectureId) {
         return legacyLectureFlowService.streamNextContent(lectureId);
