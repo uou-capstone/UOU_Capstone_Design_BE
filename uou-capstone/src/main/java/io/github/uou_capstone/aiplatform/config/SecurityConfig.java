@@ -6,6 +6,7 @@ import io.github.uou_capstone.aiplatform.security.jwt.JwtAuthenticationFilter;
 import io.github.uou_capstone.aiplatform.security.oauth.CustomOAuth2UserService;
 import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationFailureHandler;
 import io.github.uou_capstone.aiplatform.security.oauth.OAuth2AuthenticationSuccessHandler;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,7 +23,6 @@ import org.springframework.security.web.authentication.www.BasicAuthenticationFi
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
 
 import java.util.Arrays;
 
@@ -63,6 +63,11 @@ public class SecurityConfig {
 
             // API 경로별 접근 권한 설정
             .authorizeHttpRequests(auth -> auth
+                    // SSE/스트리밍용 Tomcat async dispatch 허용 (재인증 없이 통과)
+                    // Flux<ServerSentEvent> 응답 시 AsyncContextImpl이 2차 dispatch하는 경우를 허용
+                    .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
+                    .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // 모든 OPTIONS 요청을 허용
 
                     .requestMatchers("/api/auth/**").permitAll()

@@ -459,3 +459,119 @@ if (claims.get("role") == null) {
 ### 수정 파일
 
 - `security/jwt/JwtAuthenticationFilter.java`
+
+---
+
+## [2026-04-01] N+1 쿼리 — MaterialGenerationService (강의 자료 에이전트)
+
+### 증상
+
+v3 통합에이전트 테스트 중 Hibernate 로그에 아래와 같은 N+1 패턴이 관찰됐다.
+
+```
+SELECT * FROM generation_sessions WHERE lecture_id=? AND user_id=?
+SELECT * FROM lectures    WHERE lecture_id=?        ← lazy load (N+1 #1)
+SELECT * FROM courses     WHERE course_id=?         ← lazy load (N+1 #2)
+SELECT * FROM teachers    WHERE user_id=?           ← lazy load (N+1 #3)
+SELECT * FROM students    WHERE user_id=?           ← lazy load (N+1 #4)
+```
+
+### 원인
+
+`MaterialGenerationService`의 모든 메서드가 `generationSessionRepository.findById(id)` 로
+`GenerationSession`을 가져온 뒤 `AuthorizationUtil.requireLectureOwner(user, session.getLecture())`
+를 호출한다. `requireLectureOwner` 내부에서:
+
+```java
+lecture.getCourse().getTeacher().getUser().getId()
+```
+
+이 체인이 `Lecture → Course → Teacher` 를 모두 lazy loading하여 쿼리 3~4개가 추가 발생했다.
+
+### 수정
+
+`GenerationSessionRepository`에 JOIN FETCH 전용 쿼리 2개를 추가하고, 서비스에서 교체했다.
+
+**추가된 Repository 메서드:**
+
+```java
+// 단건 조회: Lecture·Course·Teacher 한 번에 JOIN FETCH
+@Query("""
+        SELECT gs FROM GenerationSession gs
+        JOIN FETCH gs.lecture l
+        JOIN FETCH l.course c
+        JOIN FETCH c.teacher
+        WHERE gs.id = :id
+        """)
+Optional<GenerationSession> findByIdWithLecture(@Param("id") Long id);
+
+// 강의+사용자 최신 세션 조회: 동일한 JOIN FETCH 포함
+@Query("""
+        SELECT gs FROM GenerationSession gs
+        JOIN FETCH gs.lecture l
+        JOIN FETCH l.course c
+        JOIN FETCH c.teacher
+        WHERE gs.lecture.id = :lectureId AND gs.user.id = :userId
+        ORDER BY gs.createdAt DESC
+        """)
+List<GenerationSession> findByLectureAndUserWithLecture(...);
+```
+
+**서비스 교체:**
+- `generationSessionRepository.findById(id)` → `findByIdWithLecture(id)` (10개소 전체)
+- `findTopByLecture_IdAndUser_IdOrderByCreatedAtDesc(...)` → `findByLectureAndUserWithLecture(...).stream().findFirst()`
+
+### 수정 파일
+
+- `domain/material/generation/GenerationSessionRepository.java`
+- `domain/material/generation/service/MaterialGenerationService.java`
+
+---
+
+## [2026-04-01] SSE Access Denied — Spring Security ASYNC dispatch 미허용
+
+### 증상
+
+v1 강의 에이전트 `GET /api/lectures/{lectureId}/stream/next` (SSE) 호출 시 다음 에러가 연속 발생:
+
+```
+ERROR AuthorizationFilter: AuthorizationDeniedException: Access Denied
+ERROR StaticView: Cannot render error page ... response has already been committed.
+ERROR dispatcherServlet: Unable to handle the Spring Security Exception because the response is already committed.
+```
+
+### 원인
+
+SSE(`text/event-stream`) 응답은 다음 2단계로 처리된다.
+
+1. **최초 요청**: JWT 인증 통과 → `Flux<ServerSentEvent>` 반환 → 스트림 응답 시작
+2. **Tomcat async dispatch** (`AsyncContextImpl$AsyncRunnable`): Tomcat이 SSE 바이트를 비동기로 전송하기 위해 내부적으로 Request를 `DispatcherType.ASYNC`로 재dispatch한다.
+
+Spring Security 6의 `AuthorizationFilter`는 **모든 DispatcherType에 대해** 인가를 재검사한다.
+ASYNC dispatch 시에는 JWT 토큰이 없으므로 `Anonymous` 사용자로 판단 → `Access Denied`.
+
+이미 SSE 응답 헤더가 전송된 상태에서 403을 쓰려다 `response already committed` 에러가 연쇄 발생.
+
+### 수정
+
+`SecurityConfig.authorizeHttpRequests`에 `DispatcherType.ASYNC`와 `DispatcherType.ERROR`를
+허용 규칙으로 추가했다. ASYNC dispatch는 이미 인가된 요청의 **내부 처리**이므로 재검사가 불필요하다.
+
+```java
+.authorizeHttpRequests(auth -> auth
+    .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()   // SSE async dispatch
+    .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()   // Error page dispatch
+    // ... 기존 규칙
+)
+```
+
+### 영향 범위
+
+이 설정은 **경로 기반 보안을 우회하지 않는다**.
+- 최초 요청(FORWARD/REQUEST)은 기존 JWT 인가 규칙이 그대로 적용됨
+- ASYNC는 이미 최초 요청에서 인증된 후 Tomcat 내부에서 발생하므로 보안 위협 없음
+- 영향받는 엔드포인트: `Flux<ServerSentEvent>` 또는 `Flux` 반환하는 모든 SSE 스트리밍 API
+
+### 수정 파일
+
+- `config/SecurityConfig.java`
