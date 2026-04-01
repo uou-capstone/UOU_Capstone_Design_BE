@@ -67,8 +67,14 @@ public class LegacyLectureFlowController {
             produces = MediaType.TEXT_EVENT_STREAM_VALUE
     )
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public Flux<ServerSentEvent<Map<String, Object>>> streamNextLectureContent(@PathVariable Long lectureId) {
-        return legacyLectureFlowService.streamNextContent(lectureId);
+    public Flux<ServerSentEvent<Map<String, Object>>> streamNextLectureContent(
+            @PathVariable Long lectureId,
+            @RequestParam(value = "pageNumber", required = false) Integer pageNumber,
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "userMessage", required = false) String userMessage
+    ) {
+        Integer effectivePage = pageNumber != null ? pageNumber : page;
+        return legacyLectureFlowService.streamNextContent(lectureId, effectivePage, userMessage);
     }
 
     @Operation(summary = "AI 스트리밍 세션 조회", description = "현재 스트리밍 세션 정보를 조회합니다.")

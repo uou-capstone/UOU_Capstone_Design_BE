@@ -13,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -130,6 +132,46 @@ public class GlobalExceptionHandler {
                 String.format("필수 파라미터 '%s'가 누락되었습니다.", ex.getParameterName()),
                 request.getRequestURI()
         );
+    }
+
+    /**
+     * 6-1. 지원하지 않는 HTTP 메서드 -> 405
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleHttpRequestMethodNotSupportedException(
+            HttpRequestMethodNotSupportedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("[Method Not Supported] method={}, path={}, supported={}",
+                request.getMethod(), request.getRequestURI(), ex.getSupportedMethods());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ErrorResponse.builder()
+                        .status(HttpStatus.METHOD_NOT_ALLOWED.value())
+                        .error(HttpStatus.METHOD_NOT_ALLOWED.name())
+                        .code(CommonErrorCode.INVALID_PARAMETER.getCode())
+                        .message("지원하지 않는 HTTP 메서드입니다.")
+                        .path(request.getRequestURI())
+                        .build());
+    }
+
+    /**
+     * 6-2. Accept 헤더 미일치 -> 406
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMediaTypeNotAcceptableException(
+            HttpMediaTypeNotAcceptableException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("[Not Acceptable] method={}, path={}, accept={}",
+                request.getMethod(), request.getRequestURI(), request.getHeader("Accept"));
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
+                .body(ErrorResponse.builder()
+                        .status(HttpStatus.NOT_ACCEPTABLE.value())
+                        .error(HttpStatus.NOT_ACCEPTABLE.name())
+                        .code(CommonErrorCode.INVALID_PARAMETER.getCode())
+                        .message("요청한 Accept 헤더와 응답 타입이 맞지 않습니다.")
+                        .path(request.getRequestURI())
+                        .build());
     }
 
     /**

@@ -109,7 +109,7 @@ public class LegacyLectureFlowService {
      * </ul>
      */
     @Transactional(readOnly = true)
-    public Flux<ServerSentEvent<Map<String, Object>>> streamNextContent(Long lectureId) {
+    public Flux<ServerSentEvent<Map<String, Object>>> streamNextContent(Long lectureId, Integer pageNumber, String userMessage) {
         Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
@@ -121,6 +121,14 @@ public class LegacyLectureFlowService {
         payload.put("lecture_id", lectureId);
         payload.put("lectureId", lectureId);
         payload.put("pdf_path", pdfPath);
+        if (pageNumber != null && pageNumber > 0) {
+            payload.put("page_number", pageNumber);
+            payload.put("pageNumber", pageNumber);
+        }
+        if (userMessage != null && !userMessage.isBlank()) {
+            payload.put("user_message", userMessage);
+            payload.put("userMessage", userMessage);
+        }
 
         Map<String, Object> doneData = new HashMap<>();
         doneData.put("type", "done");

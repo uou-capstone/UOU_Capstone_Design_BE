@@ -197,11 +197,18 @@ public class FastApiDelegatorClient {
         if (!StringUtils.hasText(detail)) {
             detail = "NORMAL";
         }
+        String userMessage = stringValue(payload.get("user_message"));
+        if (!StringUtils.hasText(userMessage)) {
+            userMessage = stringValue(payload.get("userMessage"));
+        }
         Map<String, Object> req = new HashMap<>();
         req.put("page_number", pageNumber);
         req.put("pdf_path", pdfPath);
         req.put("chapter_title", chapterTitle);
         req.put("detail", detail);
+        if (StringUtils.hasText(userMessage)) {
+            req.put("user_message", userMessage);
+        }
         return req;
     }
 
