@@ -416,3 +416,46 @@ const reader = res.body.getReader();
 - `domain/course/lecture/controller/LegacyLectureFlowController.java`
 - `domain/course/lecture/service/LegacyLectureFlowService.java`
 - `integration/fastapi/FastApiDelegatorClient.java`
+
+---
+
+## [2026-04-01] JWT 필터 `RuntimeException` 미처리 버그 — `4010` 오진단
+
+### 증상
+
+`POST /api/learning/sessions/{lectureId}` 에서 `code: 4010` (`UNAUTHORIZED`, "인증되지 않은 사용자입니다.") 401 응답.
+프론트가 `Authorization: Bearer <token>` 을 정상적으로 전송하는데도 발생.
+
+### 원인
+
+`JwtTokenProvider.getAuthentication()` 내부에서 토큰에 `role` 클레임이 없으면 `RuntimeException`을 던진다:
+
+```java
+if (claims.get("role") == null) {
+    throw new RuntimeException("권한 정보가 없는 토큰입니다.");
+}
+```
+
+`JwtAuthenticationFilter` 의 catch 블록은 `ExpiredJwtException`, `JwtException | IllegalArgumentException` 만 처리하므로 `RuntimeException` 은 잡히지 않는다.
+→ `exception` 속성이 설정되지 않은 채 필터 체인이 끊김
+→ `RestAuthenticationEntryPoint` 가 기본값 `UNAUTHORIZED(4010)` 를 반환
+→ 마치 토큰이 없는 것처럼 보이는 오진단 발생
+
+**재현 조건:** 리프레시 토큰(`role` 클레임 없음)을 액세스 토큰 자리에 사용하는 경우.
+
+### 수정
+
+`JwtAuthenticationFilter` catch 블록에 `Exception` 처리 추가:
+
+```java
+} catch (Exception e) {
+    log.warn("[JWT] 토큰 처리 중 예외 발생: path={}, error={}", request.getRequestURI(), e.getMessage());
+    request.setAttribute("exception", "INVALID_TOKEN");
+}
+```
+
+→ 이제 `role` 클레임 없는 토큰은 `4010` 이 아닌 `4013`(`INVALID_TOKEN`) 으로 명확하게 응답
+
+### 수정 파일
+
+- `security/jwt/JwtAuthenticationFilter.java`
