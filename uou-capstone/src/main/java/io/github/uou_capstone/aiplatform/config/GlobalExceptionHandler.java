@@ -6,9 +6,13 @@ import io.github.uou_capstone.aiplatform.common.dto.ErrorResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.exception.StreamingApiException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -20,9 +24,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.io.IOException;
+
 @Slf4j
+@RequiredArgsConstructor
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private final ObjectMapper objectMapper;
 
     /**
      * 1. BusinessException: 커스텀 에러 (ErrorCode 사용)
@@ -136,42 +145,51 @@ public class GlobalExceptionHandler {
 
     /**
      * 6-1. 지원하지 않는 HTTP 메서드 -> 405
+     *
+     * <p>SSE 엔드포인트는 Accept: text/event-stream 으로 요청하므로
+     * Spring 기본 컨텐츠 협상이 JSON 응답을 거부(406)하는 연쇄 오류를 방지하기 위해
+     * HttpServletResponse 에 직접 JSON을 기록한다.
      */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleHttpRequestMethodNotSupportedException(
+    public void handleHttpRequestMethodNotSupportedException(
             HttpRequestMethodNotSupportedException ex,
-            HttpServletRequest request
-    ) {
+            HttpServletRequest request,
+            HttpServletResponse response
+    ) throws IOException {
         log.warn("[Method Not Supported] method={}, path={}, supported={}",
                 request.getMethod(), request.getRequestURI(), ex.getSupportedMethods());
-        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
-                .body(ErrorResponse.builder()
-                        .status(HttpStatus.METHOD_NOT_ALLOWED.value())
-                        .error(HttpStatus.METHOD_NOT_ALLOWED.name())
-                        .code(CommonErrorCode.INVALID_PARAMETER.getCode())
-                        .message("지원하지 않는 HTTP 메서드입니다.")
-                        .path(request.getRequestURI())
-                        .build());
+        writeJsonError(response, HttpStatus.METHOD_NOT_ALLOWED,
+                "지원하지 않는 HTTP 메서드입니다.", request.getRequestURI());
     }
 
     /**
      * 6-2. Accept 헤더 미일치 -> 406
      */
     @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
-    public ResponseEntity<ErrorResponse> handleHttpMediaTypeNotAcceptableException(
+    public void handleHttpMediaTypeNotAcceptableException(
             HttpMediaTypeNotAcceptableException ex,
-            HttpServletRequest request
-    ) {
+            HttpServletRequest request,
+            HttpServletResponse response
+    ) throws IOException {
         log.warn("[Not Acceptable] method={}, path={}, accept={}",
                 request.getMethod(), request.getRequestURI(), request.getHeader("Accept"));
-        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
-                .body(ErrorResponse.builder()
-                        .status(HttpStatus.NOT_ACCEPTABLE.value())
-                        .error(HttpStatus.NOT_ACCEPTABLE.name())
-                        .code(CommonErrorCode.INVALID_PARAMETER.getCode())
-                        .message("요청한 Accept 헤더와 응답 타입이 맞지 않습니다.")
-                        .path(request.getRequestURI())
-                        .build());
+        writeJsonError(response, HttpStatus.NOT_ACCEPTABLE,
+                "요청한 Accept 헤더와 응답 타입이 맞지 않습니다.", request.getRequestURI());
+    }
+
+    private void writeJsonError(HttpServletResponse response, HttpStatus status,
+                                String message, String path) throws IOException {
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding("UTF-8");
+        ErrorResponse body = ErrorResponse.builder()
+                .status(status.value())
+                .error(status.name())
+                .code(CommonErrorCode.INVALID_PARAMETER.getCode())
+                .message(message)
+                .path(path)
+                .build();
+        response.getWriter().write(objectMapper.writeValueAsString(body));
     }
 
     /**
