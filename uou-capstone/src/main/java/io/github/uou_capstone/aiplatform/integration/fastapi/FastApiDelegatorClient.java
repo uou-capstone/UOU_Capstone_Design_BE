@@ -179,11 +179,29 @@ public class FastApiDelegatorClient {
         if (!StringUtils.hasText(pdfPath)) {
             throw new StreamingApiException(HttpStatus.BAD_REQUEST, "pdf_path가 필요합니다.");
         }
+        Integer pageNumber = toInteger(payload.get("page_number"));
+        if (pageNumber == null) {
+            pageNumber = toInteger(payload.get("pageNumber"));
+        }
+        if (pageNumber == null || pageNumber <= 0) {
+            pageNumber = 1;
+        }
+        String chapterTitle = stringValue(payload.get("chapter_title"));
+        if (!StringUtils.hasText(chapterTitle)) {
+            chapterTitle = stringValue(payload.get("chapterTitle"));
+        }
+        if (!StringUtils.hasText(chapterTitle)) {
+            chapterTitle = "페이지 설명";
+        }
+        String detail = stringValue(payload.get("detail"));
+        if (!StringUtils.hasText(detail)) {
+            detail = "NORMAL";
+        }
         Map<String, Object> req = new HashMap<>();
-        req.put("page_number", 1);
+        req.put("page_number", pageNumber);
         req.put("pdf_path", pdfPath);
-        req.put("chapter_title", "페이지 설명");
-        req.put("detail", "NORMAL");
+        req.put("chapter_title", chapterTitle);
+        req.put("detail", detail);
         return req;
     }
 
@@ -200,6 +218,16 @@ public class FastApiDelegatorClient {
         if (value instanceof Number n) return n.longValue();
         try {
             return Long.parseLong(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Integer toInteger(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number n) return n.intValue();
+        try {
+            return Integer.parseInt(String.valueOf(value));
         } catch (Exception e) {
             return null;
         }

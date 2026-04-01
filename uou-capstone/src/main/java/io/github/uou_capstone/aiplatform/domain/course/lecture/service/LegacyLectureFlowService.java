@@ -95,45 +95,6 @@ public class LegacyLectureFlowService {
         return executeStreamingStage("initialize", payload, StreamingInitializeResponse.class);
     }
 
-    @Transactional(readOnly = true)
-    public StreamingContentResponse getNextLectureStreamContent(Long lectureId) {
-        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
-
-        validateLectureParticipant(lecture.getCourse());
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("lecture_id", lectureId);
-        payload.put("lectureId", lectureId);
-        payload.put("pdf_path", getLatestPdfMaterial(lectureId).getFilePath());
-
-        try {
-            return executeStreamingStage("get_next_content", payload, StreamingContentResponse.class);
-        } catch (StreamingApiException e) {
-            if (e.getStatusCode() == HttpStatus.BAD_REQUEST && e.getMessage() != null && e.getMessage().contains("Waiting for answer")) {
-                String aiQuestionId = extractQuestionIdFromMessage(e.getMessage());
-                String questionText = null;
-                if (aiQuestionId != null) {
-                    try {
-                        Map<String, Object> sessionData = executeStreamingStage("get_session", payload);
-                        questionText = findQuestionTextInSession(sessionData, aiQuestionId);
-                    } catch (Exception ex) {
-                        log.warn("질문 텍스트 조회 실패: {}", aiQuestionId, ex);
-                    }
-                }
-                return StreamingContentResponse.builder()
-                        .status("WAITING_FOR_ANSWER")
-                        .lectureId(lectureId)
-                        .waitingForAnswer(true)
-                        .hasMore(true)
-                        .aiQuestionId(aiQuestionId)
-                        .contentData(questionText)
-                        .build();
-            }
-            throw e;
-        }
-    }
-
     /**
      * GET /stream/next 용 SSE 스트리밍 버전.
      * DB 준비(강의 조회·권한·자료) 는 동기로 처리하고,
@@ -341,23 +302,6 @@ public class LegacyLectureFlowService {
             log.warn("질문 ID 파싱 실패: {}", message);
         }
         return null;
-    }
-
-    private String findQuestionTextInSession(Map<String, Object> sessionData, String questionId) {
-        if (sessionData != null && sessionData.containsKey("questions")) {
-            Object questionsObj = sessionData.get("questions");
-            if (questionsObj instanceof Map) {
-                Map<?, ?> questions = (Map<?, ?>) questionsObj;
-                Object qObj = questions.get(questionId);
-                if (qObj instanceof Map) {
-                    Map<?, ?> qDetail = (Map<?, ?>) qObj;
-                    if (qDetail.containsKey("question")) {
-                        return String.valueOf(qDetail.get("question"));
-                    }
-                }
-            }
-        }
-        return "질문 내용을 불러올 수 없습니다.";
     }
 
     private void validateLectureParticipant(Course course) {
