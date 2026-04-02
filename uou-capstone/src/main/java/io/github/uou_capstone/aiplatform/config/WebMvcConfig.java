@@ -1,7 +1,11 @@
 package io.github.uou_capstone.aiplatform.config;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -26,5 +30,23 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api-docs/**",  // API 문서 제외
                         "/swagger-ui/**"  // Swagger UI 제외
                 );
+    }
+
+    @Bean(name = "mvcAsyncTaskExecutor")
+    public AsyncTaskExecutor mvcAsyncTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("mvc-async-");
+        executor.setCorePoolSize(8);
+        executor.setMaxPoolSize(32);
+        executor.setQueueCapacity(200);
+        executor.setKeepAliveSeconds(60);
+        executor.initialize();
+        return executor;
+    }
+
+    @Override
+    public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
+        configurer.setTaskExecutor(mvcAsyncTaskExecutor());
+        configurer.setDefaultTimeout(60_000L);
     }
 }
