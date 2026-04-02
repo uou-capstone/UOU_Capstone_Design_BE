@@ -1,4 +1,4 @@
-﻿package io.github.uou_capstone.aiplatform.domain.material.generation.service;
+package io.github.uou_capstone.aiplatform.domain.material.generation.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.agent.material.ConfirmAgent;
