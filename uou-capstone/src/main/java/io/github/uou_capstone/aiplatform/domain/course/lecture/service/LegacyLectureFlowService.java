@@ -80,10 +80,7 @@ public class LegacyLectureFlowService {
         Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-        Teacher currentTeacher = currentUserResolver.getTeacher();
-        if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
-            throw new BusinessException(CommonErrorCode.FORBIDDEN);
-        }
+        validateLectureParticipant(lecture.getCourse());
 
         Material sourceMaterial = getLatestPdfMaterial(lectureId);
         Map<String, Object> payload = new HashMap<>();
@@ -109,13 +106,20 @@ public class LegacyLectureFlowService {
      * </ul>
      */
     @Transactional(readOnly = true)
-    public Flux<ServerSentEvent<Map<String, Object>>> streamNextContent(Long lectureId, Integer pageNumber, String userMessage) {
+    public Flux<ServerSentEvent<Map<String, Object>>> streamNextContent(Long lectureId, Integer pageNumber, String userMessage, Long materialId) {
         Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
         validateLectureParticipant(lecture.getCourse());
 
-        String pdfPath = getLatestPdfMaterial(lectureId).getFilePath();
+        String pdfPath;
+        if (materialId != null) {
+            pdfPath = materialRepository.findById(materialId)
+                    .map(Material::getFilePath)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND));
+        } else {
+            pdfPath = getLatestPdfMaterial(lectureId).getFilePath();
+        }
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("lecture_id", lectureId);

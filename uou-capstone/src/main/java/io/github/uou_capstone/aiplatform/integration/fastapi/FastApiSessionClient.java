@@ -21,11 +21,19 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class FastApiSessionClient {
 
     private final WebClient aiServiceWebClient;
+    private final WebClient aiServiceStreamingWebClient;
     private final ObjectMapper objectMapper;
+
+    public FastApiSessionClient(WebClient aiServiceWebClient,
+                                 WebClient aiServiceStreamingWebClient,
+                                 ObjectMapper objectMapper) {
+        this.aiServiceWebClient = aiServiceWebClient;
+        this.aiServiceStreamingWebClient = aiServiceStreamingWebClient;
+        this.objectMapper = objectMapper;
+    }
 
     public Mono<Map<String, Object>> getOrCreateByLecture(Long lectureId, String pdfPath, Long sessionId) {
         return aiServiceWebClient.get()
@@ -51,7 +59,7 @@ public class FastApiSessionClient {
     }
 
     public Flux<String> streamEvent(Long sessionId, Map<String, Object> eventBody) {
-        return aiServiceWebClient.post()
+        return aiServiceStreamingWebClient.post()
                 .uri("/api/v3/session/{sessionId}/event/stream", sessionId)
                 .bodyValue(eventBody)
                 .retrieve()

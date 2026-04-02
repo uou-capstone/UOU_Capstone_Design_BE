@@ -29,16 +29,26 @@ import java.util.Map;
  * Spring에서 stage 요청을 해당 단건 API로 변환하는 shim 역할을 수행한다.
  */
 @Component
-@RequiredArgsConstructor
 public class FastApiDelegatorClient {
 
+    /** 집계 응답용 (bodyToMono) */
     private final WebClient aiServiceWebClient;
+    /** SSE/NDJSON 스트리밍 전용 (bodyToFlux) — HTTP/1.1 강제, 버퍼 256KB */
+    private final WebClient aiServiceStreamingWebClient;
     private final ObjectMapper objectMapper;
+
+    public FastApiDelegatorClient(WebClient aiServiceWebClient,
+                                   WebClient aiServiceStreamingWebClient,
+                                   ObjectMapper objectMapper) {
+        this.aiServiceWebClient = aiServiceWebClient;
+        this.aiServiceStreamingWebClient = aiServiceStreamingWebClient;
+        this.objectMapper = objectMapper;
+    }
 
     public Mono<Void> dispatchGenerateContentAsync(Object requestBody, String secretKey) {
         Map<String, Object> payload = toMap(requestBody);
         Map<String, Object> lectureReq = buildLectureGenerateRequest(payload);
-        return aiServiceWebClient.post()
+        return aiServiceStreamingWebClient.post()
                 .uri("/api/v2/lectures/generate-stream")
                 .contentType(MediaType.APPLICATION_JSON)
                 .headers(headers -> applyCommonHeaders(headers, secretKey))
@@ -70,7 +80,7 @@ public class FastApiDelegatorClient {
      */
     public Flux<String> streamLectureContent(Map<String, Object> payload, String secretKey) {
         Map<String, Object> lectureReq = buildLectureGenerateRequest(payload);
-        return aiServiceWebClient.post()
+        return aiServiceStreamingWebClient.post()
                 .uri("/api/v2/lectures/generate-stream")
                 .contentType(MediaType.APPLICATION_JSON)
                 .headers(headers -> applyCommonHeaders(headers, secretKey))
@@ -244,6 +254,18 @@ public class FastApiDelegatorClient {
         return value == null ? null : String.valueOf(value);
     }
 
+    /**
+     * NDJSON 한 줄을 파싱하여 사용자에게 보낼 delta 텍스트를 추출한다.
+     *
+     * <p>FastAPI 버전/채널 이름에 따른 호환 처리:
+     * <ul>
+     *   <li>v2 generate-stream : {"type":"agent_delta","channel":"main","delta":"..."}
+     *   <li>v2 generate-stream : {"type":"agent_delta","channel":"explainer","delta":"..."}
+     *   <li>v3 session stream  : {"type":"agent_delta","agent":"explainer","delta":"..."}
+     * </ul>
+     * channel 또는 agent 필드 값이 무엇이든 delta가 비어 있지 않으면 그대로 통과시킨다.
+     * "thinking" 채널은 사용자에게 노출하지 않으므로 필터링한다.
+     */
     private String extractMainDelta(String line) {
         try {
             JsonNode node = objectMapper.readTree(line);
@@ -252,8 +274,15 @@ public class FastApiDelegatorClient {
                 throw new StreamingApiException(HttpStatus.INTERNAL_SERVER_ERROR,
                         StringUtils.hasText(msg) ? msg : "AI 스트림 처리 중 오류가 발생했습니다.");
             }
-            if ("agent_delta".equals(node.path("type").asText())
-                    && "main".equals(node.path("channel").asText())) {
+            if ("agent_delta".equals(node.path("type").asText())) {
+                // thinking/internal 채널은 사용자에게 노출하지 않음
+                String channel = node.path("channel").asText("");
+                String agent = node.path("agent").asText("");
+                String channelOrAgent = StringUtils.hasText(channel) ? channel : agent;
+                if ("thinking".equalsIgnoreCase(channelOrAgent)
+                        || "internal".equalsIgnoreCase(channelOrAgent)) {
+                    return "";
+                }
                 return node.path("delta").asText("");
             }
             return "";

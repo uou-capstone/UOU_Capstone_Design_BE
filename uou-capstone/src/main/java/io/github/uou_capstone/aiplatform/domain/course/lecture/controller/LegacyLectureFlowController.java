@@ -7,6 +7,7 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.StreamingSess
 import io.github.uou_capstone.aiplatform.domain.course.lecture.service.LegacyLectureFlowService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -44,7 +45,7 @@ public class LegacyLectureFlowController {
 
     @Operation(summary = "AI 스트리밍 초기화", description = "스트리밍 모드를 시작하기 위해 PDF 분석을 수행하고 세션을 초기화합니다.")
     @PostMapping("/lectures/{lectureId}/stream/initialize")
-    @PreAuthorize("hasAuthority('TEACHER')")
+    @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
     public ResponseEntity<StreamingInitializeResponse> initializeLectureStream(@PathVariable Long lectureId) {
         StreamingInitializeResponse response = legacyLectureFlowService.initializeLectureStream(lectureId);
         return ResponseEntity.ok(response);
@@ -71,10 +72,16 @@ public class LegacyLectureFlowController {
             @PathVariable Long lectureId,
             @RequestParam(value = "pageNumber", required = false) Integer pageNumber,
             @RequestParam(value = "page", required = false) Integer page,
-            @RequestParam(value = "userMessage", required = false) String userMessage
+            @RequestParam(value = "userMessage", required = false) String userMessage,
+            @RequestParam(value = "materialId", required = false) Long materialId,
+            HttpServletResponse response
     ) {
+        // nginx/proxy 버퍼링 방지 — SSE는 프록시 버퍼 없이 즉시 전달되어야 함
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("X-Content-Type-Options", "nosniff");
         Integer effectivePage = pageNumber != null ? pageNumber : page;
-        return legacyLectureFlowService.streamNextContent(lectureId, effectivePage, userMessage);
+        return legacyLectureFlowService.streamNextContent(lectureId, effectivePage, userMessage, materialId);
     }
 
     @Operation(summary = "AI 스트리밍 세션 조회", description = "현재 스트리밍 세션 정보를 조회합니다.")

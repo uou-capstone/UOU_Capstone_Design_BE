@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.learning.service.LearningSession
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -97,7 +98,12 @@ public class LearningSessionController {
             @Parameter(description = "강의 ID (신규 세션 생성 직후 이벤트에서만 필요, 이후 생략 가능)")
             @RequestParam(required = false) Long lectureId,
             @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable Long sessionId,
-            @Valid @RequestBody SessionEventRequest eventRequest) {
+            @Valid @RequestBody SessionEventRequest eventRequest,
+            HttpServletResponse response) {
+        // nginx/proxy 버퍼링 방지 — SSE는 프록시 버퍼 없이 즉시 전달되어야 함
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("X-Content-Type-Options", "nosniff");
         return learningSessionService.streamSessionEvent(lectureId, sessionId, eventRequest);
     }
 }
