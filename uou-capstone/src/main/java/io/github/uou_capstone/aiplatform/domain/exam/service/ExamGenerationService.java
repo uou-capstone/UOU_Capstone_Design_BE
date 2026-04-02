@@ -18,6 +18,7 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.service.CacheService;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
 import io.github.uou_capstone.aiplatform.service.SessionRecoveryService;
 import io.github.uou_capstone.aiplatform.domain.task.entity.TaskStatus;
@@ -49,6 +50,7 @@ public class ExamGenerationService {
     private final LectureRepository lectureRepository;
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final ObjectMapper objectMapper;
     private final CacheService cacheService;
     private final AsyncTaskService asyncTaskService;
@@ -73,8 +75,7 @@ public class ExamGenerationService {
      */
     @Transactional
     public ExamGenerationResponseDto generateExam(ExamGenerationRequestDto requestDto) {
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        return generateExam(requestDto, userEmail);
+        return generateExam(requestDto, currentUserResolver.getUser().getEmail());
     }
 
     /**
@@ -289,9 +290,7 @@ public class ExamGenerationService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
 
         // ========== 2단계: 권한 확인 ==========
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
         
         if (!session.getUser().getId().equals(currentUser.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
@@ -379,9 +378,7 @@ public class ExamGenerationService {
         ExamSession session = examSessionRepository.findById(examSessionId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
 
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
 
         io.github.uou_capstone.aiplatform.util.AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
 

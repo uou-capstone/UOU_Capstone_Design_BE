@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest;
+import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
 import io.github.uou_capstone.aiplatform.util.BridgeResponseLogger;
 import io.github.uou_capstone.aiplatform.util.NdjsonLineFilters;
@@ -37,6 +38,7 @@ public class LearningSessionService {
 
     private final FastApiSessionClient fastApiSessionClient;
     private final ObjectMapper objectMapper;
+    private final MaterialRepository materialRepository;
 
     /**
      * 강의 ID로 학습 세션 조회 또는 신규 생성.
@@ -51,10 +53,24 @@ public class LearningSessionService {
         if (lectureId == null || lectureId <= 0) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "유효한 강의 ID가 필요합니다.");
         }
-        log.info("학습 세션 조회/생성: lectureId={}, hasPdfPath={}, sessionId={}",
-                lectureId, StringUtils.hasText(pdfPath), sessionId);
 
-        return fastApiSessionClient.getOrCreateByLecture(lectureId, pdfPath, sessionId)
+        // pdfPath가 없으면 강의에 업로드된 최신 PDF 자료 경로를 자동으로 조회
+        String effectivePdfPath = pdfPath;
+        if (!StringUtils.hasText(effectivePdfPath)) {
+            effectivePdfPath = materialRepository
+                    .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lectureId, "PDF")
+                    .map(m -> m.getFilePath())
+                    .orElse(null);
+            if (StringUtils.hasText(effectivePdfPath)) {
+                log.info("강의 PDF 경로 자동 조회: lectureId={}, path={}", lectureId, effectivePdfPath);
+            }
+        }
+
+        log.info("학습 세션 조회/생성: lectureId={}, hasPdfPath={}, sessionId={}",
+                lectureId, StringUtils.hasText(effectivePdfPath), sessionId);
+
+        final String finalPdfPath = effectivePdfPath;
+        return fastApiSessionClient.getOrCreateByLecture(lectureId, finalPdfPath, sessionId)
                 .doOnNext(body -> BridgeResponseLogger.debugMapSummary(log, "GET /api/v3/session/by-lecture", body))
                 .onErrorMap(Exception.class, e -> {
                     if (e instanceof BusinessException) return e;

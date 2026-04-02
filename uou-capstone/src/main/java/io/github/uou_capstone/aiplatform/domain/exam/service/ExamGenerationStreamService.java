@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.exam.service;
 
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,6 +40,7 @@ public class ExamGenerationStreamService {
     private final ExamSessionRepository examSessionRepository;
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
+    private final CurrentUserResolver currentUserResolver;
     private final GenerationSessionRepository generationSessionRepository;
     private final ObjectMapper objectMapper;
     private final FastApiBridgeClient fastApiBridgeClient;
@@ -124,9 +126,7 @@ public class ExamGenerationStreamService {
     }
 
     private void validateSessionOwner(ExamSession session) {
-        String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        User currentUser = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        User currentUser = currentUserResolver.getUser();
 
         if (!session.getUser().getId().equals(currentUser.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);

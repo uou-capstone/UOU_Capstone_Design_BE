@@ -575,3 +575,102 @@ ASYNC dispatch 시에는 JWT 토큰이 없으므로 `Anonymous` 사용자로 판
 ### 수정 파일
 
 - `config/SecurityConfig.java`
+
+---
+
+## [2026-04-02] N+1 쿼리 — `users WHERE email=?` 반복 조회
+
+### 증상
+
+여러 서비스가 같은 요청 내에서 각자 `SecurityContextHolder.getContext().getAuthentication().getName()` + `userRepository.findByEmail(email)` 패턴으로 현재 사용자를 조회하여, 단일 요청에 `users WHERE email=?` 쿼리가 최대 11회 이상 발생했다.
+
+```
+Hibernate: select u1_0.user_id,...from users u1_0 where u1_0.email=?  ← 1
+Hibernate: select u1_0.user_id,...from users u1_0 where u1_0.email=?  ← 2
+Hibernate: select u1_0.user_id,...from users u1_0 where u1_0.email=?  ← 3
+... (서비스마다 반복)
+```
+
+### 원인
+
+`CurrentUserResolver` (`@RequestScope`) 가 이미 구현되어 있었으나, 아래 6개 서비스가 이를 사용하지 않고 직접 `userRepository.findByEmail()`을 호출하고 있었다.
+
+| 서비스 | findByEmail 호출 횟수 |
+|---|---|
+| `MaterialGenerationService` | 11 |
+| `MaterialService` | 3 |
+| `ExamSubmissionService` | 2 |
+| `ExamGenerationStreamService` | 1 |
+| `MaterialGenerationStreamService` | 1 |
+| `ExamGenerationService` (게이트웨이 메서드) | 1 |
+
+### 수정
+
+각 서비스에 `CurrentUserResolver currentUserResolver` 필드 주입 후, 아래 2-line 패턴을:
+
+```java
+String userEmail = SecurityContextHolder.getContext().getAuthentication().getName();
+User currentUser = userRepository.findByEmail(userEmail)
+        .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+```
+
+아래 1-line으로 교체:
+
+```java
+User currentUser = currentUserResolver.getUser();
+```
+
+`MaterialService`의 `teacherRepository.findByUser_Id(currentUser.getId())` 도 `currentUserResolver.getTeacher()`로 교체. `UserRepository.findByEmailWithRoles`가 `@EntityGraph`로 Student/Teacher를 한 번에 JOIN FETCH하므로 추가 쿼리 없음.
+
+`ExamGenerationService`의 `generateExam(requestDto, String userEmail)` 내부 메서드는 `@Async` 경로와 공유하므로 `findByEmail` 1회는 유지 (비동기 스레드에서 `@RequestScope` 접근 불가).
+
+### 수정 파일
+
+- `domain/material/generation/service/MaterialGenerationService.java`
+- `domain/material/service/MaterialService.java`
+- `domain/exam/service/ExamSubmissionService.java`
+- `domain/exam/service/ExamGenerationStreamService.java`
+- `domain/exam/service/ExamGenerationService.java`
+- `domain/material/generation/service/MaterialGenerationStreamService.java`
+
+---
+
+## [2026-04-02] v3 통합 에이전트 — ANSWER_QUESTION `[Errno 21] Is a directory: '.'`
+
+### 증상
+
+v3 통합학습(MergeEduAgent) 세션에서 사용자가 질문을 보내면 FastAPI가:
+
+```
+[SYSTEM] Tool execution failed (ToolName.ANSWER_QUESTION): [Errno 21] Is a directory: '.'
+```
+
+오류를 반환했다. 에이전트가 응답하지 않고 다음 단계로 넘어갔다.
+
+### 원인
+
+FastAPI의 `ANSWER_QUESTION` 도구는 PDF 파일을 직접 읽어 답변을 생성한다.  
+그런데 Spring이 `POST /api/learning/sessions/{lectureId}` 세션 생성 시 `pdf_path`를 FastAPI에 전달하지 않으면, FastAPI가 PDF 경로를 `.`(현재 디렉터리)로 처리하여 파일 대신 디렉터리를 열려다 실패한다.
+
+```
+Spring log: hasPdfPath=false  ← pdf_path 미전달
+```
+
+### 수정
+
+`LearningSessionService.getOrCreateSession()`에서 `pdfPath` 파라미터가 없으면 `MaterialRepository`로 해당 강의의 최신 PDF 자료 경로를 자동 조회하여 FastAPI에 전달하도록 수정.
+
+```java
+if (!StringUtils.hasText(effectivePdfPath)) {
+    effectivePdfPath = materialRepository
+            .findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(lectureId, "PDF")
+            .map(Material::getFilePath)
+            .orElse(null);
+}
+```
+
+강의에 PDF가 없으면 `null`이 전달되어 FastAPI가 PDF 없는 세션으로 처리한다.
+
+### 수정 파일
+
+- `domain/learning/service/LearningSessionService.java`
