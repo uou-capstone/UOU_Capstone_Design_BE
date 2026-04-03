@@ -14,6 +14,7 @@ import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepo
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiDelegatorClient;
+import io.github.uou_capstone.aiplatform.integration.fastapi.LectureStreamChunk;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import lombok.RequiredArgsConstructor;
@@ -99,7 +100,8 @@ public class LegacyLectureFlowService {
      *
      * <p>이벤트 구조:
      * <ul>
-     *   <li>event=message : {"type":"delta","delta":"텍스트 조각"}</li>
+     *   <li>event=thought : {"type":"thought_delta","contentType":"THOUGHT","delta":"사고 요약 조각"}</li>
+     *   <li>event=message : {"type":"delta","delta":"본문 답변 조각"}</li>
      *   <li>event=done    : {"type":"done","lectureId":N,"hasMore":false,"waitingForAnswer":false}</li>
      *   <li>event=done    : {"type":"done","status":"WAITING_FOR_ANSWER","waitingForAnswer":true,...}</li>
      *   <li>event=error   : {"type":"error","message":"..."}</li>
@@ -142,10 +144,19 @@ public class LegacyLectureFlowService {
         doneData.put("chapterTitle", "페이지 설명");
 
         return fastApiDelegatorClient.streamLectureContent(payload, aiServiceSecretKey)
-                .map(delta -> {
+                .map(chunk -> {
                     Map<String, Object> data = new HashMap<>();
+                    if (chunk.kind() == LectureStreamChunk.Kind.THOUGHT) {
+                        data.put("type", "thought_delta");
+                        data.put("contentType", "THOUGHT");
+                        data.put("delta", chunk.delta());
+                        return ServerSentEvent.<Map<String, Object>>builder()
+                                .event("thought")
+                                .data(data)
+                                .build();
+                    }
                     data.put("type", "delta");
-                    data.put("delta", delta);
+                    data.put("delta", chunk.delta());
                     return ServerSentEvent.<Map<String, Object>>builder()
                             .event("message")
                             .data(data)

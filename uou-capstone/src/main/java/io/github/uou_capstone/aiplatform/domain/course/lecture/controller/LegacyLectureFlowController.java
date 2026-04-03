@@ -57,7 +57,8 @@ public class LegacyLectureFlowController {
                     FastAPI NDJSON 청크를 실시간으로 SSE 이벤트로 중계합니다.
 
                     이벤트 종류:
-                    - event=message : {"type":"delta","delta":"텍스트 조각"}
+                    - event=thought : {"type":"thought_delta","contentType":"THOUGHT","delta":"사고 요약 조각"} (Gemini thinking 등)
+                    - event=message : {"type":"delta","delta":"본문 답변 조각"}
                     - event=done    : {"type":"done","lectureId":N,"hasMore":false,"waitingForAnswer":false}
                     - event=done    : {"type":"done","status":"WAITING_FOR_ANSWER","waitingForAnswer":true,...}
                     - event=error   : {"type":"error","message":"..."}

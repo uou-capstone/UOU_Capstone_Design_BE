@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.exception.StreamingApiException;
 import io.github.uou_capstone.aiplatform.util.NdjsonLineFilters;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -19,7 +18,10 @@ import reactor.core.publisher.Mono;
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * FastAPI v1 레거시 강의 흐름 호환 클라이언트.
@@ -75,10 +77,10 @@ public class FastApiDelegatorClient {
     }
 
     /**
-     * FastAPI /api/v2/lectures/generate-stream 의 NDJSON 델타를 그대로 Flux 로 중계.
-     * reduce 없이 청크 단위로 방출하므로 SSE 실시간 전달에 사용한다.
+     * FastAPI /api/v2/lectures/generate-stream NDJSON 한 줄마다 {@link LectureStreamChunk} 로 분류.
+     * 사고(thinking)와 본문(main)을 분리해 Legacy SSE에서 {@code event: thought} / {@code event: message} 로 보낸다.
      */
-    public Flux<String> streamLectureContent(Map<String, Object> payload, String secretKey) {
+    public Flux<LectureStreamChunk> streamLectureContent(Map<String, Object> payload, String secretKey) {
         Map<String, Object> lectureReq = buildLectureGenerateRequest(payload);
         return aiServiceStreamingWebClient.post()
                 .uri("/api/v2/lectures/generate-stream")
@@ -97,8 +99,8 @@ public class FastApiDelegatorClient {
                 .bodyToFlux(String.class)
                 .filter(line -> !line.isBlank())
                 .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
-                .map(this::extractMainDelta)
-                .filter(text -> text != null && !text.isBlank());
+                .map(this::parseLectureStreamLine)
+                .filter(Objects::nonNull);
     }
 
     private Map<String, Object> callLectureGenerate(Map<String, Object> payload, String secretKey) {
@@ -123,7 +125,10 @@ public class FastApiDelegatorClient {
                 .bodyToFlux(String.class)
                 .filter(line -> !line.isBlank())
                 .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
-                .map(this::extractMainDelta)
+                .map(this::parseLectureStreamLine)
+                .filter(Objects::nonNull)
+                .filter(c -> c.kind() == LectureStreamChunk.Kind.MAIN)
+                .map(LectureStreamChunk::delta)
                 .filter(text -> text != null && !text.isBlank())
                 .reduce(new StringBuilder(), StringBuilder::append)
                 .map(StringBuilder::toString)
@@ -254,43 +259,104 @@ public class FastApiDelegatorClient {
         return value == null ? null : String.valueOf(value);
     }
 
+    private static final Set<String> THOUGHT_CHANNEL_ALIASES = Set.of(
+            "thinking", "internal", "thought", "reasoning", "thought_summary",
+            "think", "reasoning_summary", "reasoning_delta", "thought_delta", "thinking_delta"
+    );
+
     /**
-     * NDJSON 한 줄을 파싱하여 사용자에게 보낼 delta 텍스트를 추출한다.
-     *
-     * <p>FastAPI 버전/채널 이름에 따른 호환 처리:
-     * <ul>
-     *   <li>v2 generate-stream : {"type":"agent_delta","channel":"main","delta":"..."}
-     *   <li>v2 generate-stream : {"type":"agent_delta","channel":"explainer","delta":"..."}
-     *   <li>v3 session stream  : {"type":"agent_delta","agent":"explainer","delta":"..."}
-     * </ul>
-     * channel 또는 agent 필드 값이 무엇이든 delta가 비어 있지 않으면 그대로 통과시킨다.
-     * "thinking" 채널은 사용자에게 노출하지 않으므로 필터링한다.
+     * NDJSON 한 줄 → 사고(THOUGHT) vs 본문(MAIN). FastAPI/Gemini 스트림 계약과 FE SSE( thought / message )에 맞춘다.
      */
-    private String extractMainDelta(String line) {
+    private LectureStreamChunk parseLectureStreamLine(String line) {
         try {
             JsonNode node = objectMapper.readTree(line);
-            if ("error".equals(node.path("type").asText())) {
+            String type = node.path("type").asText("");
+            if ("error".equals(type)) {
                 String msg = node.path("message").asText("");
                 throw new StreamingApiException(HttpStatus.INTERNAL_SERVER_ERROR,
                         StringUtils.hasText(msg) ? msg : "AI 스트림 처리 중 오류가 발생했습니다.");
             }
-            if ("agent_delta".equals(node.path("type").asText())) {
-                // thinking/internal 채널은 사용자에게 노출하지 않음
+
+            // 명시적 사고 전용 타입
+            if ("thought_delta".equals(type) || "thinking_delta".equals(type) || "reasoning_delta".equals(type)) {
+                String d = extractDeltaText(node);
+                return StringUtils.hasText(d)
+                        ? new LectureStreamChunk(LectureStreamChunk.Kind.THOUGHT, d)
+                        : null;
+            }
+
+            if ("agent_delta".equals(type)) {
                 String channel = node.path("channel").asText("");
                 String agent = node.path("agent").asText("");
                 String channelOrAgent = StringUtils.hasText(channel) ? channel : agent;
-                if ("thinking".equalsIgnoreCase(channelOrAgent)
-                        || "internal".equalsIgnoreCase(channelOrAgent)) {
-                    return "";
+                String delta = node.path("delta").asText("");
+                if (!StringUtils.hasText(delta)) {
+                    return null;
                 }
-                return node.path("delta").asText("");
+                if (isThoughtChannelOrAgent(channelOrAgent)) {
+                    return new LectureStreamChunk(LectureStreamChunk.Kind.THOUGHT, delta);
+                }
+                return new LectureStreamChunk(LectureStreamChunk.Kind.MAIN, delta);
             }
-            return "";
+
+            String phase = node.path("phase").asText("");
+            String role = node.path("role").asText("");
+            if (isThoughtPhaseOrRole(phase) || isThoughtPhaseOrRole(role)) {
+                String d = extractDeltaText(node);
+                return StringUtils.hasText(d)
+                        ? new LectureStreamChunk(LectureStreamChunk.Kind.THOUGHT, d)
+                        : null;
+            }
+
+            String contentType = node.path("contentType").asText("");
+            if ("THOUGHT".equalsIgnoreCase(contentType)) {
+                String d = extractDeltaText(node);
+                return StringUtils.hasText(d)
+                        ? new LectureStreamChunk(LectureStreamChunk.Kind.THOUGHT, d)
+                        : null;
+            }
+
+            return null;
         } catch (StreamingApiException e) {
             throw e;
         } catch (Exception e) {
-            return "";
+            return null;
         }
+    }
+
+    private static boolean isThoughtChannelOrAgent(String channelOrAgent) {
+        if (!StringUtils.hasText(channelOrAgent)) {
+            return false;
+        }
+        String norm = channelOrAgent.trim().toLowerCase(Locale.ROOT);
+        if (THOUGHT_CHANNEL_ALIASES.contains(norm)) {
+            return true;
+        }
+        return norm.contains("think") && !norm.contains("unthink");
+    }
+
+    private static boolean isThoughtPhaseOrRole(String s) {
+        if (!StringUtils.hasText(s)) {
+            return false;
+        }
+        String l = s.toLowerCase(Locale.ROOT);
+        return l.contains("think") || l.contains("reason") || l.contains("internal");
+    }
+
+    private static String extractDeltaText(JsonNode node) {
+        String d = node.path("delta").asText("");
+        if (StringUtils.hasText(d)) {
+            return d;
+        }
+        d = node.path("text").asText("");
+        if (StringUtils.hasText(d)) {
+            return d;
+        }
+        d = node.path("content").asText("");
+        if (StringUtils.hasText(d)) {
+            return d;
+        }
+        return node.path("chunk").asText("");
     }
 
     private void applyCommonHeaders(HttpHeaders headers, String secretKey) {
