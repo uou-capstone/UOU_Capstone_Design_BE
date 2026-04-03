@@ -96,7 +96,13 @@ public class LearningSessionService {
      * @param eventRequest 이벤트 요청 (type, payload 포함)
      * @return NDJSON 라인을 SSE data로 래핑한 Flux
      */
-    public Flux<ServerSentEvent<String>> streamSessionEvent(Long lectureId, Long sessionId, SessionEventRequest eventRequest) {
+    /**
+     * @param page        쿼리: 뷰어 현재 페이지(1-based). USER_MESSAGE 등에서 FastAPI가 참조하는 current_page와 동기화
+     * @param pageNumber  page 별칭
+     * @param currentPage page 별칭
+     */
+    public Flux<ServerSentEvent<String>> streamSessionEvent(Long lectureId, Long sessionId, SessionEventRequest eventRequest,
+                                                            Integer page, Integer pageNumber, Integer currentPage) {
         if (sessionId == null || sessionId <= 0) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "유효한 sessionId가 필요합니다.");
         }
@@ -107,15 +113,24 @@ public class LearningSessionService {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "이벤트 타입은 필수입니다.");
         }
 
-        log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}",
-                lectureId, sessionId, eventRequest.getType());
+        Integer viewerPage = firstNonNullPositive(currentPage, pageNumber, page);
+        log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}, viewerPage={}",
+                lectureId, sessionId, eventRequest.getType(), viewerPage);
+
+        Map<String, Object> payload = new LinkedHashMap<>(eventRequest.toPayload());
+        // FastAPI가 payload.current_page / page 없이 세션의 잘못된 페이지(예: 마지막 페이지)를 쓰는 것을 방지
+        if (viewerPage != null) {
+            payload.put("current_page", viewerPage);
+            payload.put("page", viewerPage);
+            payload.put("pageNumber", viewerPage);
+        }
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("type", eventRequest.getType());
         if (lectureId != null) {
             requestBody.put("lecture_id", lectureId);
         }
-        requestBody.put("payload", eventRequest.toPayload());
+        requestBody.put("payload", payload);
 
         return fastApiSessionClient.streamEvent(sessionId, requestBody)
                 .filter(line -> !line.isBlank())
@@ -146,5 +161,15 @@ public class LearningSessionService {
                             .data(errorPayload)
                             .build());
                 });
+    }
+
+    /** 쿼리 파라미터 여러 별칭 중 첫 유효값(양의 정수) */
+    private static Integer firstNonNullPositive(Integer a, Integer b, Integer c) {
+        for (Integer v : new Integer[]{a, b, c}) {
+            if (v != null && v > 0) {
+                return v;
+            }
+        }
+        return null;
     }
 }

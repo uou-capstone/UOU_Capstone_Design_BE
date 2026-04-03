@@ -95,15 +95,22 @@ public class LearningSessionController {
     @PostMapping(value = "/{sessionId}/event", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<String>> sendEvent(
+            @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable Long sessionId,
             @Parameter(description = "강의 ID (신규 세션 생성 직후 이벤트에서만 필요, 이후 생략 가능)")
             @RequestParam(required = false) Long lectureId,
-            @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable Long sessionId,
+            @Parameter(description = "PDF 뷰어 현재 페이지(1-based). 생략 시 본문 payload만 전달")
+            @RequestParam(required = false) Integer page,
+            @Parameter(description = "page와 동일(별칭)")
+            @RequestParam(required = false) Integer pageNumber,
+            @Parameter(description = "page와 동일(별칭)")
+            @RequestParam(required = false) Integer currentPage,
             @Valid @RequestBody SessionEventRequest eventRequest,
             HttpServletResponse response) {
         // nginx/proxy 버퍼링 방지 — SSE는 프록시 버퍼 없이 즉시 전달되어야 함
         response.setHeader("X-Accel-Buffering", "no");
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("X-Content-Type-Options", "nosniff");
-        return learningSessionService.streamSessionEvent(lectureId, sessionId, eventRequest);
+        return learningSessionService.streamSessionEvent(lectureId, sessionId, eventRequest,
+                page, pageNumber, currentPage);
     }
 }
