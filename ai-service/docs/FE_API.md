@@ -90,12 +90,22 @@
 {
   "type": "error",
   "agent": "system",
-  "message": "오류 내용"
+  "message": "오류 내용",
+  "data": {
+    "type": "error",
+    "code": "QUIZ_PROFILE_VALIDATION_FAILED",
+    "message": "Invalid profile for quiz generation",
+    "details": [
+      {"field":"learning_goal","reason":"required"}
+    ]
+  }
 }
 ```
 
 > `error` 이벤트가 수신되면 스트림이 **반드시 종료**됩니다. 연결을 끊고 오류를 표시하세요.  
 > `agent`는 `"system"` \| `"quiz"` \| `"grader"` \| `"explainer"` 등 호출 주체에 따라 달라질 수 있습니다.
+>
+> `data`는 선택 필드입니다. 있을 경우 `{code,message,details}` 형태의 **표준 오류 payload**로 UI에서 더 정교한 메시지/재시도 정책을 적용할 수 있습니다.
 
 ---
 
@@ -168,6 +178,10 @@ Content-Type: application/json
 ```
 
 **`done.data`**: 현재 비어 있음 `{}`
+
+> **설명 본문 포맷**: `channel: "main"`의 `delta`를 이어붙인 최종 텍스트는 **마크다운**입니다.  
+> FE는 마크다운 렌더링을 권장합니다(헤딩 `##/###`, 불릿, **Bold**, 인라인 코드/코드블록, LaTeX 수식 포함 가능).  
+> 또한 설명 말미에 `[질문]...[/질문]` 태그가 포함되므로, 필요하면 이 구간을 파싱해 “사고 유도 질문” UI로 분리 표시할 수 있습니다.
 
 ---
 

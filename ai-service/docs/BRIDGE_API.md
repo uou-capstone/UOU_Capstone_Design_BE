@@ -190,7 +190,7 @@ Content-Type: application/json
 | `exam_type` | `string` | ✅ | — | **권장(계약)**: `Five_Choice` \| `OX_Problem` \| `Flash_Card` \| `Short_Answer`. **호환**: Java `Enum.name()` 형태(`FIVE_CHOICE`, `OX_PROBLEM` 등)도 FastAPI가 내부적으로 동일 값으로 정규화합니다. |
 | `lecture_content` | `string` | ✅ | — | 강의 자료 **텍스트** (Markdown 권장). PDF 바이너리가 아님 — `pdf_path` 필드는 **현재 퀴즈 생성 요청에 없음** (§7.1 참고) |
 | `target_count` | `int` | 선택 | `5` | 생성할 문제 수 (1~20) |
-| `user_profile` | `TestProfile \| null` | 선택 | `null` | 사용자 프로필. 없으면 기본 설정 사용 |
+| `user_profile` | `TestProfile \| object \| null` | 선택 | `null` | 사용자 프로필. `null`/`{}`/부분 객체도 허용됩니다(서버가 기본값을 주입하고 병합 후 검증). |
 
 > **⚠ `exam_type: "Debate"`는 현재 비활성화 상태입니다.** 해당 값으로 요청 시 `HTTP 400`을 반환합니다.
 
@@ -270,6 +270,7 @@ Content-Type: application/json
 | `final` | `bool` | `done`만 | 항상 `true` |
 | `data` | `object` | `done`만 | 결과 데이터 (§5 참고) |
 | `message` | `string` | `error`만 | 오류 메시지 |
+| `data` | `object` | `error` 시 선택 | 표준화된 오류 payload (§4.5 참고) |
 
 ### 4.2 이벤트 흐름 예시 (퀴즈 생성)
 
@@ -286,6 +287,32 @@ Content-Type: application/json
 # 어떤 오류가 발생해도 스트림 마지막 줄은 반드시 type:error 이벤트
 {"type": "error", "agent": "quiz", "message": "퀴즈 생성 실패 (Five_Choice): ..."}
 ```
+
+### 4.5 표준 오류 payload (`error.data`) — 권장
+
+UI/로깅/재시도 정책에서 오류를 일관되게 처리하기 위해, `error` 이벤트에 아래 구조의 `data`를 **추가로 포함할 수 있습니다**.
+
+```json
+{
+  "type": "error",
+  "agent": "quiz",
+  "message": "Quiz generation failed: invalid profile",
+  "data": {
+    "type": "error",
+    "code": "QUIZ_PROFILE_VALIDATION_FAILED",
+    "message": "Invalid profile for quiz generation",
+    "details": [
+      {"field": "learning_goal", "reason": "Field required"}
+    ]
+  }
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `data.code` | string | 오류 코드 (예: `QUIZ_PROFILE_VALIDATION_FAILED`) |
+| `data.message` | string | 사용자/로그용 메시지 |
+| `data.details` | array | 필드 단위 상세 (필요 시) |
 
 ### 4.4 Spring Boot 처리 권장 패턴
 

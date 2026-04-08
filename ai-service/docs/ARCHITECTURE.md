@@ -1,7 +1,7 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.7 (`ai_agent` v2/v3 분리 · 하이브리드 PDF 로딩 · 보안·안정성 보강)  
-> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-03-24  
+> **버전**: v2.8 (`QuizAgents` profile 기본값 주입 · 오류 이벤트 payload 표준화 · Explainer 출력 포맷 강화)  
+> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-04-08  
 > **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
 > **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
 
@@ -10,6 +10,7 @@
 | 버전 | 날짜 | 주요 변경 |
 |---|---|---|
 | v2.7 | 2026-03-24 | `ai_agent/` v2/v3 트랙 분리 · 하이브리드 PDF 로딩(File API + Redis/메모리 캐시) · `path_validator` 경로 검증 · 업로드 UUID·확장자 화이트리스트 · Bridge grade 길이 검증(400) · 세션 `lecture_id` IDOR 방지 · 스트리밍 `QueueFull`/`_safe_put` 보강 · File API 캐시 LRU 상한 · 공유 Redis 풀 · Debate 세션 명시 안내 · `MainQandAAgent` 이벤트 루프 수정 |
+| v2.8 | 2026-04-08 | `QuizAgents`가 `user_profile` 미전달/부분 전달을 허용하도록 기본값 주입+deep-merge 후 검증 · `error.data` 표준 오류 payload(code/message/details) 추가 · `ExplainerAgent` 마크다운 구조화/질문 태그 강제 |
 | v2.6 | 2026-03-12 | v2/v3 URL 버전 접두사 적용 · ExplainerAgent 페이지 기반 전환 · GraderAgent LLM 채점 강화 |
 | v2.5 | 2026-03-12 | 통합 에이전트 리팩터링 · OrchestrationEngine 구현 · NDJSON agent_delta 포맷 통일 |
 
@@ -270,7 +271,7 @@ pdf_part = await self._bridge.load_pdf_part(pdf_path)
 |---|---|---|---|
 | `ExplainerAgent` | **페이지 단위** 강의 설명 스트리밍 생성 | `EXPLAIN_PAGE` | `chapter_title` → `page_number` 중심으로 전환. 설명 후 "다음 페이지로 넘어갈까요?" 자동 포함 |
 | `QaAgent` | 사용자 질문 답변 | `ANSWER_QUESTION` | `load_pdf_part` await 적용 |
-| `QuizAgents` | 퀴즈 생성 (`v2/test_gen` 위임) | `GENERATE_QUIZ_*` | — |
+| `QuizAgents` | 퀴즈 생성 (`v2/test_gen` 위임) | `GENERATE_QUIZ_*` | `profile`이 `null/{}`/부분 객체여도 기본값 주입+병합 후 검증 (v2.8) |
 | `GraderAgent` | MCQ/OX 자동 채점, 단답/서술 LLM 채점 | `AUTO_GRADE_MCQ_OX`, `GRADE_SHORT_OR_ESSAY` | `pdf_path` 파라미터 추가. LLM 채점 시 PDF를 Gemini에 직접 전달. `reason` / `deduction_reason` 필드 추가 |
 
 #### GraderAgent 채점 결과 스키마 (단답/서술형)
@@ -528,7 +529,7 @@ POST /api/v3/bridge/grade
 | `channel` | string? | `agent_delta` 전용 — `"thought"` (내부 추론) \| `"main"` (실제 답변) |
 | `delta` | string? | `agent_delta` 텍스트 청크 (짧은 단위로 자주 전송) |
 | `final` | bool? | `done` 이벤트에서 `true` |
-| `data` | object? | `done` 이벤트 부가 데이터 |
+| `data` | object? | `done` 이벤트 부가 데이터 (`error`에서도 선택적으로 사용 가능 — 표준 오류 payload) |
 | `message` | string? | `error` 이벤트 오류 메시지 |
 
 > **heartbeat**: LLM 응답 대기 중 10초마다 자동 전송되는 연결 유지 이벤트.  
@@ -542,7 +543,7 @@ POST /api/v3/bridge/grade
 {"type": "agent_delta", "agent": "explainer", "tool": "EXPLAIN_PAGE", "channel": "main",    "delta": "소프트웨어 프로세스란..."}
 {"type": "heartbeat"}
 {"type": "done",        "agent": "explainer", "tool": "EXPLAIN_PAGE", "final": true, "data": {"ui": {"widget": "QUIZ_DECISION"}}}
-{"type": "error",       "agent": "system",    "message": "서버 오류가 발생했습니다."}
+{"type": "error",       "agent": "system",    "message": "서버 오류가 발생했습니다.", "data": {"type":"error","code":"SERVER_ERROR","message":"Server error","details":[]}}
 ```
 
 #### `done.data` 필드 상세
