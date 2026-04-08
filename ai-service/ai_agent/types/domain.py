@@ -194,6 +194,9 @@ class NdjsonEvent(BaseModel):
     data: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
     final: Optional[bool] = None   # done 이벤트에서 True
+    # error 이벤트 전용 구조화 필드
+    code: Optional[str] = None                      # 에러 코드 (예: QUIZ_PROFILE_VALIDATION_FAILED)
+    details: Optional[List[Dict[str, Any]]] = None  # 필드별 상세 오류 목록
 
     def to_ndjson_line(self) -> str:
         return self.model_dump_json(exclude_none=True) + "\n"

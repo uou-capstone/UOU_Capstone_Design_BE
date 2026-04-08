@@ -175,7 +175,13 @@ class ToolDispatcher:
             count = params.get("count", 5)
             profile = params.get("profile")
 
-            async for event in self._quiz.run_stream(quiz_type, lecture_content, profile, count):
+            async for event in self._quiz.run_stream(
+                quiz_type,
+                lecture_content,
+                profile,
+                state.learner.model_dump(),
+                count,
+            ):
                 if event.type == NdjsonEventType.DONE and event.data:
                     quiz_data = event.data.get("quiz")
                     if quiz_data:

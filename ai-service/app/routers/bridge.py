@@ -110,7 +110,11 @@ async def bridge_quiz(req: QuizRequest):
     async def _gen():
         try:
             async for event in _quiz.run_stream(
-                exam_type, req.lecture_content, req.user_profile, req.target_count
+                exam_type,
+                req.lecture_content,
+                req.user_profile,
+                None,
+                req.target_count,
             ):
                 yield event.to_ndjson_line()
         except Exception as exc:
@@ -139,7 +143,11 @@ async def bridge_quiz_result(req: QuizRequest):
         raise HTTPException(status_code=400, detail=_DEBATE_DISABLED_MSG)
     try:
         quiz_data = await _quiz.run(
-            exam_type, req.lecture_content, req.user_profile, req.target_count
+            exam_type,
+            req.lecture_content,
+            req.user_profile,
+            None,
+            req.target_count,
         )
         result = quiz_data if isinstance(quiz_data, dict) else (
             quiz_data.model_dump() if hasattr(quiz_data, "model_dump") else quiz_data
