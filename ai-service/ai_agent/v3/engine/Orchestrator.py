@@ -1,313 +1,161 @@
 """
 Orchestrator
 
-설계서 §4: 규칙 기반 플래너.
-입력 이벤트(AppEvent)와 현재 상태를 바탕으로 OrchestratorPlan을 생성한다.
-실제 AI 호출은 하지 않고 도구 호출(CALL_TOOL)만 선언한다.
+설계서 §4: LLM 플래너
+입력 이벤트(AppEvent)와 현재 상태를 바탕으로 LLM을 호출하여 JSON 플랜(OrchestratorPlan)을 생성한다.
+규칙 기반 분기를 제거하고 Gemini의 thinking_config 및 JSON schema를 사용한다.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+from typing import AsyncGenerator
+
+from google.genai import types
 
 from ai_agent.types.domain import (
-    ActionType,
     AppEvent,
-    AppEventType,
-    LearnerModel,
-    OrchestratorAction,
-    OrchestratorPlan,
-    PageState,
-    PageStatus,
     SessionState,
-    ToolName,
+    OrchestratorPlan,
+    NdjsonEvent,
+    NdjsonEventType,
 )
+from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 
 
 class Orchestrator:
     """
-    이벤트-분기 규칙 기반 계획 수립기.
-
-    설계서 §4.4 이벤트-분기 요약 구현:
-    SESSION_ENTERED / START_EXPLANATION_DECISION / PAGE_CHANGED /
-    USER_MESSAGE / QUIZ_DECISION / QUIZ_TYPE_SELECTED / QUIZ_SUBMITTED /
-    REVIEW_DECISION / RETEST_DECISION / SAVE_AND_EXIT
+    LLM 기반 계획 수립기.
     """
+    def __init__(self, bridge: GeminiBridgeClient):
+        self._bridge = bridge
 
-    def run(
-        self,
-        event: AppEvent,
-        state: SessionState,
-        llm_hint: Optional[dict] = None,
-    ) -> OrchestratorPlan:
-        """
-        이벤트를 받아 OrchestratorPlan(액션 목록)을 생성한다.
+    def _extract_page_context(self, pdf_path: str | None, current_page: int) -> str:
+        """현재 페이지와 전후 인접 페이지의 텍스트 컨텍스트를 PDF에서 추출한다."""
+        if not pdf_path:
+            return "PDF 정보가 연결되지 않았습니다."
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(pdf_path)
+            total_pages = len(reader.pages)
+            if total_pages == 0:
+                return "PDF 텍스트를 읽을 수 없습니다."
 
-        Args:
-            event: 클라이언트가 보낸 AppEvent
-            state: 현재 세션 상태
-            llm_hint: 오케스트레이터 LLM 힌트 (offerQuiz, detailLevel, reason)
-        """
-        actions: List[OrchestratorAction] = []
+            # UI 상의 1-indexed 페이지 번호를 0-indexed로 변환
+            target_idx = max(0, current_page - 1)
+            if target_idx >= total_pages:
+                target_idx = total_pages - 1
 
-        match event.type:
-            case AppEventType.SESSION_ENTERED:
-                actions = self._handle_session_entered(state)
+            # 이전, 현재, 다음 페이지 정보를 조합
+            pages_to_read = [
+                idx for idx in [target_idx - 1, target_idx, target_idx + 1]
+                if 0 <= idx < total_pages
+            ]
+            
+            context_blocks = [f"전체 페이지 수: {total_pages}"]
+            for idx in pages_to_read:
+                text = reader.pages[idx].extract_text() or ""
+                label = "현재 쪽" if idx == target_idx else ("이전 쪽" if idx < target_idx else "다음 쪽")
+                context_blocks.append(f"[{label} (Page {idx+1})]\n{text.strip()[:1500]}")
+            
+            return "\n\n".join(context_blocks)
+            
+        except Exception as e:
+            return f"페이지 텍스트 추출 중 요류 발생: {e}"
 
-            case AppEventType.START_EXPLANATION_DECISION:
-                if event.get("accept"):
-                    actions = self._handle_start_explanation(state, llm_hint)
-
-            case AppEventType.PAGE_CHANGED:
-                actions = self._handle_page_changed(state, llm_hint)
-
-            case AppEventType.USER_MESSAGE:
-                actions = self._handle_user_message(event, state, llm_hint)
-
-            case AppEventType.QUIZ_DECISION:
-                if event.get("accept"):
-                    actions = [self._set_ui({"modal": "QUIZ_TYPE_PICKER"})]
-                else:
-                    actions = self._handle_page_changed(state, llm_hint)
-
-            case AppEventType.QUIZ_TYPE_SELECTED:
-                # 프론트에서 명시적으로 선택한 경우 그대로 사용,
-                # 없으면 학습자 레벨 기반 추천 타입 사용
-                quiz_type = event.get("quizType") or self._recommend_quiz_type(state.learner)
-                if quiz_type == "Debate":
-                    actions = [
-                        OrchestratorAction(
-                            type=ActionType.SEND_MESSAGE,
-                            message="토론형(Debate)은 현재 지원하지 않습니다. 다른 유형을 선택해 주세요.",
-                            ui_state={"modal": "QUIZ_TYPE_PICKER"},
-                        )
-                    ]
-                else:
-                    actions = [self._call_generate_quiz(quiz_type, state)]
-
-            case AppEventType.QUIZ_SUBMITTED:
-                quiz_type = event.get("quizType", "Five_Choice")
-                actions = self._handle_quiz_submitted(quiz_type, state)
-
-            case AppEventType.REVIEW_DECISION:
-                if event.get("accept"):
-                    actions = self._handle_review_decision(state)
-
-            case AppEventType.RETEST_DECISION:
-                if event.get("accept"):
-                    actions = [self._set_ui({"modal": "QUIZ_TYPE_PICKER"})]
-
-            case AppEventType.NEXT_PAGE_DECISION:
-                if event.get("accept"):
-                    next_page = state.current_page + 1
-                    actions = [
-                        OrchestratorAction(
-                            type=ActionType.SET_UI_STATE,
-                            ui_state={"page": next_page},
-                        )
-                    ]
-
-            case AppEventType.SAVE_AND_EXIT:
-                actions = [
-                    OrchestratorAction(
-                        type=ActionType.SEND_MESSAGE,
-                        message="학습 세션이 저장되었습니다. 수고하셨습니다!",
-                    )
-                ]
-
-        return OrchestratorPlan(actions=actions)
-
-    # ------------------------------------------------------------------
-    # 이벤트별 액션 생성 헬퍼
-    # ------------------------------------------------------------------
-
-    def _handle_session_entered(self, state: SessionState) -> List[OrchestratorAction]:
-        return [
-            OrchestratorAction(
-                type=ActionType.SEND_MESSAGE,
-                message="학습 세션에 오신 것을 환영합니다! 강의를 시작할까요?",
-                ui_state={"widget": "START_EXPLANATION_DECISION"},
-            )
-        ]
-
-    def _handle_start_explanation(
-        self, state: SessionState, llm_hint: Optional[dict]
-    ) -> List[OrchestratorAction]:
-        detail = self._decide_detail_level(state.get_current_page_state(), state.learner, llm_hint)
-        actions = [
-            OrchestratorAction(
-                type=ActionType.CALL_TOOL,
-                tool=ToolName.EXPLAIN_PAGE,
-                params={"detail": detail},
-            )
-        ]
-        if self._should_offer_quiz(state.get_current_page_state(), state.learner, llm_hint):
-            actions.append(
-                OrchestratorAction(
-                    type=ActionType.SEND_MESSAGE,
-                    message="설명이 끝났습니다. 이해를 확인하는 퀴즈를 풀어볼까요?",
-                    ui_state={"widget": "QUIZ_DECISION"},
-                )
-            )
-        return actions
-
-    def _handle_page_changed(
-        self, state: SessionState, llm_hint: Optional[dict]
-    ) -> List[OrchestratorAction]:
-        detail = self._decide_detail_level(state.get_current_page_state(), state.learner, llm_hint)
-        actions = [
-            OrchestratorAction(
-                type=ActionType.CALL_TOOL,
-                tool=ToolName.EXPLAIN_PAGE,
-                params={"detail": detail},
-            )
-        ]
-        if self._should_offer_quiz(state.get_current_page_state(), state.learner, llm_hint):
-            actions.append(
-                OrchestratorAction(
-                    type=ActionType.SEND_MESSAGE,
-                    message="이 챕터에 대한 퀴즈를 풀어볼까요?",
-                    ui_state={"widget": "QUIZ_DECISION"},
-                )
-            )
-        else:
-            actions.append(
-                OrchestratorAction(
-                    type=ActionType.SEND_MESSAGE,
-                    message="다음 페이지로 넘어갈까요?",
-                    ui_state={"widget": "NEXT_PAGE_DECISION"},
-                )
-            )
-        return actions
-
-    def _handle_user_message(
-        self, event: AppEvent, state: SessionState, llm_hint: Optional[dict]
-    ) -> List[OrchestratorAction]:
-        text = (event.get("text") or "").lower()
-        quiz_keywords = ["퀴즈", "문제", "시험", "quiz", "test"]
-        next_keywords = ["다음", "next", "넘어가", "계속"]
-
-        if any(k in text for k in quiz_keywords):
-            return [self._set_ui({"modal": "QUIZ_TYPE_PICKER"})]
-
-        if any(k in text for k in next_keywords):
-            return self._handle_page_changed(state, llm_hint)
-
-        return [
-            OrchestratorAction(
-                type=ActionType.CALL_TOOL,
-                tool=ToolName.ANSWER_QUESTION,
-                params={"question": event.get("text", "")},
-            ),
-            OrchestratorAction(
-                type=ActionType.SEND_MESSAGE,
-                message="추가 질문이 있으신가요?",
-                ui_state={"widget": "NEXT_PAGE_DECISION"},
-            ),
-        ]
-
-    def _handle_quiz_submitted(
-        self, quiz_type: str, state: SessionState
-    ) -> List[OrchestratorAction]:
-        if quiz_type in ("Five_Choice", "OX_Problem"):
-            tool = ToolName.AUTO_GRADE_MCQ_OX
-        else:
-            tool = ToolName.GRADE_SHORT_OR_ESSAY
-
-        return [
-            OrchestratorAction(
-                type=ActionType.CALL_TOOL,
-                tool=tool,
-                params={"quiz_type": quiz_type},
-            )
-        ]
-
-    def _handle_review_decision(self, state: SessionState) -> List[OrchestratorAction]:
-        return [
-            OrchestratorAction(
-                type=ActionType.CALL_TOOL,
-                tool=ToolName.EXPLAIN_PAGE,
-                params={"detail": "DETAILED"},
-            ),
-            OrchestratorAction(
-                type=ActionType.SEND_MESSAGE,
-                message="복습이 완료되었습니다. 다시 시험을 볼까요?",
-                ui_state={"widget": "RETEST_DECISION"},
-            ),
-        ]
-
-    # ------------------------------------------------------------------
-    # 정책 함수 (설계서 §4.5)
-    # ------------------------------------------------------------------
-
-    def _should_use_detailed_explanation(
-        self,
-        page_state: PageState,
-        learner: LearnerModel,
-        llm_hint: Optional[dict] = None,
-    ) -> bool:
-        if llm_hint and llm_hint.get("detailLevel") == "DETAILED":
-            return True
-        if learner.average_recent_score < 0.6:
-            return True
-        if page_state.chapter_title and page_state.chapter_title in learner.weak_concepts:
-            return True
-        return False
-
-    def _should_offer_quiz(
-        self,
-        page_state: PageState,
-        learner: LearnerModel,
-        llm_hint: Optional[dict] = None,
-    ) -> bool:
-        if llm_hint and llm_hint.get("offerQuiz") is True:
-            return True
-        page_key = str(page_state.page_number)
-        attempt_count = learner.quiz_attempt_counts.get(page_key, 0)
-        if attempt_count >= 2:
-            return False
-        if page_state.is_key_page:
-            return True
-        if learner.average_recent_score < 0.7:
-            return True
-        return False
-
-    def _decide_detail_level(
-        self,
-        page_state: PageState,
-        learner: LearnerModel,
-        llm_hint: Optional[dict] = None,
-    ) -> str:
-        return "DETAILED" if self._should_use_detailed_explanation(page_state, learner, llm_hint) else "NORMAL"
-
-    def _recommend_quiz_type(self, learner: LearnerModel) -> str:
-        match learner.proficiency_level:
-            case "BEGINNER":
-                return "OX_Problem"
-            case "ADVANCED":
-                return "Short_Answer"
-            case _:
-                return "Five_Choice"
-
-    # ------------------------------------------------------------------
-    # 공통 액션 빌더
-    # ------------------------------------------------------------------
-
-    def _call_generate_quiz(self, quiz_type: str, state: SessionState) -> OrchestratorAction:
-        tool_map = {
-            "Five_Choice": ToolName.GENERATE_QUIZ_FIVE_CHOICE,
-            "OX_Problem": ToolName.GENERATE_QUIZ_OX,
-            "Short_Answer": ToolName.GENERATE_QUIZ_SHORT,
-            "Flash_Card": ToolName.GENERATE_QUIZ_FLASH,
+    def _build_prompt(self, event: AppEvent, state: SessionState) -> str:
+        """시스템 프롬프트 생성"""
+        page_context = self._extract_page_context(state.pdf_path, state.current_page)
+        
+        learner_info = {
+            "level": state.learner.proficiency_level,
+            "recent_scores": state.learner.recent_scores,
+            "weak_concepts": getattr(state.learner, "weak_concepts", []),
+            "quiz_attempt_counts": state.learner.quiz_attempt_counts,
+            "avg_score": state.learner.average_recent_score,
         }
-        tool = tool_map.get(quiz_type, ToolName.GENERATE_QUIZ_FIVE_CHOICE)
-        return OrchestratorAction(
-            type=ActionType.CALL_TOOL,
-            tool=tool,
-            params={"quiz_type": quiz_type},
-        )
+        learner_memo = json.dumps(learner_info, ensure_ascii=False)
+        
+        event_str = f"Type: {event.type.value}, Payload: {json.dumps(event.payload, ensure_ascii=False)}"
+        
+        recent_messages = state.messages[-5:] if state.messages else []
+        messages_str = json.dumps(recent_messages, ensure_ascii=False)
+        
+        prompt = f"""당신은 "MergeEduAgent LLM 플래너" (학습 오케스트레이터)입니다.
+당신의 절대적인 목표는 주어진 컨텍스트를 분석하여, 학생의 다음 학습을 위한 **도구 호출 계획(OrchestratorPlan)**을 확정하는 것입니다.
 
-    def _set_ui(self, ui_state: dict) -> OrchestratorAction:
-        return OrchestratorAction(
-            type=ActionType.SET_UI_STATE,
-            ui_state=ui_state,
+[현재 상황]
+수신 이벤트: {event_str}
+현재 페이지 번호: {state.current_page}
+
+[페이지 컨텍스트 텍스트(요약)]
+{page_context}
+
+[학습자 성향 메모리]
+{learner_memo}
+
+[최근 대화 기록(최대 5건)]
+{messages_str}
+
+[사용 가능한 도구 (ActionType.CALL_TOOL 할당)]
+- EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED"}}) -> 강의 설명이 필요할 경우 호출.
+- ANSWER_QUESTION: 질문에 대한 답변 (매개변수: {{"question": "..."}}) -> 사용자가 메시지로 질문한 내용의 답변 호출.
+- GENERATE_QUIZ_FIVE_CHOICE: 객관식 퀴즈 (매개변수: {{"quiz_type": "Five_Choice"}})
+- GENERATE_QUIZ_OX: OX 퀴즈 (매개변수: {{"quiz_type": "OX_Problem"}})
+- AUTO_GRADE_MCQ_OX: 객관식 자동 채점 (매개변수: {{"quiz_type": "..."}})
+- GRADE_SHORT_OR_ESSAY: 주관식 채점 (매개변수: {{"quiz_type": "..."}})
+
+UI 조절 도구 (ActionType.SET_UI_STATE 할당): 
+  ui_state 필드에 넘길 수 있는 예시: {{"modal": "QUIZ_TYPE_PICKER"}}, {{"widget": "START_EXPLANATION_DECISION"}}, {{"widget": "NEXT_PAGE_DECISION"}}, {{"widget": "QUIZ_DECISION"}}
+
+단순 UI 통지 메시지 표시 (ActionType.SEND_MESSAGE 할당): message 필드에 사용자에게 보여줄 안내문 작성.
+
+[판단 지시 사항]
+1. `thinking` 블록을 자유롭게 활용해서 상황을 파악하세요.
+2. 당신의 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
+3. 일반 질문/답변의 경우 `ANSWER_QUESTION` 툴을 부릅니다.
+4. 설명 직후에는 퀴즈 풀이를 제안하는 위젯(`QUIZ_DECISION`)을 노출시키거나, 이전 점수가 좋지 않다면 바로 해당 페이지 기반의 퀴즈를 생성하세요.
+5. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
+"""
+        return prompt
+
+    async def run_stream(self, event: AppEvent, state: SessionState) -> AsyncGenerator[NdjsonEvent, None]:
+        contents = [self._build_prompt(event, state)]
+        
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=OrchestratorPlan,
+            thinking_config={"include_thoughts": True}
         )
+        
+        json_buffer = []
+        async for ev in self._bridge.stream(contents, config=config, agent="orchestrator"):
+            if ev.type == NdjsonEventType.AGENT_DELTA:
+                if ev.channel == "thought":
+                    yield ev  # UI로 생각 스트리밍 포워딩
+                elif ev.channel == "main" and ev.delta:
+                    # JSON 결과물 버퍼링 (클라이언트로는 보내지 않음)
+                    json_buffer.append(ev.delta)
+            elif ev.type == NdjsonEventType.ERROR:
+                yield ev
+            elif ev.type == NdjsonEventType.DONE:
+                try:
+                    json_str = "".join(json_buffer)
+                    if not json_str.strip():
+                        raise ValueError("LLM 응답에서 추출된 JSON 내용이 없습니다.")
+                        
+                    # pydantic 객체로 역직렬화 (검증)
+                    plan = OrchestratorPlan.model_validate_json(json_str)
+                    
+                    # 딕셔너리로 형변환 후 바인딩 (이후 핸들러 측에서 필요시 다시 OrchestratorPlan으로 패킹)
+                    ev.data = {"plan": plan.model_dump()}
+                    ev.final = True
+                    yield ev
+                except Exception as e:
+                    yield NdjsonEvent(
+                        type=NdjsonEventType.ERROR, 
+                        agent="orchestrator", 
+                        message=f"JSON 파싱 오류: {e}"
+                    )
+            else:
+                # 하트비트 포워딩
+                yield ev

@@ -184,6 +184,7 @@ class GeminiBridgeClient:
     async def stream(
         self,
         contents: List[Any],
+        config: Optional[types.GenerateContentConfig] = None,
         done_data: Optional[Dict[str, Any]] = None,
         agent: str = "system",
         tool: Optional[str] = None,
@@ -224,6 +225,7 @@ class GeminiBridgeClient:
                 response_iter = self._client.models.generate_content_stream(
                     model=self._model,
                     contents=contents,
+                    config=config,
                 )
                 for chunk in response_iter:
                     if _cancelled.is_set():

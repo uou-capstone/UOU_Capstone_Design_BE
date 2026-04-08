@@ -40,7 +40,7 @@ class OrchestrationEngine:
         self._store = session_store
         self._bridge = bridge or GeminiBridgeClient()
         self._reducer = StateReducer()
-        self._orchestrator = Orchestrator()
+        self._orchestrator = Orchestrator(self._bridge)
         self._dispatcher = ToolDispatcher(self._bridge)
 
     async def handle_event_stream(
@@ -64,10 +64,24 @@ class OrchestrationEngine:
             # 2. Apply state immediately (StateReducer)
             state = self._reducer.reduce(state, event)
 
-            # 3. Build plan (Orchestrator)
-            plan = self._orchestrator.run(event, state)
+            # 3. Build plan via LLM (Orchestrator Stream)
+            plan = None
+            async for ndjson_event in self._orchestrator.run_stream(event, state):
+                import ai_agent.types.domain as domain_models
+                if ndjson_event.type == NdjsonEventType.DONE and ndjson_event.final:
+                    if ndjson_event.data and "plan" in ndjson_event.data:
+                        plan_data = ndjson_event.data["plan"]
+                        if isinstance(plan_data, dict):
+                            plan = domain_models.OrchestratorPlan(**plan_data)
+                        else:
+                            plan = plan_data
+                elif ndjson_event.type == NdjsonEventType.AGENT_DELTA:
+                    if ndjson_event.channel == "thought":
+                        yield ndjson_event
+                else:
+                    yield ndjson_event
 
-            if not plan.actions:
+            if not plan or not plan.actions:
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="system",
