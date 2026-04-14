@@ -1,0 +1,113 @@
+# develop 브랜치 배포용 Compose (EC2 — 포트 8081/8001)
+#
+# 사전 준비:
+#   cp env/develop.env.example env/develop.env
+#   (env/develop.env 에 개발용 비밀값 입력)
+#
+# 기동:
+#   docker compose --env-file env/develop.env -f docker-compose.develop.yml pull
+#   docker compose --env-file env/develop.env -f docker-compose.develop.yml up -d
+#
+# 롤백 (특정 SHA 태그로):
+#   env/develop.env 에서 SPRING_IMAGE_TAG / AI_IMAGE_TAG 를 이전 태그로 수정 후 위 명령 재실행
+
+services:
+
+  # ── MySQL ────────────────────────────────────────────────
+  dev-mysql:
+    image: mysql:8.0
+    container_name: dev-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-uoucapstone_dev}
+      MYSQL_USER: ${MYSQL_USER:-appuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - dev-mysql-data:/var/lib/mysql
+    networks:
+      - dev-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Redis ─────────────────────────────────────────────────
+  dev-redis:
+    image: redis:alpine
+    container_name: dev-redis
+    volumes:
+      - dev-redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning --appendonly yes
+    networks:
+      - dev-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Spring Boot (main-service) ────────────────────────────
+  dev-backend:
+    image: ghcr.io/${GHCR_ORG}/main-service:${SPRING_IMAGE_TAG:-develop-latest}
+    container_name: dev-backend
+    ports:
+      - "8081:8080"
+    environment:
+      # 내부 서비스 디스커버리 (compose 네트워크 내 컨테이너명 고정)
+      MYSQL_HOST: dev-mysql
+      MYSQL_PORT: "3306"
+      SPRING_DATA_REDIS_HOST: dev-redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      AI_SERVICE_BASE_URL: http://dev-ai:8000
+    env_file:
+      - env/develop.env
+    networks:
+      - dev-network
+    depends_on:
+      dev-mysql:
+        condition: service_healthy
+      dev-redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
+             "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── FastAPI AI Service ────────────────────────────────────
+  dev-ai:
+    image: ghcr.io/${GHCR_ORG}/ai-service:${AI_IMAGE_TAG:-develop-latest}
+    container_name: dev-ai
+    ports:
+      - "8001:8000"
+    env_file:
+      - env/develop.env
+    networks:
+      - dev-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
+             "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  dev-mysql-data:
+    driver: local
+  dev-redis-data:
+    driver: local
+
+networks:
+  dev-network:
+    driver: bridge
