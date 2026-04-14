@@ -117,13 +117,7 @@ public class LearningSessionService {
         log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}, viewerPage={}",
                 lectureId, sessionId, eventRequest.getType(), viewerPage);
 
-        Map<String, Object> payload = new LinkedHashMap<>(eventRequest.toPayload());
-        // FastAPI가 payload.current_page / page 없이 세션의 잘못된 페이지(예: 마지막 페이지)를 쓰는 것을 방지
-        if (viewerPage != null) {
-            payload.put("current_page", viewerPage);
-            payload.put("page", viewerPage);
-            payload.put("pageNumber", viewerPage);
-        }
+        Map<String, Object> payload = buildPayloadForFastApi(eventRequest, viewerPage);
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("type", eventRequest.getType());
@@ -171,5 +165,40 @@ public class LearningSessionService {
             }
         }
         return null;
+    }
+
+    /**
+     * FastAPI {@code EventRequest} 계약에 맞게 payload를 만든다.
+     * <ul>
+     *   <li>FE가 {@code { "type":"...", "payload": { ... } }} 형태로내면 이중 래핑을 제거한다.</li>
+     *   <li>{@code USER_MESSAGE}: 문서 계약은 {@code payload.question}. 구버전 {@code text}만 있으면 {@code question}으로 복사한다.</li>
+     *   <li>뷰어 페이지 쿼리가 있으면 {@code current_page} 등을 주입한다.</li>
+     * </ul>
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> buildPayloadForFastApi(SessionEventRequest eventRequest, Integer viewerPage) {
+        Map<String, Object> payload = new LinkedHashMap<>(eventRequest.toPayload());
+        if (payload.size() == 1 && payload.get("payload") instanceof Map<?, ?> nested) {
+            payload = new LinkedHashMap<>((Map<String, Object>) nested);
+        }
+
+        if ("USER_MESSAGE".equals(eventRequest.getType())) {
+            Object question = payload.get("question");
+            boolean questionBlank = question == null
+                    || (question instanceof String qs && qs.isBlank());
+            if (questionBlank) {
+                Object text = payload.get("text");
+                if (text != null && StringUtils.hasText(String.valueOf(text))) {
+                    payload.put("question", String.valueOf(text));
+                }
+            }
+        }
+
+        if (viewerPage != null) {
+            payload.put("current_page", viewerPage);
+            payload.put("page", viewerPage);
+            payload.put("pageNumber", viewerPage);
+        }
+        return payload;
     }
 }
