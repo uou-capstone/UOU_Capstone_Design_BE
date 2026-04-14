@@ -76,12 +76,13 @@ public class LearningSessionController {
      * 학습 세션에 AppEvent를 전송하고, FastAPI OrchestrationEngine의 처리 결과를
      * SSE(Server-Sent Events) 스트리밍으로 실시간 수신한다.
      *
-     * 요청 예시 (Spring → FastAPI 변환 후):
+     * 요청 예시 (Spring → FastAPI 변환 후, llm_multi_agent Bridge·Session 계약):
      * {
      *   "type": "USER_MESSAGE",
      *   "lecture_id": 1,
-     *   "payload": { "text": "이 페이지 설명해줘" }
+     *   "payload": { "question": "이 페이지 설명해줘" }
      * }
+     * (구버전 호환: 본문에 {@code text}만 있으면 서비스에서 {@code question}으로 보강)
      *
      * SSE 응답 포맷 (NDJSON 라인별 data 필드):
      * data: {"type":"agent_delta","agent":"explainer","delta":"설명 텍스트..."}

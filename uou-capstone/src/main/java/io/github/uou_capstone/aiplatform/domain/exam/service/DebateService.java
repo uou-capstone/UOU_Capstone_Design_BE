@@ -61,17 +61,20 @@ public class DebateService {
         String lectureContent = resolveLectureContent(session);
         String fastApiSessionId = toFastApiSessionId(session.getId());
 
-        Map<String, Object> eventBody = new HashMap<>();
-        eventBody.put("type", "DEBATE_STARTED");
-        eventBody.put("mode", request.getMode() != null ? request.getMode() : "debate");
-        eventBody.put("lecture_content", lectureContent);
-        eventBody.put("exam_content", session.getExamContentJson());
+        // FastAPI EventRequest: type + payload (토론 전용 타입은 FastAPI AppEventType에 있어야 함)
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("mode", request.getMode() != null ? request.getMode() : "debate");
+        payload.put("lecture_content", lectureContent);
+        payload.put("exam_content", session.getExamContentJson());
         if (request.getTopic() != null) {
-            eventBody.put("user_topic", request.getTopic());
+            payload.put("user_topic", request.getTopic());
         }
         if (session.getPriorProfileJson() != null) {
-            eventBody.put("profile", session.getPriorProfileJson());
+            payload.put("profile", session.getPriorProfileJson());
         }
+        Map<String, Object> eventBody = new HashMap<>();
+        eventBody.put("type", "DEBATE_STARTED");
+        eventBody.put("payload", payload);
 
         Map<String, Object> phase1Result = callSessionEvent(fastApiSessionId, eventBody);
 
@@ -118,12 +121,15 @@ public class DebateService {
 
         String fastApiSessionId = toFastApiSessionId(session.getId());
 
+        // FastAPI EventRequest: type + payload (루트에 text 두면 Pydantic이 무시함)
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("question", request.getUserInput());
+        if (session.getDebateHistoryJson() != null) {
+            payload.put("debate_history", session.getDebateHistoryJson());
+        }
         Map<String, Object> eventBody = new HashMap<>();
         eventBody.put("type", "USER_MESSAGE");
-        eventBody.put("text", request.getUserInput());
-        if (session.getDebateHistoryJson() != null) {
-            eventBody.put("debate_history", session.getDebateHistoryJson());
-        }
+        eventBody.put("payload", payload);
 
         Map<String, Object> result = callSessionEvent(fastApiSessionId, eventBody);
 

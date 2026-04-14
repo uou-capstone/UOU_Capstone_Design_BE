@@ -21,7 +21,7 @@ import java.util.Map;
  * - SESSION_ENTERED
  * - START_EXPLANATION_DECISION
  * - PAGE_CHANGED
- * - USER_MESSAGE
+ * - USER_MESSAGE (payload 권장 키: {@code question} — llm_multi_agent / Bridge·Session 계약. {@code text}는 Spring에서 {@code question}으로 보강 가능)
  * - QUIZ_DECISION
  * - QUIZ_TYPE_SELECTED
  * - QUIZ_SUBMITTED

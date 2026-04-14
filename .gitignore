@@ -1,0 +1,8 @@
+# 배포용 환경변수 파일 (실제 비밀값 포함 — 절대 커밋 금지)
+env/*.env
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
