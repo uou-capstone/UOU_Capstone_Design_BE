@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO_DIR="/home/ubuntu/UOU_Capstone_design_Be_v3"
+REPO_DIR="/home/ec2-user/UOU_Capstone_design_Be_v3"
 TARGET_BRANCH="${1:-develop}"
 
 echo "[deploy] 브랜치: ${TARGET_BRANCH}"
