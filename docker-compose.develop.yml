@@ -54,7 +54,7 @@ services:
 
   # ── Spring Boot (main-service) ────────────────────────────
   dev-backend:
-    image: ghcr.io/${GHCR_ORG}/main-service:${SPRING_IMAGE_TAG:-develop-latest}
+    image: ghcr.io/${GHCR_ORG:?GHCR_ORG is not set. Check env/develop.env}/main-service:${SPRING_IMAGE_TAG:-develop-latest}
     container_name: dev-backend
     ports:
       - "8081:8080"
@@ -85,7 +85,7 @@ services:
 
   # ── FastAPI AI Service ────────────────────────────────────
   dev-ai:
-    image: ghcr.io/${GHCR_ORG}/ai-service:${AI_IMAGE_TAG:-develop-latest}
+    image: ghcr.io/${GHCR_ORG:?GHCR_ORG is not set. Check env/develop.env}/ai-service:${AI_IMAGE_TAG:-develop-latest}
     container_name: dev-ai
     ports:
       - "8001:8000"

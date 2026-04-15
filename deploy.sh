@@ -23,8 +23,13 @@ echo "[deploy] 브랜치: ${TARGET_BRANCH}"
 echo "[deploy] 저장소 디렉토리: ${REPO_DIR}"
 
 # ── 저장소 최신화 ─────────────────────────────────────────────
+# git pull 대신 fetch + checkout + reset 사용.
+# pull은 현재 체크아웃된 브랜치에 merge하므로, main/develop 두 환경이
+# 같은 디렉토리를 공유할 때 엉뚱한 브랜치에 merge될 위험이 있음.
 cd "$REPO_DIR"
-git pull origin "$TARGET_BRANCH"
+git fetch origin "$TARGET_BRANCH"
+git checkout "$TARGET_BRANCH"
+git reset --hard "origin/$TARGET_BRANCH"
 
 # ── GHCR 로그인 ───────────────────────────────────────────────
 echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
