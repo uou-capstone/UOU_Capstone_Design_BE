@@ -15,6 +15,8 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
 
     List<Material> findByLecture_IdOrderByCreatedAtDesc(Long lectureId);
 
+    List<Material> findByLecture_IdInOrderByLecture_IdAscCreatedAtDesc(java.util.Collection<Long> lectureIds);
+
     Optional<Material> findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(Long lectureId, String materialType);
 
     //이전 pdf 삭제 기능

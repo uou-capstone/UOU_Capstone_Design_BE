@@ -23,6 +23,8 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
     void deleteByLectureId(@Param("lectureId") Long lectureId);
 
     List<ExamSession> findByLecture(Lecture lecture);
+
+    List<ExamSession> findByLecture_IdIn(java.util.Collection<Long> lectureIds);
     
     List<ExamSession> findByLectureAndExamType(Lecture lecture, ExamType examType);
     

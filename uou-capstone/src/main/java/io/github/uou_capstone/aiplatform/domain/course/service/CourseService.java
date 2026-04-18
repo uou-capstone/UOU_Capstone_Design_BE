@@ -37,6 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -113,7 +114,7 @@ public class CourseService {
      */
     @Transactional(readOnly = true)
     public CourseContentsResponseDto getCourseContents(Long courseId) {
-        Course course = courseRepository.findById(courseId)
+        Course course = courseRepository.findByIdWithLectures(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
 
         User currentUser = currentUserResolver.getUser();
@@ -132,15 +133,32 @@ public class CourseService {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
 
-        List<LectureContentsDto> lectureContents = course.getLectures().stream()
+        List<Lecture> orderedLectures = course.getLectures().stream()
                 .sorted(Comparator.comparingInt(Lecture::getWeekNumber))
+                .collect(Collectors.toList());
+
+        List<Long> lectureIds = orderedLectures.stream()
+                .map(Lecture::getId)
+                .collect(Collectors.toList());
+
+        Map<Long, List<Material>> materialsByLectureId = lectureIds.isEmpty()
+                ? Map.of()
+                : materialRepository.findByLecture_IdInOrderByLecture_IdAscCreatedAtDesc(lectureIds).stream()
+                        .collect(Collectors.groupingBy(m -> m.getLecture().getId()));
+
+        Map<Long, List<ExamSession>> examSessionsByLectureId = lectureIds.isEmpty()
+                ? Map.of()
+                : examSessionRepository.findByLecture_IdIn(lectureIds).stream()
+                        .collect(Collectors.groupingBy(e -> e.getLecture().getId()));
+
+        List<LectureContentsDto> lectureContents = orderedLectures.stream()
                 .map(lecture -> {
-                    List<MaterialSummaryDto> materials = materialRepository
-                            .findByLecture_IdOrderByCreatedAtDesc(lecture.getId()).stream()
+                    List<MaterialSummaryDto> materials = materialsByLectureId
+                            .getOrDefault(lecture.getId(), List.of()).stream()
                             .map(MaterialSummaryDto::new)
                             .collect(Collectors.toList());
-                    List<ExamSessionSummaryDto> examSessions = examSessionRepository
-                            .findByLecture(lecture).stream()
+                    List<ExamSessionSummaryDto> examSessions = examSessionsByLectureId
+                            .getOrDefault(lecture.getId(), List.of()).stream()
                             .map(ExamSessionSummaryDto::new)
                             .collect(Collectors.toList());
                     return new LectureContentsDto(
