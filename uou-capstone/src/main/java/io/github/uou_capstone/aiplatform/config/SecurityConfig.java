@@ -25,6 +25,9 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Configuration
 @EnableWebSecurity
@@ -38,6 +41,9 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final RestAuthenticationEntryPoint restAuthenticationEntryPoint;
     private final JwtAccessDeniedHandler jwtAccessDeniedHandler;
+
+    @org.springframework.beans.factory.annotation.Value("${cors.allowed-origins:}")
+    private String extraOrigins;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -72,6 +78,7 @@ public class SecurityConfig {
 
                     .requestMatchers("/api/auth/**").permitAll()
                     .requestMatchers("/api/health").permitAll() // Health Check 허용
+                    .requestMatchers("/actuator/health").permitAll() // Actuator 헬스체크
                     .requestMatchers("/api/ai/callback/**").permitAll()
                     .requestMatchers("/error").permitAll()
                     // 아래 경로들은 인증 없이 누구나 접근 가능
@@ -98,18 +105,23 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // 프론트엔드 출처(Origin). 슬래시(/) 없이 도메인만 입력
-        // 127.0.0.1 추가: localhost와 다른 Host로 인식되어 CORS 차단될 수 있음
-        config.setAllowedOrigins(Arrays.asList(
+        // 기본 로컬 개발 출처 + 환경변수(CORS_ALLOWED_ORIGINS)로 추가 가능
+        // prod에서는 CORS_ALLOWED_ORIGINS=https://ai-lms.netlify.app 처럼 설정
+        List<String> origins = Stream.of(
                 "http://localhost:3000",
                 "http://localhost:5173",
                 "http://localhost:8000",
                 "http://127.0.0.1:3000",
                 "http://127.0.0.1:5173",
-                "http://127.0.0.1:8000",
-                "https://ai-lms.netlify.app",
-                "https://plutean-clement-apheliotropically.ngrok-free.dev"
-        ));
+                "http://127.0.0.1:8000"
+        ).collect(Collectors.toList());
+        if (extraOrigins != null && !extraOrigins.isBlank()) {
+            Arrays.stream(extraOrigins.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .forEach(origins::add);
+        }
+        config.setAllowedOrigins(origins);
 
         // 허용할 HTTP 메서드 (전부 허용)
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
