@@ -19,6 +19,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final RateLimitInterceptor rateLimitInterceptor;
+    private final AuthRateLimitInterceptor authRateLimitInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
@@ -29,6 +30,14 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/auth/**",  // 인증 API 제외
                         "/api-docs/**",  // API 문서 제외
                         "/swagger-ui/**"  // Swagger UI 제외
+                );
+
+        // 로그인/회원가입/리프레시는 IP 기반 브루트포스 방어가 별도로 필요하다.
+        registry.addInterceptor(authRateLimitInterceptor)
+                .addPathPatterns(
+                        "/api/auth/login",
+                        "/api/auth/signup",
+                        "/api/auth/refresh"
                 );
     }
 

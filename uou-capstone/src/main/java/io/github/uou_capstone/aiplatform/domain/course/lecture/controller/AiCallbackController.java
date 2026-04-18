@@ -11,6 +11,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 
 @Tag(name = "AI 콜백(웹훅) API", description = "AI 서비스가 작업을 완료한 후 호출하는 API")
@@ -34,12 +36,19 @@ public class AiCallbackController {
             @RequestBody List<AiResponseDto> aiResults, HttpServletRequest request) { // AI가 보내준 결과
 
         String secretKeyHeader = request.getHeader("X-AI-SECRET-KEY");
-        if (secretKeyHeader == null || !secretKeyHeader.equals(aiServiceSecretKey)) {
-            // 비밀키가 없거나 일치하지 않으면 403 Forbidden 반환
+        if (!constantTimeEquals(secretKeyHeader, aiServiceSecretKey)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid secret key");
         }
 
         legacyLectureFlowService.saveAiContentCallback(lectureId, aiResults);
         return ResponseEntity.ok("Callback received successfully.");
+    }
+
+    // 타이밍 공격 방지를 위한 상수시간 문자열 비교
+    private static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        byte[] aBytes = a.getBytes(StandardCharsets.UTF_8);
+        byte[] bBytes = b.getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(aBytes, bBytes);
     }
 }
