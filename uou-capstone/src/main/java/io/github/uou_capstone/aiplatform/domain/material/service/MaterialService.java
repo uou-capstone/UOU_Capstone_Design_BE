@@ -50,9 +50,15 @@ import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
 
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 
 
@@ -80,6 +86,7 @@ import java.io.IOException;
 
 
 
+@Slf4j
 @Service
 
 @RequiredArgsConstructor
@@ -108,25 +115,17 @@ public class MaterialService {
 
 
 
-    @Transactional
-
     public Material uploadFile(Long lectureId, MultipartFile file) throws IOException {
 
-        // 1. 강의 정보 조회
+        // 1. 강의 정보 조회 + 권한 확인 (트랜잭션 밖에서 읽기만)
 
         Lecture lecture = lectureRepository.findById(lectureId)
 
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
-
-
-        // 2. 권한 확인 (해당 강의의 선생님인지)
-
         User currentUser = currentUserResolver.getUser();
 
         Teacher currentTeacher = currentUserResolver.getTeacher();
-
-
 
         if (!lecture.getCourse().getTeacher().getId().equals(currentTeacher.getId())) {
 
@@ -134,21 +133,11 @@ public class MaterialService {
 
         }
 
-
-
-        // 3. 기존 PDF 자료 삭제
-
-        materialRepository.deleteByLecture_IdAndMaterialType(lectureId, "PDF");
-
-
-
-        // 4. 파일을 ai-service의 /api/files/upload 로 포워딩
+        // 2. 파일을 ai-service로 포워딩 (외부 HTTP — 트랜잭션 밖에서 수행)
 
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
 
         builder.part("file", file.getResource());
-
-
 
         AiFileResponseDto aiResponse;
 
@@ -156,7 +145,7 @@ public class MaterialService {
 
             aiResponse = aiServiceWebClient.post()
 
-                    .uri("/api/files/upload") // ai-service의 파일 업로드 엔드포인트
+                    .uri("/api/files/upload")
 
                     .body(BodyInserters.fromMultipartData(builder.build()))
 
@@ -180,8 +169,6 @@ public class MaterialService {
 
         }
 
-
-
         if (aiResponse == null || aiResponse.getPath() == null) {
 
             throw new BusinessException(CommonErrorCode.FILE_UPLOAD_FAILED,
@@ -190,28 +177,26 @@ public class MaterialService {
 
         }
 
+        // 3. DB 쓰기만 트랜잭션 안에서 수행
 
+        return saveUploadedMaterial(lectureId, lecture, currentUser, file.getOriginalFilename(), aiResponse.getPath());
 
-        // 5. DB에 ai-service가 알려준 경로를 저장
+    }
+
+    @Transactional
+    protected Material saveUploadedMaterial(Long lectureId, Lecture lecture, User uploader,
+                                            String displayName, String filePath) {
+        materialRepository.deleteByLecture_IdAndMaterialType(lectureId, "PDF");
 
         Material material = Material.builder()
-
                 .lecture(lecture)
-
-                .displayName(file.getOriginalFilename())
-
-                .materialType("PDF") // (파일 타입 파싱 로직 추가 가능)
-
-                .filePath(aiResponse.getPath()) // ai-service가 반환한 경로 저장
-
-                .uploadedBy(currentUser.getId())
-
+                .displayName(displayName)
+                .materialType("PDF")
+                .filePath(filePath)
+                .uploadedBy(uploader.getId())
                 .build();
 
-
-
         return materialRepository.save(material);
-
     }
 
 
@@ -262,70 +247,41 @@ public class MaterialService {
 
      */
 
-    @Transactional(readOnly = true)
-
-    public byte[] getFileBytes(Long materialId) {
-
+    // 트랜잭션 불필요: DB 읽기 후 WebClient 스트리밍은 MVC async 스레드에서 수행되므로
+    // @Transactional(readOnly=true)가 걸려 있으면 커넥션을 스트리밍 내내 점유한다.
+    public StreamingResponseBody streamFile(Long materialId) {
         Material material = materialRepository.findById(materialId)
-
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND));
 
-
-
         User currentUser = currentUserResolver.getUser();
-
-
-
         validateLectureParticipant(material.getLecture(), currentUser);
 
-
-
         String filePath = material.getFilePath();
-
         if (filePath == null || filePath.isBlank()) {
-
             throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "파일 경로가 없습니다.");
-
         }
 
-
-
-        try {
-
-            byte[] body = aiServiceWebClient.get()
-
+        // 100MB 파일을 byte[]로 힙에 올리지 않고 업스트림 WebClient 응답을 청크 단위로 바로 OutputStream에 흘려보낸다.
+        // StreamingResponseBody의 writeTo는 컨트롤러가 반환한 후 별도 MVC async 스레드에서 호출된다.
+        return out -> {
+            Flux<DataBuffer> body = aiServiceWebClient.get()
                     .uri(uriBuilder -> uriBuilder.path("/api/files/serve").queryParam("path", filePath).build())
-
                     .retrieve()
+                    .onStatus(status -> status.value() == 404,
+                            response -> Mono.error(new BusinessException(CommonErrorCode.FILE_NOT_FOUND,
+                                    "파일 서버에서 해당 파일을 찾을 수 없습니다. 파일이 삭제되었거나 서버 경로가 일치하지 않을 수 있습니다.")))
+                    .bodyToFlux(DataBuffer.class);
 
-                    .bodyToMono(byte[].class)
-
-                    .block();
-
-
-
-            if (body == null) {
-
-                throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND, "파일을 불러올 수 없습니다.");
-
+            try {
+                DataBufferUtils.write(body, out)
+                        .map(DataBufferUtils::release)
+                        .then()
+                        .block();
+            } catch (Exception e) {
+                log.warn("파일 스트리밍 실패: materialId={}, path={}, err={}", materialId, filePath, e.getMessage());
+                throw new IOException("파일 스트리밍 중 오류가 발생했습니다.", e);
             }
-
-            return body;
-
-        } catch (WebClientResponseException e) {
-
-            if (e.getStatusCode().value() == 404) {
-
-                throw new BusinessException(CommonErrorCode.FILE_NOT_FOUND,
-
-                        "파일 서버에서 해당 파일을 찾을 수 없습니다. 파일이 삭제되었거나 서버 경로가 일치하지 않을 수 있습니다.");
-
-            }
-
-            throw e;
-
-        }
-
+        };
     }
 
 
