@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.security.jwt;
 
+import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.service.TokenBlacklistService;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -25,50 +26,45 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenBlacklistService tokenBlacklistService;
 
-    /** CORS preflight(OPTIONS)는 인증 없이 통과시켜 403 방지 */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         return "OPTIONS".equalsIgnoreCase(request.getMethod());
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
-        // 1. Request Header에서 토큰 추출
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
         String token = resolveToken(request);
 
         try {
-            // 2. 토큰 유효성 검사
             if (token != null) {
-                // 2-1. 블랙리스트 확인 (로그아웃한 토큰인지 확인)
                 if (tokenBlacklistService.isBlacklisted(token)) {
                     request.setAttribute("exception", "INVALID_TOKEN");
                     filterChain.doFilter(request, response);
                     return;
                 }
 
-                // 2-2. 토큰 유효성 검증
                 jwtTokenProvider.validateToken(token);
-                
-                // 토큰이 유효하면 토큰으로부터 유저 정보를 받아옴
                 Authentication authentication = jwtTokenProvider.getAuthentication(token);
-                // SecurityContext에 Authentication 객체를 저장
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             }
         } catch (ExpiredJwtException e) {
             request.setAttribute("exception", "TOKEN_EXPIRED");
+        } catch (BusinessException e) {
+            log.warn("[JWT] 토큰 인증 정보가 유효하지 않습니다: path={}, error={}",
+                    request.getRequestURI(), e.getMessage());
+            request.setAttribute("exception", "INVALID_TOKEN");
         } catch (JwtException | IllegalArgumentException e) {
             request.setAttribute("exception", "INVALID_TOKEN");
         } catch (Exception e) {
-            // role 클레임 누락(RuntimeException) 등 예상치 못한 예외 처리
-            // 예: 리프레시 토큰을 액세스 토큰 자리에 사용하는 경우
-            log.warn("[JWT] 토큰 처리 중 예외 발생: path={}, error={}", request.getRequestURI(), e.getMessage());
+            log.warn("[JWT] 토큰 처리 중 예외 발생: path={}, error={}",
+                    request.getRequestURI(), e.getMessage());
             request.setAttribute("exception", "INVALID_TOKEN");
         }
 
         filterChain.doFilter(request, response);
     }
 
-    // Request Header에서 토큰 정보 추출
     private String resolveToken(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {

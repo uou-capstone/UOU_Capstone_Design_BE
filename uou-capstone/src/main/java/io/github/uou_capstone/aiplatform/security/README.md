@@ -87,7 +87,7 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 ## 상시 주의사항 (Gotcha)
 
 ### 401 발생 경로 디버깅
-`RuntimeException("권한 정보가 없는 토큰입니다.")` 가 `JwtTokenProvider.getAuthentication` 에서 던져짐. 일반 `Exception` catch (필터 line 61) 가 받아서 **무조건 `INVALID_TOKEN`** 으로 매핑. 즉:
+`JwtTokenProvider.getAuthentication` 은 role 클레임이 없으면 `BusinessException(CommonErrorCode.INVALID_TOKEN, "권한 정보가 없는 토큰입니다.")` 를 던지고, `JwtAuthenticationFilter` 의 `catch (BusinessException)` 가 받아 `INVALID_TOKEN` 속성을 세팅. 매핑 결과:
 - Refresh 토큰을 Access 자리에 넣었을 때 → 401 INVALID_TOKEN
 - 만료된 Access 토큰 → 401 TOKEN_EXPIRED
 - 위조/포맷 오류 → 401 INVALID_TOKEN

@@ -87,7 +87,7 @@ Phase 3-5 자동 흐름은 `material.generation.MaterialGenerationService.proces
 - `exception/AgentExecutionException` — `BusinessException(CommonErrorCode.AGENT_EXECUTION_FAILED)` 래퍼
 - `exception/StreamingException` — `BusinessException(CommonErrorCode.STREAMING_FAILED)` 래퍼
 
-> ⚠️ **현재 `AbstractAgent` 는 위 예외를 직접 던지지 않고 `RuntimeException` 던짐** (`map(rawResponse -> ... throw new RuntimeException("Failed to parse FastAPI response", e))`). CLAUDE.md 규칙(`RuntimeException 금지 → BusinessException`) 위반 — 정리 후보.
+`AbstractAgent.executeAsync` 의 응답 파싱 실패 / `executeStreaming` 의 5xx·429 응답은 `AgentExecutionException` 으로 변환되어 `GlobalExceptionHandler.handleBusinessException` 가 5004 로 매핑. (이전 버전은 `RuntimeException` 을 던졌음.)
 
 ---
 
