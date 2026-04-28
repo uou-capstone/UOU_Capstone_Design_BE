@@ -1,0 +1,26 @@
+services:
+  ai-service:
+    container_name: ai-service
+    build: .
+    # image: golila0611/ai-service:latest
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=backend-redis
+      - REDIS_PORT=6379
+    networks:
+      app-network:  # 추가
+        aliases:
+          - ai-service  # Backend에서 접근할 별칭
+
+volumes: {}
+
+networks:
+  app-network:
+    name: app-network
+    external: true

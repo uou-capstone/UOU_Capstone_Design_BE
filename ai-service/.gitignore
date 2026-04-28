@@ -1,0 +1,6 @@
+# Ignore local secrets
+.env
+
+# Ignore Jupyter notebooks and test modules
+**/PhaseModule/
+**/*.ipynb
