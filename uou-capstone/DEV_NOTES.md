@@ -376,7 +376,7 @@ const reader = res.body.getReader();
 
 ### 기대 효과
 
-- “어느 API가 실제로 405를 내는지”를 즉시 특정 가능
+- "어느 API가 실제로 405를 내는지"를 즉시 특정 가능
 - stream/next 외의 다른 경로(예: GET으로 POST 전용 API 호출)와 구분 가능
 
 ### 관련 파일
@@ -674,3 +674,85 @@ if (!StringUtils.hasText(effectivePdfPath)) {
 ### 수정 파일
 
 - `domain/learning/service/LearningSessionService.java`
+
+---
+
+## [2026-04-16] 보안·성능 개선 계획 — 백엔드 단독 구현 분 (이번 세션)
+
+### 구현 완료
+
+| ID | 항목 | 한줄 설명 | 파일 |
+|---|---|---|---|
+| 1-7 | show-sql: false (prod) | prod에서 SQL 로그 비활성화 — PII 유출 방지 | `application-prod.yml` |
+| 1-10 | 내부정보 노출 차단 | WebClient 에러 응답에서 `statusText` 제거, 고정 메시지 | `GlobalExceptionHandler.java` |
+| 1-4 (부분) | CORS 환경변수 분리 | prod 도메인을 `CORS_ALLOWED_ORIGINS` 환경변수로 분리 | `SecurityConfig.java`, `application-prod.yml` |
+| 2-6 | WebClient 커넥션 풀 명시 | ConnectionProvider max=50, idle/lifetime/evict 설정 | `WebClientConfig.java` |
+| 2-7 | AsyncConfig CallerRunsPolicy | 3개 Executor 큐 포화 시 caller 스레드 실행 + 경고 로그 | `AsyncConfig.java` |
+| 3-6 | @Transactional + 외부 HTTP 분리 | `uploadFile`에서 WebClient를 트랜잭션 밖으로, DB만 별도 메서드 | `MaterialService.java` |
+| 3-6 | streamFile 트랜잭션 제거 | readOnly 트랜잭션 제거 — 스트리밍 중 커넥션 점유 방지 | `MaterialService.java` |
+
+### 이전 세션 구현분 (아직 커밋 안 됨)
+
+| ID | 항목 | 한줄 설명 |
+|---|---|---|
+| 1-1 | JWT 만료 검증 (P0) | `parseClaims`에서 ExpiredJwtException catch 제거 |
+| 1-3 | 타이밍 공격 방지 | `AiCallbackController`에 `MessageDigest.isEqual` 적용 |
+| 1-6 | Rate Limit + 브루트포스 | `RateLimitInterceptor` log.warn + `AuthRateLimitInterceptor` 신규 |
+| 2-1 | N+1 해결 | `CourseRepository.findByIdWithLectures` fetch join + 벌크 조회 |
+| 2-3 | 파일 스트리밍 | StreamingResponseBody + DataBufferUtils |
+| 2-9 | HikariCP 설정 | pool-size, timeout, leak-detection 명시 |
+| 3-1 | JwtTokenProviderTest | 단위 테스트 7개 |
+
+### 프론트 협의 후 진행
+
+| ID | 우선순위 | 항목 | 협의 포인트 |
+|---|---|---|---|
+| 1-2 | P0 | OAuth URL 토큰 노출 | redirect 방식 변경 시 `/auth/callback` 파싱 로직 수정 |
+| 1-8 | P1 | Refresh Token 로테이션 | 매 refresh마다 새 token → 프론트 저장 갱신 필수 |
+| 2-2 | P2 | 페이징 | 목록 API에 page/size 추가 → 프론트 호출부 수정 |
+| 2-10 | P2 | SSE 타임아웃/끊김 | 서버 타임아웃 + 에러 이벤트 → EventSource 재접속 |
+
+### 남은 백엔드 단독 항목
+
+| ID | 우선순위 | 항목 |
+|---|---|---|
+| 1-5 | P3 | 비밀번호 정책 (최소 길이/복잡도) |
+| 1-9 | N/A | Actuator (의존성 없음 — 조치 불필요) |
+| 2-4 | P2 | 폴링 → 콜백/ScheduledExecutor |
+| 2-5 | P2 | block() 전용 스레드풀 격리 |
+| 3-3 | P3 | MaterialGenerationService 3,922줄 분해 |
+| 3-4 | P3 | ddl-auto (캡스톤 범위면 update 유지) |
+| 3-5 | P2 | Dockerfile 레이어 최적화 |
+
+---
+
+## [2026-04-18] v2.7 E2E 스모크 테스트 — B-3(시험 생성/채점) 추가
+
+### 배경
+
+`V27_E2E_SMOKE_TEST.md`에는 B-3(시험 생성/채점) 시나리오가 문서화되어 있었으나 `scripts/smoke-v27.ps1` 자동 실행 스크립트에는 B-0 ~ B-1 과 A-1·A-3·A-4·A-5 만 구현되어 있었다. 시험 관련 엔드포인트는 수동 확인에 의존하고 있어 회귀 감지가 어려웠다.
+
+### 조치
+
+`scripts/smoke-v27.ps1`에 다음 두 단계를 추가했다.
+
+1) **B-3a `POST /api/exams/generation` (TEACHER)**
+   - `FLASH_CARD` + `targetCount=5` + 최소 `lectureContent` 로 호출
+   - 기존 `Check-Not404Or405` 재사용 — 2xx·4xx는 경로 생존으로 PASS, 404/405/타임아웃만 FAIL
+
+2) **B-3b `POST /api/exams/submission` (STUDENT/TEACHER)**
+   - 존재하지 않는 `examSessionId=0` 으로 호출하므로 정상 동작 시 404(BusinessException)가 기대 응답
+   - `Check-Not404Or405`를 쓰면 404가 FAIL로 찍히는 문제가 있어 **전용 분기** 추가: 405/타임아웃만 FAIL, 그 외 2xx·4xx(404 포함)는 모두 PASS
+
+### 문서 보강
+
+`V27_E2E_SMOKE_TEST.md` B-3 섹션에 스크립트 해석 가이드 소절을 추가해 404가 PASS인 이유를 명시했다.
+
+### 관련 파일
+
+- `scripts/smoke-v27.ps1` — B-3a, B-3b 추가
+- `V27_E2E_SMOKE_TEST.md` — B-3 스모크 스크립트 해석 가이드 추가
+
+### 남은 과제
+
+- B-2 (Learning Session SSE 스트림) 는 PowerShell에서 SSE 첫 이벤트 수신·종료 로직이 필요하여 이번 커밋 범위에서 제외. 후속 작업에서 추가 예정.

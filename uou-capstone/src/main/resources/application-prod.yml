@@ -7,11 +7,21 @@ spring:
     url: jdbc:mysql://${MYSQL_HOST:mysql-db}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:uoucapstone}?useSSL=false&serverTimezone=UTC&characterEncoding=UTF8&allowPublicKeyRetrieval=true
     username: ${MYSQL_USERNAME:root}
     password: ${MYSQL_PASSWORD}  # 환경 변수 필수
+    hikari:
+      # 사이징 근거: materialGen(max 10) + examGrading(max 5) + taskExecutor(max 5) = 20 async worker
+      # 각 워커가 @Transactional 안에서 WebClient.block()으로 커넥션을 오래 점유할 수 있어
+      # async worker 수 + Tomcat 동시 읽기를 여유 있게 커버하도록 20으로 설정
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: 30000       # 30s - 커넥션을 얻지 못하면 실패
+      max-lifetime: 1800000            # 30m - MySQL wait_timeout보다 짧게
+      idle-timeout: 600000             # 10m
+      leak-detection-threshold: 60000  # 60s 이상 커넥션 보유 시 스택트레이스 로그
 
   jpa:
     hibernate:
       ddl-auto: update  # 배포: update (스키마 자동 업데이트 - 테이블 생성/수정)
-    show-sql: true  # SQL 로그 활성화
+    show-sql: false  # prod에서는 SQL 로깅 비활성화 (PII 유출 방지 + 성능)
 
   data:
     redis:
@@ -42,7 +52,7 @@ logging:
     # Hibernate/JPA - 에러만 표시
     org.hibernate: WARN
     org.hibernate.orm: WARN
-    org.hibernate.SQL: INFO  # SQL 쿼리 로그 활성화
+    org.hibernate.SQL: WARN  # prod에서는 SQL 쿼리 로그도 비활성화
     # Redis Lettuce - 에러만 표시
     io.lettuce.core: WARN
     # Tomcat HTTP 파싱 에러 로그 줄이기 (HTTPS 요청을 HTTP로 받는 경우 등)
@@ -52,6 +62,23 @@ logging:
     io.github.uou_capstone: INFO
     # Swagger는 INFO로 유지
     org.springdoc: INFO
+
+# Actuator — prod에서는 health만 노출, 상세정보 차단
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+    enabled-by-default: false   # 전체 비활성 후 필요한 것만 켜기
+  endpoint:
+    health:
+      enabled: true
+      show-details: never
+      show-components: never
+
+# CORS 설정 (프론트엔드 도메인)
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://ai-lms.netlify.app}
 
 # AI 서비스 설정 (배포 환경)
 # - FastAPI는 /api/v2/* (Classic), /api/v3/* (Integrated) 경로를 사용한다.

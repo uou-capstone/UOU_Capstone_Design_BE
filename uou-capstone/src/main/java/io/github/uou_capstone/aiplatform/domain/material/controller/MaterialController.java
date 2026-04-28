@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.IOException;
 
@@ -54,11 +55,10 @@ public class MaterialController {
     @Operation(summary = "강의 자료(PDF) 다운로드·미리보기", description = "업로드 시 응답의 url로 요청 시 PDF 바이트를 반환합니다. 해당 강의의 선생님 또는 수강생만 접근 가능합니다.")
     @GetMapping(value = "/materials/{materialId}/file", produces = "application/pdf")
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<byte[]> getMaterialFile(@PathVariable Long materialId) {
-        byte[] body = materialService.getFileBytes(materialId);
+    public ResponseEntity<StreamingResponseBody> getMaterialFile(@PathVariable Long materialId) {
+        StreamingResponseBody body = materialService.streamFile(materialId);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_PDF);
-        headers.setContentLength(body.length);
         return ResponseEntity.ok().headers(headers).body(body);
     }
 

@@ -1,11 +1,14 @@
 package io.github.uou_capstone.aiplatform.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 비동기 처리 설정
@@ -17,6 +20,7 @@ import java.util.concurrent.Executor;
  * - 시험 채점 비동기 처리
  * - UserFeedbackProfile 생성 비동기 처리
  */
+@Slf4j
 @Configuration
 @EnableAsync
 public class AsyncConfig {
@@ -38,6 +42,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(10);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("material-gen-");
+        executor.setRejectedExecutionHandler(loggingCallerRunsPolicy("material-gen"));
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
         executor.initialize();
@@ -46,13 +51,6 @@ public class AsyncConfig {
 
     /**
      * 시험 채점용 비동기 Executor
-     * 시험 응시 및 채점 처리에 사용
-     * 
-     * 설정:
-     * - corePoolSize: 3 (기본 스레드 수)
-     * - maxPoolSize: 5 (최대 스레드 수)
-     * - queueCapacity: 50 (대기 큐 크기)
-     * - threadNamePrefix: "exam-grading-" (스레드 이름 접두사)
      */
     @Bean(name = "examGradingExecutor")
     public Executor examGradingExecutor() {
@@ -61,6 +59,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(5);
         executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("exam-grading-");
+        executor.setRejectedExecutionHandler(loggingCallerRunsPolicy("exam-grading"));
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
         executor.initialize();
@@ -69,13 +68,6 @@ public class AsyncConfig {
 
     /**
      * 일반 비동기 작업용 Executor
-     * 기타 비동기 작업에 사용
-     * 
-     * 설정:
-     * - corePoolSize: 2 (기본 스레드 수)
-     * - maxPoolSize: 5 (최대 스레드 수)
-     * - queueCapacity: 50 (대기 큐 크기)
-     * - threadNamePrefix: "async-task-" (스레드 이름 접두사)
      */
     @Bean(name = "taskExecutor")
     public Executor taskExecutor() {
@@ -84,9 +76,23 @@ public class AsyncConfig {
         executor.setMaxPoolSize(5);
         executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("async-task-");
+        executor.setRejectedExecutionHandler(loggingCallerRunsPolicy("async-task"));
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
         executor.initialize();
         return executor;
+    }
+
+    /**
+     * 큐가 꽉 찼을 때 호출 스레드에서 직접 실행(CallerRunsPolicy)하되 경고 로그를 남긴다.
+     * AbortPolicy(기본값)는 작업을 버리므로 사용자 요청이 유실될 수 있다.
+     */
+    private RejectedExecutionHandler loggingCallerRunsPolicy(String poolName) {
+        return (runnable, executor) -> {
+            log.warn("Async pool [{}] 포화 — caller 스레드에서 직접 실행합니다. pool={}/{}, queue={}",
+                    poolName, executor.getActiveCount(), executor.getMaximumPoolSize(),
+                    executor.getQueue().size());
+            new ThreadPoolExecutor.CallerRunsPolicy().rejectedExecution(runnable, executor);
+        };
     }
 }

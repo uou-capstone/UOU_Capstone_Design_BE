@@ -41,7 +41,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             } catch (BusinessException e) {
                 throw e;
             } catch (Exception e) {
-                // Rate Limit 확인 실패 시 서비스 계속 제공
+                // Redis 장애 등으로 체크가 실패하면 서비스를 막지 않는 fail-open.
+                // 다만 조용한 삼킴은 모니터링 공백을 만들기 때문에 경고 로그를 남긴다.
+                log.warn("Rate limit check failed (fail-open): uri={}, err={}", request.getRequestURI(), e.getMessage());
             }
         }
 

@@ -66,13 +66,21 @@ public class RateLimitService {
 
     /**
      * Rate Limit 확인 (API 엔드포인트별)
-     * 
+     *
      * @param endpoint API 엔드포인트
      * @param maxRequests 최대 요청 수
      * @return 허용 여부
      */
     public boolean isAllowedForEndpoint(String endpoint, int maxRequests) {
         return isAllowedInternal("endpoint:" + endpoint, maxRequests);
+    }
+
+    /**
+     * Rate Limit 확인 (IP + 엔드포인트). 로그인/회원가입 브루트포스 방어용.
+     * 엔드포인트별로 별도 키를 쓰므로 /login 실패가 /signup에 영향을 주지 않는다.
+     */
+    public boolean isAllowedByIp(String ip, String endpoint, int maxRequests) {
+        return isAllowedInternal("ip:" + endpoint + ":" + ip, maxRequests);
     }
 
     /**

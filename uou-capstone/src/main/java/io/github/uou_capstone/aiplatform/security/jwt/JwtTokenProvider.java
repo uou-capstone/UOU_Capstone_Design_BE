@@ -109,17 +109,13 @@ public class JwtTokenProvider {
         }
     }
 
-    // 토큰에서 클레임 정보 추출
+    // 토큰에서 클레임 정보 추출 (만료/위조 시 예외를 그대로 전파)
     private Claims parseClaims(String accessToken) {
-        try {
-            return Jwts.parser()
-                    .verifyWith((SecretKey) key)
-                    .build()
-                    .parseSignedClaims(accessToken)
-                    .getPayload();
-        } catch (ExpiredJwtException e) {
-            return e.getClaims();
-        }
+        return Jwts.parser()
+                .verifyWith((SecretKey) key)
+                .build()
+                .parseSignedClaims(accessToken)
+                .getPayload();
     }
 
     /**

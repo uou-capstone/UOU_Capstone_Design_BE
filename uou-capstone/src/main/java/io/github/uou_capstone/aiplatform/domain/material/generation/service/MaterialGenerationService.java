@@ -989,6 +989,8 @@ public class MaterialGenerationService {
 
 
             generationSessionRepository.save(session);
+            log.info("Phase 2 confirm 완료: sessionId={}, phase=PHASE2, progress=40%", session.getId());
+
 
 
 
@@ -1177,6 +1179,8 @@ public class MaterialGenerationService {
 
 
             generationSessionRepository.save(session);
+            log.info("Phase 2 update 완료: sessionId={}, phase=PHASE2, progress=40%", session.getId());
+
 
 
 
@@ -2157,6 +2161,8 @@ public class MaterialGenerationService {
 
 
             chapterContentList = decompositionAgent.decomposeChapters(finalizedBrief, null);
+            log.info("Phase 3 DecompositionAgent 완료: sessionId={}", requestDto.getSessionId());
+
 
 
 
@@ -2213,6 +2219,8 @@ public class MaterialGenerationService {
 
 
             chapterContentList = writeAgent.writeContent(chapterContentList, null);
+            log.info("Phase 3 WriteAgent 완료: sessionId={}", requestDto.getSessionId());
+
 
 
 
@@ -2281,6 +2289,8 @@ public class MaterialGenerationService {
 
 
         generationSessionRepository.save(session);
+        log.info("Phase 3 완료: sessionId={}, chapterContentList 저장, progress=60%", requestDto.getSessionId());
+
 
 
 
@@ -2597,6 +2607,8 @@ public class MaterialGenerationService {
 
 
             verifiedContent = reviewAgent.reviewContent(chapterContentList);
+            log.info("Phase 4 ReviewAgent 완료: sessionId={}", requestDto.getSessionId());
+
 
 
 
@@ -2665,6 +2677,8 @@ public class MaterialGenerationService {
 
 
         generationSessionRepository.save(session);
+        log.info("Phase 4 완료: sessionId={}, verifiedContent 저장, progress=80%", requestDto.getSessionId());
+
 
 
 
@@ -2909,6 +2923,8 @@ public class MaterialGenerationService {
 
 
             finalDocument = editorAgent.assembleFinalDocument(verifiedContent);
+            log.info("Phase 5 EditorAgent 완료: sessionId={}, documentLength={}", requestDto.getSessionId(), finalDocument != null ? finalDocument.length() : 0);
+
 
 
 
@@ -2965,6 +2981,8 @@ public class MaterialGenerationService {
 
 
         generationSessionRepository.save(session);
+        log.info("Phase 5 완료: sessionId={}, 최종 문서 저장 완료, progress=100%", requestDto.getSessionId());
+
 
 
 
@@ -3205,6 +3223,8 @@ public class MaterialGenerationService {
 
 
     public void processPhase3To5Async(String taskId, Long sessionId) {
+        log.info("Phase 3-5 비동기 처리 시작: taskId={}, sessionId={}", taskId, sessionId);
+
 
 
 
@@ -3389,6 +3409,8 @@ public class MaterialGenerationService {
 
 
                     attempt++;
+                    if (attempt % 12 == 1) log.info("FastAPI 결과 대기 중 (ko 브랜치): sessionId={}, attempt={}/{}", sessionId, attempt, maxAttempts);
+
 
 
 
@@ -3401,6 +3423,8 @@ public class MaterialGenerationService {
 
 
                         completed = true;
+                        log.info("FastAPI Phase 3-5 (ko 브랜치) 완료: sessionId={}, documentLength={}", sessionId, finalMarkdown.length());
+
 
 
 
@@ -3451,6 +3475,8 @@ public class MaterialGenerationService {
                 }
 
 
+
+                log.warn("FastAPI 결과 대기 타임아웃: sessionId={}, totalAttempts={}", sessionId, maxAttempts);
 
                 if (!completed) {
 

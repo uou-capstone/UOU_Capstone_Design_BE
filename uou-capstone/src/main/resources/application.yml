@@ -49,6 +49,21 @@ spring:
             user-info-uri: https://kapi.kakao.com/v2/user/me
             user-name-attribute: id
 
+# Actuator 설정 — 기본적으로 최소한만 노출
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: never       # 외부에는 UP/DOWN만 노출
+      show-components: never
+  info:
+    env:
+      enabled: false            # 환경변수 노출 차단
+
 springdoc:
   api-docs:
     path: /api-docs

@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
 
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -71,7 +72,15 @@ public class WebClientConfig {
     }
 
     private HttpClient buildBaseHttpClient() {
-        return HttpClient.create()
+        ConnectionProvider provider = ConnectionProvider.builder("ai-service")
+                .maxConnections(50)
+                .maxIdleTime(Duration.ofSeconds(30))
+                .maxLifeTime(Duration.ofMinutes(5))
+                .pendingAcquireTimeout(Duration.ofSeconds(30))
+                .evictInBackground(Duration.ofSeconds(60))
+                .build();
+
+        return HttpClient.create(provider)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000);
     }
 }
