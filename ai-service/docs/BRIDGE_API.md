@@ -1,7 +1,7 @@
 # Bridge & Session API 계약 문서
 
 > **대상**: Spring Boot 백엔드 개발자  
-> **최종 수정**: 2026-03-24 (Spring `exam_type` 별칭 수용 · §7 연동 검토 추가)  
+> **최종 수정**: 2026-04-09 (오케스트레이터 LLM Planner 전환 및 `agent: orchestrator` 사고 과정 추가)  
 > **원칙**: Spring Boot는 이 문서에 명시된 필드명·타입·구조만 참고하면 됩니다.
 
 > **📌 done.data 필드명 계약**: `§5`에 명시된 모든 필드명은 **변경되지 않습니다**.  
@@ -263,9 +263,9 @@ Content-Type: application/json
 | 필드 | 타입 | 포함 조건 | 설명 |
 |---|---|---|---|
 | `type` | `string` | 항상 | 이벤트 타입 |
-| `agent` | `string` | `heartbeat` 제외 | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
-| `tool` | `string` | 선택 | 호출된 도구 이름 |
-| `channel` | `string` | `agent_delta`만 | `"thought"` (내부 추론) \| `"main"` (실제 답변) |
+| `agent` | `string` | `heartbeat` 제외 | `"orchestrator"` \| `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` |
+| `tool` | `string` | 선택 | 호출된 도구 이름 (단, `orchestrator`의 사고 과정일 경우 생략될 가능성 참고) |
+| `channel` | `string` | `agent_delta`만 | `"thought"` (내부 추론 및 계획 수립) \| `"main"` (실제 답변) |
 | `delta` | `string` | `agent_delta`만 | 텍스트 청크 (짧은 단위로 자주 전송됨) |
 | `final` | `bool` | `done`만 | 항상 `true` |
 | `data` | `object` | `done`만 | 결과 데이터 (§5 참고) |
@@ -323,10 +323,11 @@ for (String line : ndjsonLines) {
 
     switch (type) {
         case "agent_delta":
-            if ("main".equals(node.path("channel").asText())) {
-                // UI에 delta 스트리밍 출력
+            if ("thought".equals(node.path("channel").asText())) {
+                // "thought" 채널 → 고민/계획 수립 과정을 토글 UI 등에 스트리밍 ("orchestrator"의 경우 의사결정 과정 포함)
+            } else if ("main".equals(node.path("channel").asText())) {
+                // "main" 채널 → UI에 답변 본문 스트리밍 출력
             }
-            // "thought" 채널 → 로딩 인디케이터 (선택)
             break;
         case "done":
             // data 파싱 후 UI 갱신 (§5 참고)

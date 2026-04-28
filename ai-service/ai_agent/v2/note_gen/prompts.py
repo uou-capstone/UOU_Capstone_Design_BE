@@ -32,7 +32,7 @@ You will receive:
      - You MUST return an empty `"missing_info_list"`.
 
 4. **Structure Chapters**: 
-   - Generate or refine up to **10 chapters** logically to create a complete curriculum.
+   - Generate or refine up to **5 chapters** logically to create a complete curriculum.
 
 ### **Critical Rules (STRICT)**
 - **NORMAL MODE**: Explicit info only. If vague, keep `null`. Ask again.

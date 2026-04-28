@@ -1,6 +1,6 @@
 # FE API 연동 가이드
 
-> **최종 수정**: 2026-03-29 (코드 정합: §0 `pdf_path`, 세션 `payload` 키, `done.data.ui` widget/modal, Bridge 채점 길이 검증, v2 lecture-gen·헬스, `test-gen` Debate 400)  
+> **최종 수정**: 2026-04-09 (오케스트레이터 LLM Planner 전환 이슈 반영: `agent: orchestrator` 사고 스트리밍 및 §5 통합 세션 설명 갱신)  
 > **대상**: 프론트엔드 개발자  
 > **Base URL**: `http://{서버주소}`
 
@@ -51,9 +51,9 @@
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `type` | `"agent_delta"` | 고정 |
-| `agent` | string | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` |
-| `tool` | string | `"EXPLAIN_PAGE"` \| `"ANSWER_QUESTION"` \| `"GENERATE_QUIZ"` \| `"GRADE"` |
-| `channel` | `"thought"` \| `"main"` | **`"thought"`**: 사고 과정 → 토글 UI에 표시 후 자동 닫기<br>**`"main"`**: 실제 답변 → 메인 영역에 스트리밍 출력 |
+| `agent` | string | `"orchestrator"` \| `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` |
+| `tool` | string | `"EXPLAIN_PAGE"` \| `"ANSWER_QUESTION"` \| `"GENERATE_QUIZ"` \| `"GRADE"` 등 (단, `orchestrator`의 생각 단계 시에는 툴 이름이 빈 값으로 올 수 있음) |
+| `channel` | `"thought"` \| `"main"` | **`"thought"`**: 사고/계획 수립 과정 → 토글 UI에 누적 표시 후 메인 답변 수신 시 자동 닫기<br>**`"main"`**: 실제 답변/콘텐츠 → 메인 영역에 스트리밍 출력 |
 | `delta` | string | 텍스트 조각 (누적해서 이어붙이기) |
 
 > **스트리밍 출력 순서**:
@@ -103,7 +103,7 @@
 ```
 
 > `error` 이벤트가 수신되면 스트림이 **반드시 종료**됩니다. 연결을 끊고 오류를 표시하세요.  
-> `agent`는 `"system"` \| `"quiz"` \| `"grader"` \| `"explainer"` 등 호출 주체에 따라 달라질 수 있습니다.
+> `agent`는 `"system"` \| `"orchestrator"` \| `"quiz"` \| `"grader"` \| `"explainer"` 등 호출 주체에 따라 달라질 수 있습니다.
 >
 > `data`는 선택 필드입니다. 있을 경우 `{code,message,details}` 형태의 **표준 오류 payload**로 UI에서 더 정교한 메시지/재시도 정책을 적용할 수 있습니다.
 
@@ -340,8 +340,9 @@ Content-Type: application/json
 
 ## 5. v3 — 통합 세션 (오케스트레이션)
 
-> 강의 설명 → 질문 → 퀴즈 → 채점의 전체 학습 흐름을 FastAPI가 자동으로 관리합니다.  
-> FE는 이벤트만 보내고 스트리밍 응답을 받으면 됩니다.
+> 강의 설명 → 질문 → 퀴즈 → 채점의 전체 학습 흐름을 기존의 규칙 기반 엔진에서 **LLM 기반 Planner (Orchestrator)**가 자율적으로 관리하도록 변경되었습니다.
+> FE는 이벤트만 보내면 서버가 다음 액션을 LLM과 실시간으로 계획하여 동작을 수행하고 스트리밍 응답을 돌려줍니다.
+> (진행 중 `agent: "orchestrator"` 텍스트가 `thought` 채널로 스트리밍될 수 있으며, 이는 플래너가 사용자 이벤트와 학업 성취도를 바탕으로 의사결정하는 과정을 의미합니다)
 
 ### 5-1. 세션 조회/생성
 
@@ -631,9 +632,9 @@ async function streamLecture(req: LectureRequest) {
 
       if (event.type === 'agent_delta') {
         if (event.channel === 'thought') {
-          // 토글 UI에 누적 표시
+          // 토글 UI에 누적 표시 (오케스트레이터의 동적 의사결정이나 하위 에이전트의 고민 과정 모두 포함)
           thoughtBuffer += event.delta;
-          updateThoughtToggle(thoughtBuffer);
+          updateThoughtToggle(event.agent, thoughtBuffer);
         } else if (event.channel === 'main') {
           // thought 첫 번째 main 이벤트: 토글 자동 닫기
           if (mainBuffer === '') closeThoughtToggle();

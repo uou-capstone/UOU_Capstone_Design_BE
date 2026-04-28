@@ -121,9 +121,15 @@ UI 조절 도구 (ActionType.SET_UI_STATE 할당):
     async def run_stream(self, event: AppEvent, state: SessionState) -> AsyncGenerator[NdjsonEvent, None]:
         contents = [self._build_prompt(event, state)]
         
+        # NOTE: response_schema=OrchestratorPlan 은 Gemini 로부터
+        # "additionalProperties is not supported in the Gemini API" 400 을 유발한다.
+        # OrchestratorAction.params / ui_state 가 Dict[str, Any] 이므로 Pydantic 이
+        # 생성한 JSON Schema 에 additionalProperties 가 포함되는데, Gemini 의
+        # responseSchema 는 해당 키를 지원하지 않는다.
+        # 프롬프트로 형식을 강제하고, DONE 시점의 OrchestratorPlan.model_validate_json()
+        # 로 사후 검증하는 기존 로직에 의존한다.
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=OrchestratorPlan,
             thinking_config={"include_thoughts": True}
         )
         

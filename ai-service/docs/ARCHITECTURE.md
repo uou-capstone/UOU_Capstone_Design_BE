@@ -1,7 +1,7 @@
 # MergeEduAgent — AI Service 아키텍처 문서
 
-> **버전**: v2.8 (`QuizAgents` profile 기본값 주입 · 오류 이벤트 payload 표준화 · Explainer 출력 포맷 강화)  
-> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-04-08  
+> **버전**: v2.9 (`LLM 기반 Orchestrator(Planner)` 리팩터링 · Gemini thinking_config 도입 · 컨텍스트 최적화)
+> **최초 작성**: 2026-03-12 / **최종 수정**: 2026-04-09  
 > **설계 기준**: `통합_교육_에이전트.pdf` v1.0 + Spring Boot 개발자 피드백 반영  
 > **상세 API 계약**: [`docs/BRIDGE_API.md`](docs/BRIDGE_API.md) / [`docs/TEST_GEN_API.md`](docs/TEST_GEN_API.md)
 
@@ -9,7 +9,7 @@
 
 | 버전 | 날짜 | 주요 변경 |
 |---|---|---|
-| v2.7 | 2026-03-24 | `ai_agent/` v2/v3 트랙 분리 · 하이브리드 PDF 로딩(File API + Redis/메모리 캐시) · `path_validator` 경로 검증 · 업로드 UUID·확장자 화이트리스트 · Bridge grade 길이 검증(400) · 세션 `lecture_id` IDOR 방지 · 스트리밍 `QueueFull`/`_safe_put` 보강 · File API 캐시 LRU 상한 · 공유 Redis 풀 · Debate 세션 명시 안내 · `MainQandAAgent` 이벤트 루프 수정 |
+| v2.9 | 2026-04-09 | 규칙 기반 `Orchestrator`를 `Gemini 2.5 Flash` 기반 **LLM Planner**로 전면 교체 (`thinking_config` 및 `response_schema` 활용). 전체 PDF 단일 전송 대신 최근 메시지와 주변 1페이지 텍스트 압축 전송으로 토큰 최적화 및 구조화된 `OrchestratorPlan` JSON 스트리밍. |
 | v2.8 | 2026-04-08 | `QuizAgents`가 `user_profile` 미전달/부분 전달을 허용하도록 기본값 주입+deep-merge 후 검증 · `error.data` 표준 오류 payload(code/message/details) 추가 · `ExplainerAgent` 마크다운 구조화/질문 태그 강제 |
 | v2.6 | 2026-03-12 | v2/v3 URL 버전 접두사 적용 · ExplainerAgent 페이지 기반 전환 · GraderAgent LLM 채점 강화 |
 | v2.5 | 2026-03-12 | 통합 에이전트 리팩터링 · OrchestrationEngine 구현 · NDJSON agent_delta 포맷 통일 |
@@ -29,8 +29,8 @@ Spring Boot ──POST /api/v2/test-gen/generate ──► LectureTestGenerator
 [v3 Integrated Track]
 Spring Boot ──POST /api/v3/session/{id}/event/stream──► FastAPI OrchestrationEngine
   (세션 기반 학습 흐름)                                  ┌────────┼────────┐
-                                                    StateReducer Orchestrator ToolDispatcher
-                                                                            │
+                                                    StateReducer LLM Orchestrator ToolDispatcher
+                                                                             │
                                                                  Explainer · QA · Quiz · Grader
 
 Spring Boot ──POST /api/v3/bridge/quiz  (단건 위임)────► QuizAgents
@@ -68,7 +68,7 @@ ai-service/
 │   │   │   └── GraderAgent.py           ← 퀴즈 채점 (자동/LLM, PDF 입력 지원)
 │   │   └── engine/
 │   │       ├── StateReducer.py          ← 이벤트 즉시 선반영
-│   │       ├── Orchestrator.py          ← 규칙 기반 계획 수립
+│   │       ├── Orchestrator.py          ← LLM 기반 계획 수립 (JSON Plan 생성)
 │   │       ├── ToolDispatcher.py        ← 에이전트 실행 + soft-failure
 │   │       └── OrchestrationEngine.py   ← 파이프라인 조립 (v3 진입점)
 │   │
@@ -148,7 +148,7 @@ docs/
 | `PageState` | 단일 페이지 상태 (설명, is_key_page 등) |
 | `LearnerModel` | 학습자 모델 (점수 이력, 약점 개념, 페이지별 퀴즈 시도 횟수) |
 | `SessionState` | 세션 전체 상태 (pages + learner + quiz_history + messages) |
-| `OrchestratorPlan` | 실행 계획 (OrchestratorAction 목록) |
+| `OrchestratorPlan` | LLM이 생성/출력하는 구조화된 단위 실행 계획 (도구 호출 리스트) |
 | `NdjsonEvent` | 스트리밍 이벤트 (agent_delta / done / error) — agent/tool/channel/final 필드 포함 |
 
 #### 주요 제약
@@ -297,51 +297,34 @@ pdf_part = await self._bridge.load_pdf_part(pdf_path)
 - `passed`: score ≥ 0.6이면 true
 - `deduction_reason`: 만점(1.0)이면 빈 문자열 `""`
 
-### 3.4 오케스트레이션 엔진 (`ai_agent/engine/`)
+### 3.4 오케스트레이션 엔진 (`ai_agent/v3/engine/`)
 
 ```
 이벤트 수신
     │
     ▼
-StateReducer.reduce()   ← 이벤트 즉시 선반영 (페이지 이동, 유저 메시지)
+StateReducer.reduce()      ← 이벤트 즉시 선반영 (페이지 이동, 유저 메시지 갱신)
     │
     ▼
-Orchestrator.run()      ← 규칙 기반 계획 수립 (OrchestratorPlan 반환)
+Orchestrator.run_stream()  ← LLM 플래너: 상태와 컨텍스트 기반으로 계획 수립 (thought 스트리밍 후 JSON 반환)
     │
     ▼
-ToolDispatcher.dispatch() ← 에이전트 호출 + 상태 업데이트 (soft-failure)
+ToolDispatcher.dispatch()  ← 생성된 JSON Plan에 정의된 Tool 실행 및 부수효과 처리
     │
     ▼
-SessionStore.set()      ← Redis 세션 저장
-    │
-    ▼
-NdjsonEvent 스트림 반환
+SessionStore.set()         ← Redis 세션 저장
 ```
 
-#### Orchestrator 이벤트-분기 규칙
+#### Orchestrator LLM 파이프라인 (v2.9 변경)
 
-| 이벤트 | 생성 액션 |
-|---|---|
-| `SESSION_ENTERED` | SEND_MESSAGE(환영) + START_EXPLANATION_DECISION 위젯 |
-| `START_EXPLANATION_DECISION(accept=true)` | CALL_TOOL(EXPLAIN_PAGE) + (조건부) QUIZ_DECISION 위젯 |
-| `PAGE_CHANGED` | CALL_TOOL(EXPLAIN_PAGE) + QUIZ_DECISION 또는 NEXT_PAGE_DECISION |
-| `USER_MESSAGE` | 퀴즈 의도 → QUIZ_TYPE_PICKER / next 명령 → PAGE_CHANGED 흐름 / 일반 질문 → ANSWER_QUESTION |
-| `QUIZ_TYPE_SELECTED` | CALL_TOOL(GENERATE_QUIZ_{type}) |
-| `QUIZ_SUBMITTED(MCQ/OX)` | CALL_TOOL(AUTO_GRADE_MCQ_OX) |
-| `QUIZ_SUBMITTED(SHORT/ESSAY)` | CALL_TOOL(GRADE_SHORT_OR_ESSAY) |
-| `REVIEW_DECISION(accept=true)` | CALL_TOOL(EXPLAIN_PAGE, detail=DETAILED) + RETEST_DECISION |
-| `RETEST_DECISION(accept=true)` | SET_UI(QUIZ_TYPE_PICKER) |
-| `SAVE_AND_EXIT` | SEND_MESSAGE(저장 완료) |
+규칙 및 하드코딩 기반으로 동작하던 분기 평가 로직을 제거하고, **Gemini 2.5 Flash를 활용한 단일 LLM Planner**가 오케스트레이션을 담당합니다.
 
-#### Orchestrator 정책 함수
+- **토큰 최적화**: 매 이벤트마다 거대한 전체 PDF를 전송하지 않고, `State.current_page`를 기준으로 이전·현재·다음 페이지 텍스트만 추출하여 프롬프트를 극적으로 경량화합니다.
+- **학생 맞춤형 계획**: 학습자 수준, 최근 퀴즈 점수 현황 및 현재 입력 이벤트를 바탕으로 "이 타이밍에 어떤 퀴즈를, 어떤 수준으로 제공할지"를 자율적으로 결정합니다.
+- **사고 스트리밍 (`thinking_config`)**: 계획을 수립하는 사고 과정 자체를 프론트엔드로 스트리밍합니다 (`type: "agent_delta", agent: "orchestrator", channel: "thought"`).
+- **구조화 응답 (`response_schema`)**: 고민이 끝나면 최종적으로 `OrchestratorPlan` 형태의 유효한 JSON을 강제로 반환하며, 이를 파이프라인에서 직렬화 해제하여 안전하게 `ToolDispatcher`로 전달합니다.
 
-| 함수 | 조건 |
-|---|---|
-| `_should_use_detailed_explanation()` | 최근 점수 < 0.6 또는 약점 개념 또는 LLM 힌트 |
-| `_should_offer_quiz()` | 핵심 페이지 또는 최근 점수 < 0.7 또는 LLM 힌트 (시도 횟수 2회 미만) |
-| `_recommend_quiz_type()` | BEGINNER→OX / ADVANCED→Short_Answer / 기본→Five_Choice |
 
-> `_recommend_quiz_type()`은 `QUIZ_TYPE_SELECTED` 이벤트에서 프론트가 `quizType`을 명시하지 않았을 때 fallback으로 사용된다.
 
 ### 3.5 SessionStore (`app/core/session_store.py`)
 
@@ -524,7 +507,7 @@ POST /api/v3/bridge/grade
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `type` | string | `"agent_delta"` \| `"done"` \| `"error"` \| `"heartbeat"` |
-| `agent` | string | `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` (`heartbeat` 제외) |
+| `agent` | string | `"orchestrator"` \| `"explainer"` \| `"qa"` \| `"quiz"` \| `"grader"` \| `"system"` (`heartbeat` 제외) |
 | `tool` | string? | 호출 툴 (e.g. `"EXPLAIN_PAGE"`, `"ANSWER_QUESTION"`, `"GENERATE_QUIZ"`, `"GRADE"`) |
 | `channel` | string? | `agent_delta` 전용 — `"thought"` (내부 추론) \| `"main"` (실제 답변) |
 | `delta` | string? | `agent_delta` 텍스트 청크 (짧은 단위로 자주 전송) |
