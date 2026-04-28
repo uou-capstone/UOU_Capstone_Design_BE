@@ -32,12 +32,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/swagger-ui/**"  // Swagger UI 제외
                 );
 
-        // 로그인/회원가입/리프레시는 IP 기반 브루트포스 방어가 별도로 필요하다.
+        // 로그인/회원가입/리프레시/이메일 중복 확인은 IP 기반 브루트포스·enumeration 방어가 별도로 필요하다.
         registry.addInterceptor(authRateLimitInterceptor)
                 .addPathPatterns(
                         "/api/auth/login",
                         "/api/auth/signup",
-                        "/api/auth/refresh"
+                        "/api/auth/refresh",
+                        "/api/auth/check-email"
                 );
     }
 

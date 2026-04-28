@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.user.dto.RefreshTokenRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.SignUpRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.TokenResponseDto;
 import io.github.uou_capstone.aiplatform.domain.user.service.AuthService;
+import io.github.uou_capstone.aiplatform.domain.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -27,6 +28,7 @@ import java.util.Map;
 public class AuthController {
 
     private final AuthService authService;
+    private final UserService userService;
 
     @Operation(summary = "회원가입", description = "이메일, 비밀번호, 이름, 역할을 받아 회원가입을 진행합니다.")
     @ApiResponses({
@@ -37,6 +39,17 @@ public class AuthController {
     public ResponseEntity<String> signup(@Valid @RequestBody SignUpRequestDto requestDto) {
         authService.signup(requestDto);
         return ResponseEntity.status(HttpStatus.CREATED).body("회원가입이 성공적으로 완료되었습니다.");
+    }
+
+    @Operation(summary = "이메일 중복 확인", description = "회원가입 전 이메일 중복 여부를 확인합니다. 인증 없이 호출 가능합니다.")
+    @GetMapping("/check-email")
+    public ResponseEntity<Map<String, Object>> checkEmailAvailability(@RequestParam String email) {
+        boolean available = userService.checkEmailAvailability(email);
+        return ResponseEntity.ok(Map.of(
+                "email", email,
+                "available", available,
+                "message", available ? "사용 가능한 이메일입니다." : "이미 사용 중인 이메일입니다."
+        ));
     }
 
     @Operation(summary = "로그인", description = "이메일과 비밀번호로 로그인하고 인증 토큰(JWT)을 발급받습니다.")

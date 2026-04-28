@@ -24,16 +24,19 @@ public class AuthRateLimitInterceptor implements HandlerInterceptor {
 
     private final RateLimitService rateLimitService;
 
-    // 엔드포인트별 분당 허용 횟수 (IP 기준)
+    // 엔드포인트별 분당 허용 횟수 (IP 기준).
+    // check-email 은 GET 이지만 이메일 enumeration 공격 표면이므로 같은 인터셉터로 묶는다.
     private static final Map<String, Integer> LIMITS = Map.of(
             "/api/auth/login", 10,
             "/api/auth/signup", 5,
-            "/api/auth/refresh", 20
+            "/api/auth/refresh", 20,
+            "/api/auth/check-email", 30
     );
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        if (!"POST".equalsIgnoreCase(request.getMethod())) {
+        String method = request.getMethod();
+        if (!"POST".equalsIgnoreCase(method) && !"GET".equalsIgnoreCase(method)) {
             return true;
         }
         Integer limit = LIMITS.get(request.getRequestURI());
