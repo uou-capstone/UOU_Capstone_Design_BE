@@ -218,7 +218,7 @@ jobs:
           script: |
             export GHCR_TOKEN="${{ secrets.GHCR_TOKEN }}"
             export GHCR_USERNAME="${{ github.actor }}"
-            bash /home/ubuntu/UOU_Capstone_design_Be_v3/deploy.sh "${{ github.ref_name }}"
+            bash /home/ec2-user/UOU_Capstone_design_Be_v3/deploy.sh "${{ github.ref_name }}"
 
       - name: Print deployment summary
         run: |

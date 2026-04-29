@@ -1,5 +1,7 @@
 package io.github.uou_capstone.aiplatform.security.jwt;
 
+import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
+import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.security.SecurityException;
@@ -71,6 +73,17 @@ class JwtTokenProviderTest {
         String expired = expiredProvider.createAccessToken("user@test.com", "STUDENT");
         assertThatThrownBy(() -> provider.getAuthentication(expired))
                 .isInstanceOf(ExpiredJwtException.class);
+    }
+
+    @Test
+    void getAuthentication_throwsBusinessExceptionWhenRoleClaimIsMissing() {
+        String refreshToken = provider.createRefreshToken("user@test.com");
+
+        assertThatThrownBy(() -> provider.getAuthentication(refreshToken))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getErrorCode()).isEqualTo(CommonErrorCode.INVALID_TOKEN);
+                    assertThat(ex).hasMessage("권한 정보가 없는 토큰입니다.");
+                });
     }
 
     @Test
