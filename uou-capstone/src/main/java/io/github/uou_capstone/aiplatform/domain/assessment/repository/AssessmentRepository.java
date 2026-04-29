@@ -13,6 +13,8 @@ public interface AssessmentRepository extends JpaRepository<Assessment, Long> {
     // 특정 과목 ID로 모든 평가를 찾는 메서드 추가
     List<Assessment> findByCourse_Id(Long courseId);
 
+    long countByCourse_Id(Long courseId);
+
     /**
      * N+1 문제를 해결하기 위해 Fetch Join을 사용.
      * 평가(Assessment)를 조회할 때 연관된 문제(questions)와
