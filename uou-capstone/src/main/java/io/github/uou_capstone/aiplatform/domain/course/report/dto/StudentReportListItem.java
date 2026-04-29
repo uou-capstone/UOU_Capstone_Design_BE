@@ -7,12 +7,12 @@ import lombok.Getter;
 import java.time.LocalDateTime;
 
 /**
- * 강의실 학생 리포트 리스트 — 학생 1명 카드 (요약 지표).
+ * 강의실 학생 리포트 리스트 — 학생 1명 항목 (요약 지표).
  */
 @Getter
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class StudentReportCardDto {
+public class StudentReportListItem {
     private final Long studentId;
     private final Long userId;
     private final String studentName;

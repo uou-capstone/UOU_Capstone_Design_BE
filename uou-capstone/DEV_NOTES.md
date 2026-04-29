@@ -685,7 +685,11 @@ if (!StringUtils.hasText(effectivePdfPath)) {
 |---|---|---|---|
 | 1-7 | show-sql: false (prod) | prod에서 SQL 로그 비활성화 — PII 유출 방지 | `application-prod.yml` |
 | 1-10 | 내부정보 노출 차단 | WebClient 에러 응답에서 `statusText` 제거, 고정 메시지 | `GlobalExceptionHandler.java` |
-| 1-4 (부분) | CORS 환경변수 분리 | prod 도메인을 `CORS_ALLOWED_ORIGINS` 환경변수로 분리 | `SecurityConfig.java`, `application-prod.yml` |
+| 1-4 | CORS prod origin 확정 | env 분리 + prod 기본 `https://ai-lms.netlify.app` 단일 origin 확정 | `SecurityConfig.java`, `application-prod.yml` |
+| 1-2 | OAuth 토큰 URL 노출 제거 | one-time exchange code (60s, 1회) — redirect 에 `?code=` 만, `POST /api/auth/oauth/exchange` 추가 | `OAuth2AuthenticationSuccessHandler.java`, `OAuthExchangeStore.java`, `AuthService.java`, `AuthController.java` |
+| 1-8 | Refresh 토큰 회전 | 매 refresh 마다 jti 재발급 + Redis 화이트리스트, replay 감지 시 모든 refresh 무효화 | `JwtTokenProvider.java`, `RefreshTokenStore.java`, `AuthService.java` |
+| 2-2 (1차) | PageResponse + courses + 학생 리포트 페이징 | `PageResponse<T>` 공통 타입, `GET /api/courses` 와 `GET .../reports/students` 에 `Pageable` 적용, size 최대 100 + sort 화이트리스트 | `PageResponse.java`, `PageableSupport.java`, `CourseController.java`, `CourseReportController.java` |
+| 2-10 | SSE timeout/done 표준 | message/heartbeat/timeout/error/done 표준 이벤트, idle timeout 60s, FastAPI heartbeat 패스스루 | `SseStreamSupport.java`, `SseEventNames.java`, `LearningSessionService.java`, `ExamGenerationStreamController.java`, `MaterialGenerationStreamController.java` |
 | 2-6 | WebClient 커넥션 풀 명시 | ConnectionProvider max=50, idle/lifetime/evict 설정 | `WebClientConfig.java` |
 | 2-7 | AsyncConfig CallerRunsPolicy | 3개 Executor 큐 포화 시 caller 스레드 실행 + 경고 로그 | `AsyncConfig.java` |
 | 3-6 | @Transactional + 외부 HTTP 분리 | `uploadFile`에서 WebClient를 트랜잭션 밖으로, DB만 별도 메서드 | `MaterialService.java` |
@@ -703,14 +707,10 @@ if (!StringUtils.hasText(effectivePdfPath)) {
 | 2-9 | HikariCP 설정 | pool-size, timeout, leak-detection 명시 |
 | 3-1 | JwtTokenProviderTest | 단위 테스트 7개 |
 
-### 프론트 협의 후 진행
+### 프론트 협의 후 진행 (2026-04 라운드 종료 — 모두 "구현 완료" 표로 이동됨)
 
-| ID | 우선순위 | 항목 | 협의 포인트 |
-|---|---|---|---|
-| 1-2 | P0 | OAuth URL 토큰 노출 | redirect 방식 변경 시 `/auth/callback` 파싱 로직 수정 |
-| 1-8 | P1 | Refresh Token 로테이션 | 매 refresh마다 새 token → 프론트 저장 갱신 필수 |
-| 2-2 | P2 | 페이징 | 목록 API에 page/size 추가 → 프론트 호출부 수정 |
-| 2-10 | P2 | SSE 타임아웃/끊김 | 서버 타임아웃 + 에러 이벤트 → EventSource 재접속 |
+> 1-2 / 1-4 / 1-8 / 2-2(1차) / 2-10 — Ultraplan 라운드에서 계약 확정 후 구현 반영.
+> 후속 라운드용으로 새로 식별된 협의 항목이 있으면 본 표에 등록.
 
 ### 남은 백엔드 단독 항목
 
@@ -818,3 +818,57 @@ sudo -n systemctl reload nginx
 
 - `deploy.sh`
 - `.gitattributes`
+
+---
+
+## [2026-04-29] 인증·SSE·페이징 계약 반영 (Ultraplan 라운드)
+
+### 배경
+
+`fastapi-gemini-wobbly-truffle` plan 의 후속으로, Ultraplan 이 6 개 영역(CORS / OAuth / Refresh / SSE / Paging / 학생 리포트)의 계약을 고정해 돌려줬다. 본 라운드는 그 확정 계약을 코드/설정에 반영한 것이다.
+
+### 1-4 CORS prod origin 확정
+
+- 코드 변경 없음. `application-prod.yml` 의 `cors.allowed-origins` 기본값(`https://ai-lms.netlify.app`) 으로 prod 고정. preview/staging 은 prod BE 미연결.
+- `allowCredentials=true` 유지, wildcard origin 미사용.
+
+### 1-2 OAuth one-time exchange code
+
+- `OAuth2AuthenticationSuccessHandler` 가 더 이상 redirect URL 에 토큰을 싣지 않음. 성공 시 `?code=<UUID>`, 실패 시 `?errorCode=<code>` (메시지 문자열 미노출).
+- 신규 `POST /api/auth/oauth/exchange` body `{code}` → `TokenResponseDto`. 기존 `RuntimeException` 도 `BusinessException` 으로 정리.
+- code 저장: Redisson `RBucket`, 키 `sb:oauth:exchange:{code}`, TTL 60s, `getAndDelete` 로 atomic 1회 소비.
+
+### 1-8 Refresh 토큰 회전
+
+- `JwtTokenProvider.createRefreshToken(email, jti)` 시그니처로 변경 (jti claim 강제). 기존 `createRefreshToken(email)` 제거 → 호출부에서 항상 jti 명시 발급.
+- 신규 `RefreshTokenStore` (Redis 화이트리스트, 키 `sb:refresh:{userId}:{jti}`). login / refresh 회전 / OAuth exchange 시 jti 등록.
+- `AuthService.refreshToken` 매 호출마다 새 access + 새 refresh 발급, 기존 jti revoke. 화이트리스트 미존재 = replay 의심 → `revokeAllForUser` + 401.
+- `AuthService.logout` 에서 access blacklist 외에 해당 user 의 모든 refresh 무효화.
+- 마이그레이션: jti 없는 (legacy) refresh 토큰은 401 처리 → 사용자 재로그인. dev 환경이라 별도 마이그레이션 코드 없음.
+
+### 2-2 PageResponse + courses + 학생 리포트 페이징 (1차)
+
+- 신규 `PageResponse<T>` (`content/page/size/totalElements/totalPages/first/last`).
+- 신규 `PageableSupport.validate` — size > 100 거부, sort 화이트리스트 강제.
+- `GET /api/courses` 페이징 적용 (정렬 허용: createdAt/updatedAt/title, 기본 updatedAt,desc).
+- `GET /api/courses/{id}/reports/students` 페이징 적용 + DTO 이름 정리 (`StudentReportListItem`, `StudentReportDetailResponse`). 기존 `sortBy`/`direction` 분리 파라미터는 폐기되고 `sort=field,direction` 단일 파라미터로 통일. 기본 `name,asc`.
+- 1차는 in-memory slice — 강의실/학생 카운트 작다는 가정. DB-level 페이징은 2차.
+
+### 2-10 SSE timeout/done 표준
+
+- 신규 `SseEventNames` 상수 + `SseStreamPolicy` 정책 record + `SseStreamSupport` 헬퍼.
+- 이벤트 표준: `message` / `heartbeat` / `timeout` / `error` / `done`.
+- BE 측 idle timeout 60s. 도달 시 `event:timeout` emit 후 종료. 정상 완료 시 `event:done` append.
+- FastAPI heartbeat NDJSON 라인 (`{"type":"heartbeat"}`) 은 더 이상 필터링하지 않고 SSE `event:heartbeat` 로 패스스루.
+- 적용: `LearningSessionService` (v3 학습 세션), `ExamGenerationStreamController` (시험 생성), `MaterialGenerationStreamController` (자료 생성 5개 phase). v1 legacy lecture flow 는 "신규 기능 추가 금지" 규칙 준수해 미적용.
+
+### FastAPI 측 합의 대기 항목
+
+- **F-1 (2-10 후속)**: heartbeat 형식/주기 합의. BE 가정: NDJSON `{"type":"heartbeat"}` 30s 이내 주기. 다르면 `idleTimeout` 만 환경변수로 조정.
+- **F-2 (G-1 후속, P2)**: `GeminiBridgeClient` 레벨 schema sanitizer 공통화. v2 모듈(`test_gen/**`, `note_gen/**`) 재발 방지용. 별도 PR/티켓 권장.
+
+### 관련 파일
+
+- 신규: `common/dto/PageResponse.java`, `common/web/PageableSupport.java`, `security/jwt/RefreshTokenStore.java`, `security/oauth/OAuthExchangeStore.java`, `domain/user/dto/OAuthExchangeRequestDto.java`, `util/sse/{SseEventNames,SseStreamPolicy,SseStreamSupport}.java`, `domain/course/report/dto/{StudentReportListItem,StudentReportDetailResponse}.java`
+- 변경: `security/jwt/JwtTokenProvider.java`, `security/oauth/OAuth2AuthenticationSuccessHandler.java`, `domain/user/service/AuthService.java`, `domain/user/controller/AuthController.java`, `domain/course/{controller/CourseController,service/CourseService}.java`, `domain/course/report/{controller/CourseReportController,service/CourseStudentReportService}.java`, `domain/learning/service/LearningSessionService.java`, `domain/exam/controller/ExamGenerationStreamController.java`, `domain/material/generation/controller/MaterialGenerationStreamController.java`
+- 삭제: `domain/course/report/dto/{StudentReportCardDto,CourseStudentReportListResponse,CourseStudentReportDetailResponse}.java`

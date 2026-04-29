@@ -1,7 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.course.service;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsDeleteRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
@@ -32,12 +34,15 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -77,29 +82,58 @@ public class CourseService {
         return courseRepository.save(newCourse);
     }
 
+    private static final Set<String> COURSE_SORT_WHITELIST = Set.of("createdAt", "updatedAt", "title");
+    private static final Sort COURSE_DEFAULT_SORT = Sort.by(Sort.Direction.DESC, "updatedAt");
+
     @Transactional(readOnly = true) // 조회 기능이므로 readOnly = true 설정
-    public List<CourseResponseDto> getAllCourses() { //강의실 전체 조회
-        
+    public PageResponse<CourseResponseDto> getAllCourses(Pageable rawPageable) {
+        Pageable pageable = PageableSupport.validate(rawPageable, COURSE_SORT_WHITELIST, COURSE_DEFAULT_SORT);
+
         User currentUser = currentUserResolver.getUser();
         List<Course> courses;
 
         if (currentUser.getRole() == Role.TEACHER) {
             Teacher currentTeacher = currentUserResolver.getTeacher();
-            courses = courseRepository.findByTeacherOrderByCreatedAtDesc(currentTeacher);
+            courses = courseRepository.findByTeacher(currentTeacher);
         } else if (currentUser.getRole() == Role.STUDENT) {
             Student student = currentUserResolver.getStudent();
             courses = enrollmentRepository.findByStudent(student).stream()
                     .map(Enrollment::getCourse)
                     .distinct()
-                    .sorted(Comparator.comparing(Course::getCreatedAt).reversed())
                     .collect(Collectors.toList());
         } else {
             courses = courseRepository.findAll();
         }
 
-        return courses.stream()
+        Comparator<Course> comparator = buildCourseComparator(pageable.getSort());
+        List<CourseResponseDto> sorted = courses.stream()
+                .sorted(comparator)
                 .map(CourseResponseDto::new)
                 .collect(Collectors.toList());
+
+        return PageResponse.ofSlice(sorted, pageable);
+    }
+
+    private Comparator<Course> buildCourseComparator(Sort sort) {
+        Comparator<Course> comparator = null;
+        for (Sort.Order order : sort) {
+            Comparator<Course> next = switch (order.getProperty()) {
+                case "createdAt" -> Comparator.comparing(Course::getCreatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                case "updatedAt" -> Comparator.comparing(Course::getUpdatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                case "title" -> Comparator.comparing(Course::getTitle,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                default -> throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                        "허용되지 않는 정렬 필드입니다: " + order.getProperty());
+            };
+            if (order.isDescending()) {
+                next = next.reversed();
+            }
+            comparator = comparator == null ? next : comparator.thenComparing(next);
+        }
+        return comparator != null ? comparator : Comparator.comparing(Course::getUpdatedAt,
+                Comparator.nullsLast(Comparator.reverseOrder()));
     }
 
 

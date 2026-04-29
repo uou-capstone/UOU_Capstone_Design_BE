@@ -56,16 +56,31 @@ public class JwtTokenProvider {
                 .compact();
     }
 
-    public String createRefreshToken(String email) {
+    /**
+     * Refresh 토큰을 jti 와 함께 발급한다. 호출부는 발급된 jti 를 화이트리스트(Redis) 에 등록해야 한다.
+     */
+    public String createRefreshToken(String email, String jti) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + refreshTokenExpirationTime);
 
         return Jwts.builder()
+                .id(jti)
                 .subject(email)
                 .issuedAt(now)
                 .expiration(expiryDate)
                 .signWith(key)
                 .compact();
+    }
+
+    /**
+     * Refresh JWT 의 jti 클레임을 추출한다. 클레임이 없으면 null.
+     */
+    public String getJtiFromToken(String token) {
+        return parseClaims(token).getId();
+    }
+
+    public long getRefreshTokenExpirationTime() {
+        return refreshTokenExpirationTime;
     }
 
     public Authentication getAuthentication(String accessToken) {
