@@ -7,7 +7,8 @@ import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
 import io.github.uou_capstone.aiplatform.util.BridgeResponseLogger;
-import io.github.uou_capstone.aiplatform.util.NdjsonLineFilters;
+import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
+import io.github.uou_capstone.aiplatform.util.sse.SseStreamSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.codec.ServerSentEvent;
@@ -126,35 +127,18 @@ public class LearningSessionService {
         }
         requestBody.put("payload", payload);
 
-        return fastApiSessionClient.streamEvent(sessionId, requestBody)
-                .filter(line -> !line.isBlank())
-                .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
-                .map(line -> ServerSentEvent.<String>builder()
-                        .event("message")
-                        .data(line)
-                        .build())
-                .onErrorResume(WebClientResponseException.class, e -> {
-                    log.error("FastAPI 이벤트 스트림 오류: sessionId={}, status={}", sessionId, e.getStatusCode());
-                    String errorPayload = String.format(
-                            "{\"type\":\"error\",\"message\":\"AI 서비스 오류(%s): %s\"}",
-                            e.getStatusCode(), e.getMessage()
-                    );
-                    return Flux.just(ServerSentEvent.<String>builder()
-                            .event("error")
-                            .data(errorPayload)
-                            .build());
-                })
-                .onErrorResume(Exception.class, e -> {
-                    log.error("이벤트 스트림 중 알 수 없는 오류: lectureId={}, sessionId={}", lectureId, sessionId, e);
-                    String errorPayload = String.format(
-                            "{\"type\":\"error\",\"message\":\"%s\"}",
-                            e.getMessage() != null ? e.getMessage().replace("\"", "'") : "알 수 없는 오류"
-                    );
-                    return Flux.just(ServerSentEvent.<String>builder()
-                            .event("error")
-                            .data(errorPayload)
-                            .build());
-                });
+        Flux<String> upstream = fastApiSessionClient.streamEvent(sessionId, requestBody);
+        return SseStreamSupport.wrapNdjson(upstream, objectMapper, SseStreamPolicy.defaults(), e -> {
+            if (e instanceof WebClientResponseException ex) {
+                log.error("FastAPI 이벤트 스트림 오류: sessionId={}, status={}", sessionId, ex.getStatusCode());
+                String safeMsg = ex.getMessage() != null ? ex.getMessage().replace("\"", "'") : "알 수 없는 오류";
+                return String.format("{\"type\":\"error\",\"message\":\"AI 서비스 오류(%s): %s\"}",
+                        ex.getStatusCode(), safeMsg);
+            }
+            log.error("이벤트 스트림 중 알 수 없는 오류: lectureId={}, sessionId={}", lectureId, sessionId, e);
+            String safeMsg = e.getMessage() != null ? e.getMessage().replace("\"", "'") : "알 수 없는 오류";
+            return String.format("{\"type\":\"error\",\"message\":\"%s\"}", safeMsg);
+        });
     }
 
     /** 쿼리 파라미터 여러 별칭 중 첫 유효값(양의 정수) */

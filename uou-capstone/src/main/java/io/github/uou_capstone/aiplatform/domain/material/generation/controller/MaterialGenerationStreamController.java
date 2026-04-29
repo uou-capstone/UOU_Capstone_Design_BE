@@ -2,6 +2,9 @@ package io.github.uou_capstone.aiplatform.domain.material.generation.controller;
 
 import io.github.uou_capstone.aiplatform.agent.StreamingEvent;
 import io.github.uou_capstone.aiplatform.domain.material.generation.service.MaterialGenerationStreamService;
+import io.github.uou_capstone.aiplatform.util.sse.SseEventNames;
+import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
+import io.github.uou_capstone.aiplatform.util.sse.SseStreamSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -13,15 +16,15 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 
 /**
- * 강의 자료 생성 스트리밍 Controller
- * Agent 추론 과정을 실시간으로 스트리밍하는 SSE 엔드포인트
- * 
- * API 엔드포인트:
- * - GET /api/materials/generation/phase1/stream: Phase 1 스트리밍
- * - GET /api/materials/generation/phase2/stream: Phase 2 스트리밍
- * - GET /api/materials/generation/phase3/stream: Phase 3 스트리밍
- * - GET /api/materials/generation/phase4/stream: Phase 4 스트리밍
- * - GET /api/materials/generation/phase5/stream: Phase 5 스트리밍
+ * 강의 자료 생성 스트리밍 Controller — Agent 추론 과정을 실시간 SSE 로 중계.
+ *
+ * SSE 이벤트 표준(2026-04 확정):
+ *  - event:message  : Agent 추론 델타
+ *  - event:timeout  : 서버측 idle timeout (FE 재접속 신호)
+ *  - event:error    : 에러
+ *  - event:done     : 정상 종료 (FE 재접속 금지)
+ *
+ * 5 개 phase 모두 동일 패턴이라 {@link #toSseEvents(Flux, String)} 헬퍼로 통합.
  */
 @Slf4j
 @Tag(name = "강의 자료 생성 스트리밍 API", description = "AI Agent 추론 과정 실시간 스트리밍 API")
@@ -32,180 +35,66 @@ public class MaterialGenerationStreamController {
 
     private final MaterialGenerationStreamService streamService;
 
-    /**
-     * Phase 1 스트리밍
-     * 
-     * 엔드포인트: GET /api/materials/generation/phase1/stream?sessionId={sessionId}
-     * 
-     * 응답 형식 (SSE):
-     * event: message
-     * data: {"type":"thought","delta":"키워드를 분석 중...","content":{...}}
-     * 
-     * data: {"type":"thought","delta":"\n초기 계획을 수립 중...","content":{...}}
-     * 
-     * data: {"type":"answer","delta":"DraftPlan 생성 완료","content":{...}}
-     * 
-     * 로직 흐름:
-     * 1. Controller가 sessionId를 받아 Service에 전달
-     * 2. Service가 PlanningAgent.executeStreaming() 호출
-     * 3. Agent가 FastAPI의 /stream 엔드포인트 호출
-     * 4. FastAPI가 스트리밍 이벤트를 전송
-     * 5. Controller가 SSE 형식으로 변환하여 클라이언트에 전송
-     */
-    @Operation(
-            summary = "Phase 1 스트리밍", 
-            description = "PlanningAgent의 추론 과정을 실시간으로 스트리밍합니다."
-    )
+    @Operation(summary = "Phase 1 스트리밍", description = "PlanningAgent의 추론 과정을 실시간으로 스트리밍합니다.")
     @GetMapping(value = "/phase1/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<StreamingEvent>> streamPhase1(@RequestParam Long sessionId) {
-        return streamService.streamPhase1(sessionId)
-                .map(event -> ServerSentEvent.<StreamingEvent>builder()
-                        .event("message")
-                        .data(event)
-                        .build())
-                .onErrorResume(error -> {
-                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
-                    // 에러 이벤트를 보내고 스트림을 완전히 종료
-                    return Flux.just(ServerSentEvent.<StreamingEvent>builder()
-                            .event("error")
-                            .data(StreamingEvent.builder()
-                                    .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
-                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
-                                    .build())
-                            .build())
-                            .concatWith(Flux.empty()); // 스트림 완전 종료
-                });
+        return toSseEvents(streamService.streamPhase1(sessionId), "Phase 1");
     }
 
-    /**
-     * Phase 2 스트리밍
-     * 
-     * 엔드포인트: GET /api/materials/generation/phase2/stream?sessionId={sessionId}
-     */
-    @Operation(
-            summary = "Phase 2 스트리밍", 
-            description = "ConfirmAgent의 추론 과정을 실시간으로 스트리밍합니다."
-    )
+    @Operation(summary = "Phase 2 스트리밍", description = "ConfirmAgent의 추론 과정을 실시간으로 스트리밍합니다.")
     @GetMapping(value = "/phase2/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<StreamingEvent>> streamPhase2(
             @RequestParam Long sessionId,
             @RequestParam(required = false) String userFeedback) {
-        return streamService.streamPhase2(sessionId, userFeedback)
-                .map(event -> ServerSentEvent.<StreamingEvent>builder()
-                        .event("message")
-                        .data(event)
-                        .build())
-                .onErrorResume(error -> {
-                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
-                    // 에러 이벤트를 보내고 스트림을 완전히 종료
-                    return Flux.just(ServerSentEvent.<StreamingEvent>builder()
-                            .event("error")
-                            .data(StreamingEvent.builder()
-                                    .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
-                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
-                                    .build())
-                            .build())
-                            .concatWith(Flux.empty()); // 스트림 완전 종료
-                });
+        return toSseEvents(streamService.streamPhase2(sessionId, userFeedback), "Phase 2");
     }
 
-    /**
-     * Phase 3 스트리밍
-     * 
-     * 엔드포인트: GET /api/materials/generation/phase3/stream?sessionId={sessionId}
-     */
-    @Operation(
-            summary = "Phase 3 스트리밍", 
-            description = "DecompositionAgent와 WriteAgent의 추론 과정을 실시간으로 스트리밍합니다."
-    )
+    @Operation(summary = "Phase 3 스트리밍", description = "DecompositionAgent와 WriteAgent의 추론 과정을 실시간으로 스트리밍합니다.")
     @GetMapping(value = "/phase3/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<StreamingEvent>> streamPhase3(@RequestParam Long sessionId) {
-        return streamService.streamPhase3(sessionId)
-                .map(event -> ServerSentEvent.<StreamingEvent>builder()
-                        .event("message")
-                        .data(event)
-                        .build())
-                .onErrorResume(error -> {
-                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
-                    // 에러 이벤트를 보내고 스트림을 완전히 종료
-                    return Flux.just(ServerSentEvent.<StreamingEvent>builder()
-                            .event("error")
-                            .data(StreamingEvent.builder()
-                                    .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
-                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
-                                    .build())
-                            .build())
-                            .concatWith(Flux.empty()); // 스트림 완전 종료
-                });
+        return toSseEvents(streamService.streamPhase3(sessionId), "Phase 3");
     }
 
-    /**
-     * Phase 4 스트리밍
-     * 
-     * 엔드포인트: GET /api/materials/generation/phase4/stream?sessionId={sessionId}
-     */
-    @Operation(
-            summary = "Phase 4 스트리밍", 
-            description = "ValidationAgent와 ReviewAgent의 추론 과정을 실시간으로 스트리밍합니다."
-    )
+    @Operation(summary = "Phase 4 스트리밍", description = "ValidationAgent와 ReviewAgent의 추론 과정을 실시간으로 스트리밍합니다.")
     @GetMapping(value = "/phase4/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<StreamingEvent>> streamPhase4(@RequestParam Long sessionId) {
-        return streamService.streamPhase4(sessionId)
-                .map(event -> ServerSentEvent.<StreamingEvent>builder()
-                        .event("message")
-                        .data(event)
-                        .build())
-                .onErrorResume(error -> {
-                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
-                    // 에러 이벤트를 보내고 스트림을 완전히 종료
-                    return Flux.just(ServerSentEvent.<StreamingEvent>builder()
-                            .event("error")
-                            .data(StreamingEvent.builder()
-                                    .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
-                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
-                                    .build())
-                            .build())
-                            .concatWith(Flux.empty()); // 스트림 완전 종료
-                });
+        return toSseEvents(streamService.streamPhase4(sessionId), "Phase 4");
     }
 
-    /**
-     * Phase 5 스트리밍
-     * 
-     * 엔드포인트: GET /api/materials/generation/phase5/stream?sessionId={sessionId}
-     */
-    @Operation(
-            summary = "Phase 5 스트리밍", 
-            description = "EditorAgent의 추론 과정을 실시간으로 스트리밍합니다."
-    )
+    @Operation(summary = "Phase 5 스트리밍", description = "EditorAgent의 추론 과정을 실시간으로 스트리밍합니다.")
     @GetMapping(value = "/phase5/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<StreamingEvent>> streamPhase5(@RequestParam Long sessionId) {
-        return streamService.streamPhase5(sessionId)
-                .map(event -> ServerSentEvent.<StreamingEvent>builder()
-                        .event("message")
+        return toSseEvents(streamService.streamPhase5(sessionId), "Phase 5");
+    }
+
+    private Flux<ServerSentEvent<StreamingEvent>> toSseEvents(Flux<StreamingEvent> source, String phaseName) {
+        Flux<ServerSentEvent<StreamingEvent>> events = source.map(event ->
+                ServerSentEvent.<StreamingEvent>builder()
+                        .event(SseEventNames.MESSAGE)
                         .data(event)
-                        .build())
-                .onErrorResume(error -> {
-                    log.error("Phase 1 streaming error: {}", error.getMessage(), error);
-                    // 에러 이벤트를 보내고 스트림을 완전히 종료
-                    return Flux.just(ServerSentEvent.<StreamingEvent>builder()
-                            .event("error")
-                            .data(StreamingEvent.builder()
-                                    .type("error")
-                                    .delta("스트리밍 중 오류가 발생했습니다: " + 
-                                           (error.getMessage() != null ? error.getMessage() : "알 수 없는 오류"))
-                                    .build())
-                            .build())
-                            .concatWith(Flux.empty()); // 스트림 완전 종료
-                });
+                        .build()
+        );
+
+        Flux<ServerSentEvent<StreamingEvent>> wrapped = SseStreamSupport.wrapEvents(
+                events,
+                SseStreamPolicy.defaults(),
+                error -> {
+                    log.error("{} streaming error: {}", phaseName, error.getMessage(), error);
+                    String msg = error.getMessage() != null ? error.getMessage() : "알 수 없는 오류";
+                    return SseStreamSupport.error(StreamingEvent.builder()
+                            .type("error")
+                            .delta("스트리밍 중 오류가 발생했습니다: " + msg)
+                            .build());
+                }
+        );
+
+        return wrapped.concatWith(Flux.just(SseStreamSupport.done(
+                StreamingEvent.builder().type("done").build()
+        )));
     }
 }
