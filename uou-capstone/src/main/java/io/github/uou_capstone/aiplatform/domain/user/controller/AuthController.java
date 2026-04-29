@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.user.controller;
 
 import io.github.uou_capstone.aiplatform.domain.user.dto.LoginRequestDto;
+import io.github.uou_capstone.aiplatform.domain.user.dto.OAuthExchangeRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.RefreshTokenRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.SignUpRequestDto;
 import io.github.uou_capstone.aiplatform.domain.user.dto.TokenResponseDto;
@@ -81,14 +82,28 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("message", "로그아웃이 완료되었습니다."));
     }
 
-    @Operation(summary = "토큰 갱신", description = "리프레시 토큰을 사용하여 새로운 액세스 토큰을 발급받습니다.")
+    @Operation(summary = "토큰 갱신",
+            description = "리프레시 토큰을 사용하여 새로운 access/refresh 토큰을 발급받습니다. 매 호출마다 refresh 도 회전되므로 응답의 refreshToken 으로 저장소를 갱신해야 합니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "토큰 갱신 성공"),
-            @ApiResponse(responseCode = "401", description = "리프레시 토큰이 만료되었거나 유효하지 않음")
+            @ApiResponse(responseCode = "401", description = "리프레시 토큰이 만료되었거나 유효하지 않음 (재사용 감지 시 모든 refresh 무효화)")
     })
     @PostMapping("/refresh")
     public ResponseEntity<TokenResponseDto> refreshToken(@Valid @RequestBody RefreshTokenRequestDto requestDto) {
         TokenResponseDto token = authService.refreshToken(requestDto);
+        return ResponseEntity.ok(token);
+    }
+
+    @Operation(summary = "OAuth one-time code 교환",
+            description = "OAuth 콜백에서 받은 1회용 code 로 access/refresh 토큰을 교환합니다. code TTL 60초, 1회 사용.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "교환 성공"),
+            @ApiResponse(responseCode = "401", description = "유효하지 않거나 만료된 인증 코드"),
+            @ApiResponse(responseCode = "400", description = "code 파라미터 누락")
+    })
+    @PostMapping("/oauth/exchange")
+    public ResponseEntity<TokenResponseDto> exchangeOAuthCode(@Valid @RequestBody OAuthExchangeRequestDto requestDto) {
+        TokenResponseDto token = authService.exchangeOAuthCode(requestDto);
         return ResponseEntity.ok(token);
     }
 }
