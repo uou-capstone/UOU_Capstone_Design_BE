@@ -47,17 +47,6 @@ public class UserController {
         return ResponseEntity.ok(updatedProfile);
     }
 
-    @Operation(summary = "이메일 중복 확인", description = "회원가입 시 이메일 중복 여부를 확인합니다.")
-    @GetMapping("/check-email")
-    public ResponseEntity<Map<String, Object>> checkEmailAvailability(@RequestParam String email) {
-        boolean available = userService.checkEmailAvailability(email);
-        return ResponseEntity.ok(Map.of(
-                "email", email,
-                "available", available,
-                "message", available ? "사용 가능한 이메일입니다." : "이미 사용 중인 이메일입니다."
-        ));
-    }
-
     @Operation(summary = "회원 탈퇴", description = "로그인한 사용자의 계정을 삭제합니다. 비밀번호 확인이 필요합니다.")
     @DeleteMapping("/account")
     @PreAuthorize("isAuthenticated()")

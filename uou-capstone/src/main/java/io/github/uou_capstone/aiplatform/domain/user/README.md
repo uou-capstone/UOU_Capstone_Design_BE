@@ -24,6 +24,7 @@
 | `POST /login` | 익명 | 로그인 — Access + Refresh 토큰 발급 (DB 저장 X — 검증은 토큰 자체로) |
 | `POST /logout` | 인증 | 현재 액세스 토큰을 **블랙리스트** 에 추가 (만료 시각까지 유지) |
 | `POST /refresh` | 익명 | Refresh 토큰으로 새 Access 토큰 발급 (현재는 Refresh 회전 없음 — 그대로 재사용) |
+| `GET  /check-email?email=` | 익명 | 회원가입 전 이메일 중복 체크 — IP 기준 30회/분 rate limit (`AuthRateLimitInterceptor`) |
 
 ### 사용자 (`UserController`) prefix: `/api/users`
 
@@ -32,7 +33,6 @@
 | `GET  /me` | 인증 | 내 정보 조회 |
 | `PUT  /password` | 인증 | 비밀번호 변경 — 현재 비밀번호 검증 + 신/확인 일치 검증 |
 | `PUT  /profile` | 인증 | 이름·전화번호·생년월일 수정 |
-| `GET  /check-email?email=` | 익명 | 회원가입 시 중복 체크 |
 | `DELETE /account` | 인증 | 회원 탈퇴 — 비밀번호 재확인 후 cascade 삭제 |
 
 ### OAuth2 (Kakao) — 별도 패키지
@@ -92,8 +92,8 @@ Spring Data JPA 의 underscore-property 표기. `findByUserId` 로 바꾸면 인
 ## 주요 파일
 
 ### Controller
-- `controller/AuthController.java` — signup/login/logout/refresh
-- `controller/UserController.java` — me/password/profile/check-email/delete
+- `controller/AuthController.java` — signup/login/logout/refresh/check-email
+- `controller/UserController.java` — me/password/profile/delete
 
 ### Service
 - `service/AuthService.java` (160줄) — 회원가입·로그인·로그아웃(블랙리스트)·토큰 갱신

@@ -80,7 +80,7 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 - `exceptionHandling.authenticationEntryPoint(RestAuthenticationEntryPoint)` + `accessDeniedHandler(JwtAccessDeniedHandler)`
 - `oauth2Login.userInfoEndpoint().userService(CustomOAuth2UserService)`
 - `oauth2Login.successHandler(OAuth2AuthenticationSuccessHandler)` + `failureHandler(OAuth2AuthenticationFailureHandler)`
-- 공개 경로: `/api/auth/**`, `/api/users/check-email`, OAuth2 콜백 등
+- 공개 경로: `/api/auth/**` (이메일 중복 확인 포함), OAuth2 콜백 등
 
 ---
 
