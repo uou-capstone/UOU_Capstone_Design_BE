@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.controller;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsDeleteRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
@@ -12,12 +13,13 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @Tag(name = "강의실(Course) API", description = "인증된 사용자(특히 선생님과 학생)가 강의실을 생성, 조회, 수정, 삭제하고 수강 신청하는 흐름을 다룸")
 @RestController
@@ -42,12 +44,14 @@ public class CourseController {
         return ResponseEntity.status(HttpStatus.CREATED).body(responseDto);
     }
 
-    @Operation(summary = "전체 강의실 목록 조회", description = "생성된 모든 강의실의 목록을 조회합니다. (선생님: 최신순, 학생: 수강중인 목록)")
+    @Operation(summary = "전체 강의실 목록 조회",
+            description = "강의실 목록을 페이지 단위로 조회합니다. 정렬 허용 필드: createdAt / updatedAt / title. 기본 정렬: updatedAt,desc. size 최대 100.")
     @GetMapping
     @PreAuthorize("hasAnyAuthority('TEACHER', 'STUDENT')")
-    public ResponseEntity<List<CourseResponseDto>> getAllCourses() {
-        List<CourseResponseDto> courses = courseService.getAllCourses();
-        return ResponseEntity.ok(courses);
+    public ResponseEntity<PageResponse<CourseResponseDto>> getAllCourses(
+            @PageableDefault(size = 20, sort = "updatedAt", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return ResponseEntity.ok(courseService.getAllCourses(pageable));
     }
 
     @Operation(summary = "강의실 상세 조회", description = "특정 강의실의 상세 정보와 강의(Lecture) 목록을 조회합니다.")

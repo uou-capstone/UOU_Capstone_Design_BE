@@ -1,7 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.service;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
@@ -9,14 +11,13 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ActivitySummar
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.CompetencyDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.CompetencyStatus;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.CourseInfoDto;
-import io.github.uou_capstone.aiplatform.domain.course.report.dto.CourseStudentReportDetailResponse;
-import io.github.uou_capstone.aiplatform.domain.course.report.dto.CourseStudentReportListResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.EvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.NarrativeReportDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ReportStatus;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ScoreSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentInfoDto;
-import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportCardDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.SubmissionSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
@@ -31,6 +32,8 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -75,6 +79,10 @@ public class CourseStudentReportService {
     private static final String DEFAULT_COMPETENCY_KEY = "default";
     private static final String DEFAULT_COMPETENCY_LABEL = "문항 수행";
 
+    static final Set<String> REPORT_SORT_WHITELIST = Set.of(
+            "name", "averageScore", "latestActivity", "reportStatus");
+    private static final Sort REPORT_DEFAULT_SORT = Sort.by(Sort.Direction.ASC, "name");
+
     private final CourseRepository courseRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final ExamResultRepository examResultRepository;
@@ -83,21 +91,16 @@ public class CourseStudentReportService {
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional(readOnly = true)
-    public CourseStudentReportListResponse getStudentReportList(Long courseId,
-                                                                String q,
-                                                                String sortBy,
-                                                                String direction,
-                                                                String statusFilter) {
-        Course course = loadCourseAsOwner(courseId);
+    public PageResponse<StudentReportListItem> getStudentReportList(Long courseId,
+                                                                    String q,
+                                                                    String statusFilter,
+                                                                    Pageable rawPageable) {
+        loadCourseAsOwner(courseId);
+        Pageable pageable = PageableSupport.validate(rawPageable, REPORT_SORT_WHITELIST, REPORT_DEFAULT_SORT);
 
         List<Enrollment> enrollments = enrollmentRepository.findByCourseIdWithStudentUser(courseId);
         if (enrollments.isEmpty()) {
-            return CourseStudentReportListResponse.builder()
-                    .courseId(course.getId())
-                    .courseTitle(course.getTitle())
-                    .totalStudents(0)
-                    .students(List.of())
-                    .build();
+            return PageResponse.empty(pageable);
         }
 
         List<Long> userIds = enrollments.stream()
@@ -117,27 +120,22 @@ public class CourseStudentReportService {
                 .stream()
                 .collect(Collectors.groupingBy(s -> s.getStudent().getId()));
 
-        List<StudentReportCardDto> cards = enrollments.stream()
-                .map(enrollment -> buildCard(
+        List<StudentReportListItem> items = enrollments.stream()
+                .map(enrollment -> buildListItem(
                         enrollment,
                         examResultsByUserId.getOrDefault(enrollment.getStudent().getUser().getId(), List.of()),
                         submissionsByStudentId.getOrDefault(enrollment.getStudent().getId(), List.of())
                 ))
                 .collect(Collectors.toCollection(ArrayList::new));
 
-        applyFilters(cards, q, statusFilter);
-        applySort(cards, sortBy, direction);
+        applyFilters(items, q, statusFilter);
+        items.sort(buildItemComparator(pageable.getSort()));
 
-        return CourseStudentReportListResponse.builder()
-                .courseId(course.getId())
-                .courseTitle(course.getTitle())
-                .totalStudents(cards.size())
-                .students(cards)
-                .build();
+        return PageResponse.ofSlice(items, pageable);
     }
 
     @Transactional(readOnly = true)
-    public CourseStudentReportDetailResponse getStudentReportDetail(Long courseId, Long studentId) {
+    public StudentReportDetailResponse getStudentReportDetail(Long courseId, Long studentId) {
         Course course = loadCourseAsOwner(courseId);
 
         Enrollment enrollment = enrollmentRepository
@@ -162,7 +160,7 @@ public class CourseStudentReportService {
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
 
-        return CourseStudentReportDetailResponse.builder()
+        return StudentReportDetailResponse.builder()
                 .student(StudentInfoDto.builder()
                         .studentId(student.getId())
                         .userId(studentUser.getId())
@@ -203,9 +201,9 @@ public class CourseStudentReportService {
     // 학생 카드 (리스트용)
     // ===========================================================
 
-    private StudentReportCardDto buildCard(Enrollment enrollment,
-                                           List<ExamResult> examResults,
-                                           List<Submission> submissions) {
+    private StudentReportListItem buildListItem(Enrollment enrollment,
+                                                List<ExamResult> examResults,
+                                                List<Submission> submissions) {
         Student student = enrollment.getStudent();
         User user = student.getUser();
 
@@ -227,7 +225,7 @@ public class CourseStudentReportService {
                 .map(CompetencyDto::getLabel)
                 .orElse(null);
 
-        return StudentReportCardDto.builder()
+        return StudentReportListItem.builder()
                 .studentId(student.getId())
                 .userId(user.getId())
                 .studentName(user.getFullName())
@@ -644,51 +642,54 @@ public class CourseStudentReportService {
     // 정렬 / 검색 / 필터
     // ===========================================================
 
-    private void applyFilters(List<StudentReportCardDto> cards, String q, String statusFilter) {
+    private void applyFilters(List<StudentReportListItem> items, String q, String statusFilter) {
         ReportStatus status = ReportStatus.fromQuery(statusFilter);
         if (q == null && status == null) {
             return;
         }
         String needle = q == null ? null : q.trim().toLowerCase();
-        cards.removeIf(card -> {
+        items.removeIf(item -> {
             if (needle != null && !needle.isEmpty()) {
-                String name = card.getStudentName();
+                String name = item.getStudentName();
                 if (name == null || !name.toLowerCase().contains(needle)) {
                     return true;
                 }
             }
-            if (status != null && !status.value().equals(card.getReportStatus())) {
+            if (status != null && !status.value().equals(item.getReportStatus())) {
                 return true;
             }
             return false;
         });
     }
 
-    private void applySort(List<StudentReportCardDto> cards, String sortBy, String direction) {
-        String sortKey = sortBy == null ? "name" : sortBy.trim();
-        boolean asc = !"desc".equalsIgnoreCase(direction);
-
+    private Comparator<StudentReportListItem> buildItemComparator(Sort sort) {
         Map<String, Integer> statusOrder = new HashMap<>();
         statusOrder.put(ReportStatus.NEEDS_ATTENTION.value(), 0);
         statusOrder.put(ReportStatus.INSUFFICIENT_DATA.value(), 1);
         statusOrder.put(ReportStatus.ON_TRACK.value(), 2);
         statusOrder.put(ReportStatus.EXCELLING.value(), 3);
 
-        Comparator<StudentReportCardDto> cmp = switch (sortKey) {
-            case "averageScore" -> Comparator.comparing(StudentReportCardDto::getAverageScorePercent,
-                    Comparator.nullsLast(Comparator.naturalOrder()));
-            case "latestActivity" -> Comparator.comparing(StudentReportCardDto::getLatestActivityAt,
-                    Comparator.nullsLast(Comparator.naturalOrder()));
-            case "reportStatus" -> Comparator.comparingInt(card ->
-                    statusOrder.getOrDefault(card.getReportStatus(), Integer.MAX_VALUE));
-            default -> Comparator.comparing(StudentReportCardDto::getStudentName,
-                    Comparator.nullsLast(Comparator.naturalOrder()));
-        };
-
-        if (!asc) {
-            cmp = cmp.reversed();
+        Comparator<StudentReportListItem> result = null;
+        for (Sort.Order order : sort) {
+            Comparator<StudentReportListItem> next = switch (order.getProperty()) {
+                case "averageScore" -> Comparator.comparing(StudentReportListItem::getAverageScorePercent,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                case "latestActivity" -> Comparator.comparing(StudentReportListItem::getLatestActivityAt,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                case "reportStatus" -> Comparator.comparingInt(item ->
+                        statusOrder.getOrDefault(item.getReportStatus(), Integer.MAX_VALUE));
+                case "name" -> Comparator.comparing(StudentReportListItem::getStudentName,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                default -> throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                        "허용되지 않는 정렬 필드입니다: " + order.getProperty());
+            };
+            if (order.isDescending()) {
+                next = next.reversed();
+            }
+            result = result == null ? next : result.thenComparing(next);
         }
-        cards.sort(cmp);
+        return result != null ? result : Comparator.comparing(StudentReportListItem::getStudentName,
+                Comparator.nullsLast(Comparator.naturalOrder()));
     }
 
     // ===========================================================

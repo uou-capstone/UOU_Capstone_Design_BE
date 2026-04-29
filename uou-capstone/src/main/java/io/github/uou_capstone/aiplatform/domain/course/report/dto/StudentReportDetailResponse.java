@@ -9,7 +9,7 @@ import java.util.List;
 @Getter
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class CourseStudentReportDetailResponse {
+public class StudentReportDetailResponse {
     private final StudentInfoDto student;
     private final CourseInfoDto course;
     private final ActivitySummaryDto activitySummary;
