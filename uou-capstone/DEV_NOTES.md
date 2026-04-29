@@ -756,3 +756,65 @@ if (!StringUtils.hasText(effectivePdfPath)) {
 ### 남은 과제
 
 - B-2 (Learning Session SSE 스트림) 는 PowerShell에서 SSE 첫 이벤트 수신·종료 로직이 필요하여 이번 커밋 범위에서 제외. 후속 작업에서 추가 예정.
+
+---
+
+## [2026-04-29] EC2 배포 자동화 — Nginx 포트 전환
+
+### 증상
+
+`develop` 배포 컨테이너는 정상 기동했지만 도메인 헬스 체크가 Nginx에서 502를 반환했다.
+
+```text
+https://uouaitutor.duckdns.org/api/health
+→ 502 Bad Gateway
+```
+
+반면 컨테이너 직접 포트는 정상 응답했다.
+
+```text
+http://3.36.233.169:8081/api/health
+→ status=UP
+
+http://3.36.233.169:8001/health
+→ {"status":"ok","redis":"connected"}
+```
+
+### 원인
+
+같은 도메인 `uouaitutor.duckdns.org`를 `main`과 `develop` 배포에 번갈아 사용하지만, Nginx 설정은 운영 포트에 고정되어 있었다.
+
+```nginx
+proxy_pass http://127.0.0.1:8080/;
+proxy_pass http://127.0.0.1:8000/;
+```
+
+`develop` compose는 Spring `8081`, FastAPI `8001`로 노출하므로, 도메인 요청이 실행 중인 develop 컨테이너가 아닌 비활성 main 포트로 전달되어 502가 발생했다.
+
+### 조치
+
+`deploy.sh`에서 대상 브랜치에 따라 compose/env 파일과 함께 Nginx 프록시 포트를 결정하도록 수정했다.
+
+```bash
+if [ "$TARGET_BRANCH" = "main" ]; then
+  SPRING_PORT="8080"
+  AI_PORT="8000"
+else
+  SPRING_PORT="8081"
+  AI_PORT="8001"
+fi
+```
+
+컨테이너 재기동 후 `/etc/nginx/conf.d/uouaitutor.conf`의 `proxy_pass`를 브랜치별 포트로 갱신하고, `nginx -t` 검증 후 reload한다.
+
+```bash
+sudo -n nginx -t
+sudo -n systemctl reload nginx
+```
+
+또한 EC2에서 실행되는 셸 스크립트가 Windows 작업 환경에서 CRLF로 변환되지 않도록 루트 `.gitattributes`에 `*.sh text eol=lf`를 추가했다.
+
+### 관련 파일
+
+- `deploy.sh`
+- `.gitattributes`

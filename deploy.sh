@@ -18,6 +18,7 @@ set -euo pipefail
 
 REPO_DIR="/home/ec2-user/UOU_Capstone_design_Be_v3"
 TARGET_BRANCH="${1:-develop}"
+NGINX_CONF="${NGINX_CONF:-/etc/nginx/conf.d/uouaitutor.conf}"
 
 echo "[deploy] 브랜치: ${TARGET_BRANCH}"
 echo "[deploy] 저장소 디렉토리: ${REPO_DIR}"
@@ -39,9 +40,13 @@ echo "[deploy] GHCR 로그인 완료"
 if [ "$TARGET_BRANCH" = "main" ]; then
   COMPOSE_FILE="docker-compose.main.yml"
   ENV_FILE="env/main.env"
+  SPRING_PORT="8080"
+  AI_PORT="8000"
 else
   COMPOSE_FILE="docker-compose.develop.yml"
   ENV_FILE="env/develop.env"
+  SPRING_PORT="8081"
+  AI_PORT="8001"
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -52,6 +57,8 @@ fi
 
 echo "[deploy] Compose 파일: ${COMPOSE_FILE}"
 echo "[deploy] 환경 파일: ${ENV_FILE}"
+echo "[deploy] Spring 포트: ${SPRING_PORT}"
+echo "[deploy] AI 포트: ${AI_PORT}"
 
 # ── 이미지 pull ───────────────────────────────────────────────
 echo "[deploy] 최신 이미지 pull 중..."
@@ -61,9 +68,25 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull
 echo "[deploy] 컨테이너 재기동 중..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --remove-orphans
 
+# ── Nginx 프록시 대상 전환 ───────────────────────────────────
+# 같은 도메인을 main/develop 배포에 번갈아 붙일 수 있도록 브랜치별 포트로 갱신.
+if command -v nginx >/dev/null 2>&1; then
+  if sudo -n test -f "$NGINX_CONF"; then
+    echo "[deploy] Nginx 프록시 대상 갱신 중: ${NGINX_CONF}"
+    sudo -n sed -i -E -e "s|proxy_pass http://127\\.0\\.0\\.1:808[01]/;|proxy_pass http://127.0.0.1:${SPRING_PORT}/;|g" -e "s|proxy_pass http://127\\.0\\.0\\.1:800[01]/;|proxy_pass http://127.0.0.1:${AI_PORT}/;|g" "$NGINX_CONF"
+    sudo -n nginx -t
+    sudo -n systemctl reload nginx
+    echo "[deploy] Nginx reload 완료"
+  else
+    echo "[deploy] Nginx 설정 파일이 없거나 sudo 권한이 없어 프록시 전환을 건너뜁니다: ${NGINX_CONF}"
+  fi
+else
+  echo "[deploy] Nginx가 없어 프록시 전환을 건너뜁니다."
+fi
+
 # ── 미사용 이미지 정리 ───────────────────────────────────────
 docker image prune -f
 
 echo "[deploy] 완료 ✓ (브랜치: ${TARGET_BRANCH})"
-echo "[deploy] Spring: http://$(hostname -I | awk '{print $1}'):$([ "$TARGET_BRANCH" = "main" ] && echo 8080 || echo 8081)/api/health"
-echo "[deploy] AI   : http://$(hostname -I | awk '{print $1}'):$([ "$TARGET_BRANCH" = "main" ] && echo 8000 || echo 8001)/health"
+echo "[deploy] Spring: http://$(hostname -I | awk '{print $1}'):${SPRING_PORT}/api/health"
+echo "[deploy] AI   : http://$(hostname -I | awk '{print $1}'):${AI_PORT}/health"
