@@ -89,6 +89,9 @@ services:
     container_name: main-ai
     ports:
       - "8000:8000"
+    environment:
+      REDIS_HOST: main-redis
+      REDIS_PORT: "6379"
     env_file:
       - env/main.env
     networks:

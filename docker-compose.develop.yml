@@ -89,6 +89,9 @@ services:
     container_name: dev-ai
     ports:
       - "8001:8000"
+    environment:
+      REDIS_HOST: dev-redis
+      REDIS_PORT: "6379"
     env_file:
       - env/develop.env
     networks:
