@@ -7,6 +7,7 @@ import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestListItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.MyJoinRequestItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequest;
 import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequestStatus;
@@ -14,8 +15,11 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseJoinRequestRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
+import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -37,6 +41,7 @@ public class CourseJoinRequestService {
     private final CourseRepository courseRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
+    private final NotificationService notificationService;
 
     @Transactional
     public CourseJoinRequestResponseDto createJoinRequest(CourseJoinRequestCreateDto dto) {
@@ -69,6 +74,17 @@ public class CourseJoinRequestService {
     }
 
     @Transactional(readOnly = true)
+    public PageResponse<MyJoinRequestItemDto> getMyJoinRequests(Pageable rawPageable) {
+        Pageable pageable = PageableSupport.validate(rawPageable, SORT_WHITELIST, DEFAULT_SORT);
+        Student student = currentUserResolver.getStudent();
+
+        Page<CourseJoinRequest> page = joinRequestRepository
+                .findByStudentIdWithCourse(student.getId(), pageable);
+
+        return PageResponse.of(page.map(MyJoinRequestItemDto::new));
+    }
+
+    @Transactional(readOnly = true)
     public PageResponse<CourseJoinRequestListItemDto> getJoinRequests(Long courseId,
                                                                       CourseJoinRequestStatus status,
                                                                       Pageable rawPageable) {
@@ -97,20 +113,35 @@ public class CourseJoinRequestService {
             );
         }
         request.approve();
+        notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_APPROVED, "강의실 가입 승인",
+                "%s 강의실 가입이 승인되었습니다.".formatted(course.getTitle()));
     }
 
     @Transactional
     public void rejectJoinRequest(Long courseId, Long requestId) {
-        loadOwnedCourse(courseId);
+        Course course = loadOwnedCourse(courseId);
         CourseJoinRequest request = loadPendingRequest(courseId, requestId);
         request.reject();
+        notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_REJECTED, "강의실 가입 거절",
+                "%s 강의실 가입이 거절되었습니다.".formatted(course.getTitle()));
     }
 
     @Transactional
     public void blockJoinRequest(Long courseId, Long requestId) {
-        loadOwnedCourse(courseId);
+        Course course = loadOwnedCourse(courseId);
         CourseJoinRequest request = loadPendingRequest(courseId, requestId);
         request.block();
+        notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_BLOCKED, "강의실 가입 차단",
+                "%s 강의실에서 차단되었습니다.".formatted(course.getTitle()));
+    }
+
+    private void notifyJoinRequestProcessed(CourseJoinRequest request,
+                                            NotificationType type,
+                                            String title,
+                                            String body) {
+        User recipient = request.getStudent().getUser();
+        Long courseId = request.getCourse().getId();
+        notificationService.notify(recipient, type, title, body, "course", courseId);
     }
 
     private Course loadOwnedCourse(Long courseId) {

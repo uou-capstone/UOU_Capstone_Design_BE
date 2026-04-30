@@ -231,6 +231,49 @@
 - `/api/courses/*`
 - 예: 코스 목록/상세, `GET /api/courses/{courseId}/contents`
 
+### 강의실 가입 요청 (승인형 등록 — 신규)
+
+학생 입장 흐름이 단일 코드 즉시 등록에서 **교사 승인형**으로 전환됐다. 자세한 가이드는 `docs/handoff/COURSE_JOIN_REQUEST_FE.md` 참조.
+
+| 메서드/경로 | 권한 | 용도 |
+|---|---|---|
+| `POST /api/courses/join-requests` | STUDENT | body `{ invitationCode }` → PENDING 생성 |
+| `GET /api/courses/join-requests/me` | STUDENT | 본인 요청 목록(상태 무관, 최신순, PageResponse) — 응답 항목: `requestId`, `courseId`, `courseTitle`, `status`, `requestedAt`, `updatedAt` |
+| `GET /api/courses/{courseId}/join-requests?status=` | TEACHER | 목록 (기본 PENDING, PageResponse) |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/approve` | TEACHER | 승인 (Enrollment 자동 생성, 학생에게 `COURSE_JOIN_APPROVED` 알림 발행) |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/reject` | TEACHER | 거절 (학생 재요청 가능, `COURSE_JOIN_REJECTED` 알림) |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/block` | TEACHER | 차단 (학생 재요청 불가 영구, `COURSE_JOIN_BLOCKED` 알림) |
+
+호환 / 제거:
+- **제거됨**: `POST /api/courses/{courseId}/enroll` — 호출부 즉시 제거. 호출하면 404.
+- **호환 유지(deprecated)**: `POST /api/courses/join?code=` — 즉시 등록되는 기존 동작 그대로. 신규 사용 금지(이 경로는 알림 흐름을 타지 않음).
+
+신규 에러 코드: `JOIN_REQUEST_PENDING_EXISTS`(409) / `JOIN_REQUEST_BLOCKED`(403) / `ENROLLMENT_ALREADY_EXISTS`(409) / `JOIN_REQUEST_NOT_FOUND`(404) / `JOIN_REQUEST_ALREADY_PROCESSED`(409).
+
+### 알림 (신규)
+
+학생/교사 공용. 진실 원천은 DB 저장 알림이고, SSE 스트림은 실시간 편의용이다(연결이 끊겨도 GET 목록으로 복구 가능).
+
+| 메서드/경로 | 권한 | 용도 |
+|---|---|---|
+| `GET /api/notifications` | STUDENT/TEACHER | 본인 알림 목록 (최신순, PageResponse). 정렬 허용 필드: `createdAt`. |
+| `GET /api/notifications/unread-count` | STUDENT/TEACHER | `{ count }` — 안 읽은 알림 개수 |
+| `POST /api/notifications/{notificationId}/read` | STUDENT/TEACHER | 단건 읽음 처리. 본인 알림 아니면 404 |
+| `POST /api/notifications/read-all` | STUDENT/TEACHER | 본인 안 읽은 알림 전체 읽음 처리 |
+| `GET /api/notifications/stream` | STUDENT/TEACHER | SSE 스트림 (`text/event-stream`). 이벤트 표준: `message` / `heartbeat` / `timeout` / `error` |
+
+알림 응답 필드 (REST · SSE 공통):
+- `notificationId`, `type`, `title`, `body`, `resourceType`, `resourceId`, `read`(boolean), `createdAt`
+
+`type` 값(현재 발행되는 것):
+- `COURSE_JOIN_APPROVED` / `COURSE_JOIN_REJECTED` / `COURSE_JOIN_BLOCKED` — `resourceType="course"`, `resourceId={courseId}`
+
+FE 권장 흐름:
+1. 로그인 직후 `GET /api/notifications/unread-count`로 뱃지 표시
+2. 알림 패널 열 때 `GET /api/notifications` 페이지 로드
+3. 백그라운드로 `GET /api/notifications/stream` 연결 (`fetch + ReadableStream` 권장 — `EventSource`는 Authorization 헤더 불가). `event:message` 수신 시 목록 prepend + 뱃지 +1
+4. 사용자가 알림 클릭 시 `POST /api/notifications/{id}/read`
+
 ### 강의
 - 생성/수정/삭제: `/api/courses/{courseId}/lectures`, `/api/lectures/{lectureId}`
 
@@ -300,4 +343,5 @@ const reader = res.body.getReader();
 6. SSE는 `heartbeat` 무시, `done`/`error` 분기 처리.
 7. 시험 제출 전 답변 누락 검증.
 8. 권한 에러(401/403) 공통 핸들러 적용.
-9. 경로/필드 추가 변경 시 Swagger 및 **`llm_multi_agent` Bridge·Session 문서** 기준으로 확인.
+9. 강의실 입장: `POST /api/courses/{courseId}/enroll` 호출부 **즉시 제거** (404). `/join?code=`는 호환만 유지, 신규는 `/join-requests` 사용 (`docs/handoff/COURSE_JOIN_REQUEST_FE.md`).
+10. 경로/필드 추가 변경 시 Swagger 및 **`llm_multi_agent` Bridge·Session 문서** 기준으로 확인.

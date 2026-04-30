@@ -38,5 +38,18 @@ public interface CourseJoinRequestRepository extends JpaRepository<CourseJoinReq
             @Param("status") CourseJoinRequestStatus status,
             Pageable pageable);
 
+    @Query(value = """
+            SELECT r FROM CourseJoinRequest r
+            JOIN FETCH r.course c
+            WHERE r.student.id = :studentId
+            """,
+           countQuery = """
+            SELECT COUNT(r) FROM CourseJoinRequest r
+            WHERE r.student.id = :studentId
+            """)
+    Page<CourseJoinRequest> findByStudentIdWithCourse(
+            @Param("studentId") Long studentId,
+            Pageable pageable);
+
     Optional<CourseJoinRequest> findByIdAndCourseId(Long id, Long courseId);
 }
