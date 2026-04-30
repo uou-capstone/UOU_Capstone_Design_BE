@@ -77,7 +77,7 @@ class JwtTokenProviderTest {
 
     @Test
     void getAuthentication_throwsBusinessExceptionWhenRoleClaimIsMissing() {
-        String refreshToken = provider.createRefreshToken("user@test.com");
+        String refreshToken = provider.createRefreshToken("user@test.com", "test-jti-auth");
 
         assertThatThrownBy(() -> provider.getAuthentication(refreshToken))
                 .isInstanceOfSatisfying(BusinessException.class, ex -> {
@@ -88,13 +88,14 @@ class JwtTokenProviderTest {
 
     @Test
     void getEmailFromToken_returnsSubjectForValidToken() {
-        String token = provider.createRefreshToken("user@test.com");
+        String token = provider.createRefreshToken("user@test.com", "test-jti-email");
         assertThat(provider.getEmailFromToken(token)).isEqualTo("user@test.com");
+        assertThat(provider.getJtiFromToken(token)).isEqualTo("test-jti-email");
     }
 
     @Test
     void getEmailFromToken_throwsForExpiredToken() {
-        String expired = expiredProvider.createRefreshToken("user@test.com");
+        String expired = expiredProvider.createRefreshToken("user@test.com", "test-jti-expired");
         assertThatThrownBy(() -> provider.getEmailFromToken(expired))
                 .isInstanceOf(ExpiredJwtException.class);
     }

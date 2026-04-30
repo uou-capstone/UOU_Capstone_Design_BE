@@ -74,6 +74,23 @@ jobs:
         working-directory: uou-capstone
         run: chmod +x gradlew
 
+      - name: Debug Spring checkout state
+        shell: bash
+        run: |
+          echo "PWD=$(pwd)"
+          echo "GITHUB_REF=${GITHUB_REF}"
+          echo "GITHUB_SHA=${GITHUB_SHA}"
+          echo "RUNNER_OS=${RUNNER_OS}"
+          git rev-parse HEAD
+          git branch --show-current || true
+          git status --short
+          echo ""
+          echo "== JwtTokenProvider.java =="
+          nl -ba uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/security/jwt/JwtTokenProvider.java | sed -n '45,80p'
+          echo ""
+          echo "== JwtTokenProviderTest.java =="
+          nl -ba uou-capstone/src/test/java/io/github/uou_capstone/aiplatform/security/jwt/JwtTokenProviderTest.java | sed -n '70,110p'
+
       - name: Run Spring tests
         working-directory: uou-capstone
         run: ./gradlew test --no-daemon

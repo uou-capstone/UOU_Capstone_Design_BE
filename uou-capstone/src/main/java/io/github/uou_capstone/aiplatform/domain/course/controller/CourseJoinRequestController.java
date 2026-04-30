@@ -4,6 +4,7 @@ import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestListItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.MyJoinRequestItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequestStatus;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseJoinRequestService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,6 +36,15 @@ public class CourseJoinRequestController {
             @Valid @RequestBody CourseJoinRequestCreateDto dto) {
         CourseJoinRequestResponseDto response = joinRequestService.createJoinRequest(dto);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @Operation(summary = "내 강의실 가입 요청 목록 조회 (학생)",
+               description = "현재 로그인 학생의 가입 요청을 상태 무관하게 최신순으로 반환합니다. 정렬 허용 필드: createdAt / updatedAt.")
+    @GetMapping("/join-requests/me")
+    @PreAuthorize("hasAuthority('STUDENT')")
+    public ResponseEntity<PageResponse<MyJoinRequestItemDto>> getMyJoinRequests(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(joinRequestService.getMyJoinRequests(pageable));
     }
 
     @Operation(summary = "강의실 가입 요청 목록 조회 (교사)",

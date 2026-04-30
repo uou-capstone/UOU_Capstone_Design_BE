@@ -1040,3 +1040,82 @@ Flyway 미사용. `ddl-auto=create`(local) / `update`(prod)로 `course_join_requ
   - `domain/course/controller/CourseController.java` — `/join` 핸들러 `@Operation(deprecated = true)` 마킹
   - `common/error/CommonErrorCode.java` — 5개 코드 추가
   - `domain/course/README.md` — 가입 요청 흐름 섹션 추가, 주요 파일 갱신
+
+---
+
+## [2026-04-30] 학생 가입 요청 상태 조회 + 범용 알림 인프라
+
+### 증상
+
+직전 라운드(`8b31415`)에서 강의실 승인형 등록(CourseJoinRequest)이 도입되었지만 학생 측 UX가 비어 있었다.
+
+- 학생이 신청 후 **자기 요청의 상태(PENDING/APPROVED/REJECTED/BLOCKED)를 조회할 수단이 없음** — FE는 `POST /api/courses/join-requests`에 의존했지만 그 응답은 1회성이고 이후 상태 변화를 알 길 없음
+- 교사가 승인/거절/차단해도 **학생이 결과를 받는 채널 없음** — DEV_NOTES 직전 항목의 "보류" 섹션에 명시됨 (`교사 → 학생 승인 알림 (notification 인프라 부재)`)
+
+### 원인
+
+- 학생 본인 요청 조회용 Repository/Service 메서드 부재. `findByCourseIdAndStatusWithStudent`는 교사용(courseId 필터)이라 학생이 호출 불가
+- 알림 도메인 자체가 미존재. `Notification` 엔티티/저장소/SSE 발행 어느 것도 없었음
+- `CourseJoinRequestService.approve/reject/block`는 상태 전이만 수행하고 학생에게 통지하지 않음
+
+### 조치
+
+**1) 학생용 상태 조회 API**
+- `CourseJoinRequestRepository.findByStudentIdWithCourse(studentId, pageable)` — `JOIN FETCH r.course`로 N+1 방지 + 전용 `countQuery`
+- `CourseJoinRequestService.getMyJoinRequests(Pageable)` — `currentUserResolver.getStudent()` 기반, 기존 `SORT_WHITELIST`/`PageableSupport.validate` 재사용
+- `GET /api/courses/join-requests/me` (STUDENT) — 본인 요청 목록 (PageResponse, `MyJoinRequestItemDto`: `requestId`/`courseId`/`courseTitle`/`status`/`requestedAt`/`updatedAt`)
+
+**2) 범용 Notification 도메인 신설** (`domain/notification/`)
+- `Notification` 엔티티 — `user`(ManyToOne LAZY) / `type` / `title` / `body` / `resourceType` / `resourceId` / `readAt` / `createdAt(BaseTimeEntity)`. 인덱스 2개: `(user_id, read_at)`(unread count), `(user_id, created_at)`(목록 정렬)
+- `NotificationType` — 이번 라운드 발행은 `COURSE_JOIN_APPROVED`/`COURSE_JOIN_REJECTED`/`COURSE_JOIN_BLOCKED` 3종. enum 구조라 다른 도메인이 추후 추가 가능
+- `NotificationRepository` — `findByUserId`, `countByUserIdAndReadAtIsNull`, `findByIdAndUserId`(소유권 동시 검증), `@Modifying markAllAsReadByUserId`
+- `NotificationService.notify(...)` — DB 저장 후 **`afterCommit`에서만** SSE push (커밋 실패 시 false-push 방지). 트랜잭션 비활성 컨텍스트에서는 즉시 push
+- 본인 알림만 접근 가능: `findByIdAndUserId` 미스 시 `RESOURCE_NOT_FOUND` 일관 처리
+
+**3) SSE 실시간 스트림**
+- `NotificationStreamRegistry` — `ConcurrentHashMap<userId, CopyOnWriteArrayList<Sinks.Many<...>>>` 다중 sink 구조 (한 사용자 다중 탭/디바이스 대응). `Flux.doFinally`로 cleanup
+- `GET /api/notifications/stream` — `Flux<ServerSentEvent<Map<String,Object>>>` 표준 (CLAUDE.md). `SseStreamSupport.wrapEvents(...)` 재사용, `idleTimeout=5분`, `appendDoneOnComplete=false`(영속 알림 스트림은 done으로 종료시키지 않음)
+- 운영 규칙: SSE는 실시간 편의용, **진실 원천은 DB**. 미연결 중 발생한 알림은 `GET /api/notifications`로 복구
+
+**4) CourseJoinRequest 처리 시점 발행 wiring**
+- `approve/reject/block` 메서드 끝에 `notifyJoinRequestProcessed(...)` 호출. 알림 저장은 같은 트랜잭션 안에서 일어나므로 처리 실패 시 함께 롤백
+- 메시지: `"{courseTitle} 강의실 가입이 승인되었습니다."` 등 서버에서 완성된 문장 저장. `resourceType="course"`, `resourceId={courseId}`
+
+### 설계 결정
+
+| 결정 | 사유 |
+|---|---|
+| WebSocket 미도입 | 단방향 푸시면 충분, SSE가 인프라 가벼움 |
+| Redis Pub/Sub 알림 브로드캐스트 미도입 | 단일 인스턴스 운영 가정. 멀티 인스턴스 전환 시 `shared:notification:{userId}` 채널로 확장 |
+| `processedAt` 전용 컬럼 미도입 | `BaseTimeEntity.updatedAt`을 처리 시각으로 활용 |
+| 알림 메시지 서버 완성 | FE i18n 부재. 서버에서 완성 문장 저장이 단순 |
+| 같은 트랜잭션 + afterCommit push | 알림 누락(상태는 바뀌었는데 알림 미저장) 방지 + false-push(롤백됐는데 SSE만 갔음) 방지 |
+
+### 보류 (다음 라운드)
+
+- 멀티 인스턴스 환경 Redis Pub/Sub 알림 브로드캐스트
+- material/exam/learning 도메인의 알림 발행 연결 (이번 라운드는 join-request만)
+- 알림 카테고리/그룹핑·집계, 푸시(FCM/APNs), 알림 만료/자동 정리 배치
+- 호환 경로(`POST /api/courses/join?code=`) 제거 — FE 전환 완료 후
+
+### DB 마이그레이션
+
+Flyway 미사용. `ddl-auto=create`(local) / `update`(prod)로 `notifications` 테이블 자동 생성. 인덱스 2개(`idx_notification_user_read`, `idx_notification_user_created`)는 엔티티 `@Index`로 정의.
+
+### 관련 파일
+
+- 신규:
+  - `domain/notification/entity/Notification.java`
+  - `domain/notification/entity/NotificationType.java`
+  - `domain/notification/repository/NotificationRepository.java`
+  - `domain/notification/service/NotificationService.java`
+  - `domain/notification/service/NotificationStreamRegistry.java`
+  - `domain/notification/controller/NotificationController.java`
+  - `domain/notification/dto/NotificationItemDto.java`
+  - `domain/notification/dto/UnreadCountResponse.java`
+  - `domain/course/dto/MyJoinRequestItemDto.java`
+- 변경:
+  - `domain/course/repository/CourseJoinRequestRepository.java` — `findByStudentIdWithCourse` 추가
+  - `domain/course/service/CourseJoinRequestService.java` — `getMyJoinRequests` + approve/reject/block 알림 발행 wiring
+  - `domain/course/controller/CourseJoinRequestController.java` — `GET /api/courses/join-requests/me` 추가
+  - `FRONTEND_V2_V3_API.md` — 학생 상태 조회 / 알림 API 섹션 추가
