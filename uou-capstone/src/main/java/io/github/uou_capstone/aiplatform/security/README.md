@@ -18,7 +18,7 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 
 ### 발급 (`JwtTokenProvider`)
 - `createAccessToken(email, role)` — subject=email, claim `role`. 만료 `${jwt.access-token-expiration-time}`
-- `createRefreshToken(email)` — role claim 없음. 만료 `${jwt.refresh-token-expiration-time}`
+- `createRefreshToken(email, jti)` — role claim 없음, claim `jti` 포함. 만료 `${jwt.refresh-token-expiration-time}`
 - 둘 다 HMAC-SHA 키 (`${jwt.secret}` BASE64 디코딩)
 
 ### 검증 — `JwtAuthenticationFilter` (`OncePerRequestFilter`)
