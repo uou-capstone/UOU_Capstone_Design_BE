@@ -80,15 +80,6 @@ public class CourseController {
         return ResponseEntity.noContent().build();
     }
 
-    // 기존 ID 기반 수강 신청 (유지할지 결정 필요하나, 일단 둠)
-    @Operation(summary = "수강 신청 (ID 기반)", description = "학생이 ID를 통해 강의실에 입장(수강 신청)합니다.")
-    @PostMapping("/{courseId}/enroll")
-    @PreAuthorize("hasAuthority('STUDENT')") // 학생만 호출 가능
-    public ResponseEntity<String> enrollCourse(@PathVariable Long courseId) {
-        enrollmentService.enrollCourse(courseId);
-        return ResponseEntity.status(HttpStatus.CREATED).body("수강 신청이 완료되었습니다.");
-    }
-
     @Operation(summary = "초대 코드로 강의실 입장", description = "학생이 초대 링크 등을 통해 전달받은 코드로 강의실에 입장(수강 신청)합니다.")
     @PostMapping("/join")
     @PreAuthorize("hasAuthority('STUDENT')")

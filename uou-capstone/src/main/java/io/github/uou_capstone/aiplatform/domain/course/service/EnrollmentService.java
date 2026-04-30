@@ -21,30 +21,6 @@ public class EnrollmentService {
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional
-    public Long enrollCourse(Long courseId) {
-        // 1. 현재 로그인한 학생 정보 가져오기
-        Student student = currentUserResolver.getStudent();
-
-        // 2. 수강 신청할 강의실 정보 가져오기
-        Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
-
-        // 3. 이미 수강 신청했는지 확인 (중복 방지)
-        if (enrollmentRepository.existsByStudentAndCourse(student, course)) {
-            throw new BusinessException(CommonErrorCode.DUPLICATE_RESOURCE);
-        }
-
-        // 4. Enrollment 생성 및 저장
-        Enrollment enrollment = Enrollment.builder()
-                .student(student)
-                .course(course)
-                .build();
-        enrollmentRepository.save(enrollment);
-
-        return enrollment.getId();
-    }
-
-    @Transactional
     public Long enrollCourseByCode(String invitationCode) {
         // 1. 현재 로그인한 학생 정보 가져오기
         Student student = currentUserResolver.getStudent();
