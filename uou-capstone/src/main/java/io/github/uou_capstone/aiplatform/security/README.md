@@ -46,9 +46,10 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 - `DefaultOAuth2User` 반환 (authority = role 1개)
 
 ### 2. 성공 핸들러 — `OAuth2AuthenticationSuccessHandler`
-- JWT Access + Refresh 발급
-- **프론트엔드로 리다이렉트** — `${oauth2.redirect.frontend-url}${oauth2.redirect.path}?accessToken=&refreshToken=&success=true`
+- **one-time code** 발급 → `OAuthExchangeStore` 에 (code → userId) 매핑을 60초 TTL 로 저장
+- 프론트로 리다이렉트 — `${oauth2.redirect.frontend-url}${oauth2.redirect.path}?code=<one-time>&success=true`
 - 기본값: `http://localhost:3000/auth/callback`
+- 프론트는 받은 `code` 로 `POST /api/auth/oauth/exchange` 호출 → 토큰 교환 (1회 atomic 소비, 평문 토큰이 URL 에 노출되지 않음)
 
 ### 3. 실패 핸들러 — `OAuth2AuthenticationFailureHandler`
 - 동일 redirect path 로 `?success=false&error=<msg>`
@@ -98,10 +99,8 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 ### 토큰 만료 시간 단위
 `accessTokenExpirationTime` / `refreshTokenExpirationTime` 는 **밀리초** (`Date(now + ms)`). `application.yml` 에 `1800000` (30분) 같이 ms 로 표기.
 
-### Refresh 회전 미구현
-`AuthService.refreshToken` 은 새 Access 만 발급, Refresh 는 그대로 반환 (DEV_NOTES 1-8). 회전 도입 시:
-1. 새 Refresh 발급 + 이전 Refresh 블랙리스트 추가
-2. 응답 페이로드에 새 Refresh 포함 (FE 반드시 갱신)
+### Refresh 회전 (구현됨)
+`AuthService.refreshToken` 은 매 호출마다 새 Access + 새 Refresh 발급. 이전 Refresh 의 `jti` 는 `RefreshTokenStore` 에서 revoke. 화이트리스트에 없는 `jti` 가 들어오면 **재사용 의심** 으로 판단해 해당 user 의 모든 Refresh 무효화. FE 는 매 refresh 응답에서 새 토큰을 반드시 저장해야 함.
 
 ### OAuth2 로그인 시 비밀번호 자리표시자
 `CustomOAuth2UserService.createNewUser` 가 `password = "KAKAO_USER_PASSWORD"` 평문 저장. **`PasswordEncoder` 거치지 않음** → 일반 로그인 흐름과 호환 안 됨 (의도된 — OAuth 사용자는 비번 로그인 불가). 하지만 같은 컬럼을 공유하므로 UI 비밀번호 변경 화면에 OAuth 사용자가 진입하면 부적절. 분리 처리 필요.
@@ -109,11 +108,8 @@ JWT 인증 + OAuth2(카카오) + 401/403 응답 표준화. Spring Security `Filt
 ### `Role.STUDENT` 강제 매핑
 카카오 신규 가입자는 무조건 STUDENT. 교사 OAuth 가입을 허용하려면 `loadUser` 에서 분기 또는 가입 후 별도 role 변경 흐름 추가.
 
-### `OAuth2AuthenticationSuccessHandler` 의 토큰 URL 노출 (DEV_NOTES 1-2, P0)
-현재 `?accessToken=&refreshToken=` 으로 평문 전송. 브라우저 히스토리·서버 로그에 노출. 프론트와 협의 후:
-- 옵션 1: URL fragment (`#accessToken=...`) — 서버 로그에 안 남음
-- 옵션 2: HttpOnly 쿠키 + CSRF 토큰
-- 옵션 3: 일회용 코드 → POST 교환
+### `OAuth2AuthenticationSuccessHandler` — one-time code 교환 방식 (구현됨)
+이전 평문 토큰 URL 노출(DEV_NOTES 1-2, P0)은 해소됨. 현재는 일회용 `code` 만 URL 에 실리고, FE 가 `POST /api/auth/oauth/exchange` 로 토큰을 교환. 보안 향상을 더 원하면 추후 HttpOnly 쿠키 + CSRF 로 추가 강화 가능.
 
 ### `JwtTokenProvider.validateToken` 에서 `RuntimeException` 그대로 throw
 프로젝트 컨벤션은 `BusinessException` 권장이나, 이 메서드는 `JwtAuthenticationFilter` 가 catch 해서 attribute 로 변환. 직접 호출하는 코드(`AuthService.refreshToken`)도 catch 해서 BusinessException 으로 매핑 — 두 경로 모두 안전.

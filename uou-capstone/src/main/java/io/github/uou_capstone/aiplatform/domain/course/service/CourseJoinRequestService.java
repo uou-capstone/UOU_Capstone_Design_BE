@@ -21,12 +21,14 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
+import io.github.uou_capstone.aiplatform.service.DistributedLockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Set;
 
@@ -42,14 +44,26 @@ public class CourseJoinRequestService {
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
     private final NotificationService notificationService;
+    private final DistributedLockService distributedLockService;
+    private final TransactionTemplate transactionTemplate;
 
-    @Transactional
+    /**
+     * 가입 요청 생성. (student, course) 단위 분산 락으로 동시 요청을 직렬화한다.
+     * 락 → 트랜잭션 → 재검증(Enrollment / BLOCKED / PENDING) 순서로 구성하여,
+     * 트랜잭션이 락 구간 안에서 commit 까지 끝나도록 한다.
+     */
     public CourseJoinRequestResponseDto createJoinRequest(CourseJoinRequestCreateDto dto) {
         Student student = currentUserResolver.getStudent();
-
         Course course = courseRepository.findByInvitationCode(dto.getInvitationCode())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_INVITATION_CODE));
 
+        String lockKey = "course-join-request:" + student.getId() + ":" + course.getId();
+        return distributedLockService.executeWithLock(lockKey, 3, 5, () ->
+                transactionTemplate.execute(status -> persistPendingJoinRequest(student, course))
+        );
+    }
+
+    private CourseJoinRequestResponseDto persistPendingJoinRequest(Student student, Course course) {
         if (enrollmentRepository.existsByStudentAndCourse(student, course)) {
             throw new BusinessException(CommonErrorCode.ENROLLMENT_ALREADY_EXISTS);
         }

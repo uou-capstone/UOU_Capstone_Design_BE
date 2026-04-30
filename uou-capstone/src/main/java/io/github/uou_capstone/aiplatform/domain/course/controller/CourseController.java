@@ -4,11 +4,12 @@ import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsDeleteRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseContentsResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseCreateRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseUpdateRequestDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.service.CourseJoinRequestService;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseService;
-import io.github.uou_capstone.aiplatform.domain.course.service.EnrollmentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -28,7 +29,7 @@ import org.springframework.web.bind.annotation.*;
 public class CourseController {
 
     private final CourseService courseService;
-    private final EnrollmentService enrollmentService;
+    private final CourseJoinRequestService joinRequestService;
 
     @Operation(summary = "강의실 생성", description = "선생님이 강의실(Course)을 생성합니다. 인증코드가 자동으로 생성됩니다.")
     @PostMapping
@@ -81,17 +82,18 @@ public class CourseController {
     }
 
     @Operation(
-            summary = "[Deprecated] 초대 코드 즉시 입장",
-            description = "초대 코드로 즉시 수강 등록(Enrollment)되는 호환용 경로입니다. " +
-                    "신규 승인형 흐름은 POST /api/courses/join-requests 를 사용하세요. " +
-                    "본 경로는 호환성 유지를 위해 남겨졌으며 추후 라운드에서 제거될 수 있습니다.",
+            summary = "[Deprecated] 초대 코드 가입 요청 (호환 경로)",
+            description = "초대 코드 기반 호환용 경로입니다. " +
+                    "내부적으로 승인형 가입 요청(POST /api/courses/join-requests) 흐름으로 위임되며, " +
+                    "교사 승인 시점에만 Enrollment 가 생성됩니다. " +
+                    "신규 클라이언트는 POST /api/courses/join-requests 를 직접 사용하세요.",
             deprecated = true
     )
     @PostMapping("/join")
     @PreAuthorize("hasAuthority('STUDENT')")
     public ResponseEntity<String> joinCourse(@RequestParam("code") String invitationCode) {
-        enrollmentService.enrollCourseByCode(invitationCode);
-        return ResponseEntity.status(HttpStatus.CREATED).body("강의실 입장이 완료되었습니다.");
+        joinRequestService.createJoinRequest(new CourseJoinRequestCreateDto(invitationCode));
+        return ResponseEntity.status(HttpStatus.CREATED).body("가입 요청이 접수되었습니다.");
     }
 
     @Operation(summary = "강의실 정보 수정", description = "선생님이 자신이 개설한 강의실의 제목 또는 설명을 수정합니다.")

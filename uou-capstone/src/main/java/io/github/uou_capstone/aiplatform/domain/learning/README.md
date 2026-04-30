@@ -11,6 +11,7 @@ FastAPI `MergeEduAgent` / `OrchestrationEngine` 과 연동되는 **v3 학습 세
 - **DB 엔티티 없음**. 세션 영속은 FastAPI/Redis 가 책임.
 - v2 시험 생성 API(`/api/exams/*`) 와 완전히 독립 — 외부 호환성 영향 없음.
 - 역할: STUDENT/TEACHER 둘 다 사용. `@PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")`.
+- **강의실 권한 게이트** — 두 엔드포인트 모두 `LearningSessionService.validateLectureAccess(lectureId)` 로 사전 검증. TEACHER 는 해당 강의가 속한 course 의 소유 교사여야 하고, STUDENT 는 해당 course 에 활성 Enrollment 가 있어야 함. 그렇지 않으면 `FORBIDDEN`.
 
 ---
 
@@ -26,7 +27,7 @@ prefix: `/api/learning/sessions`
 
 ### 2. 이벤트 SSE 스트리밍
 - `POST /{sessionId}/event` (Content-Type: `application/json` → 응답 `text/event-stream`)
-- 쿼리: `lectureId` (신규 세션 직후만 필수), `page` / `pageNumber` / `currentPage` (1-based, FastAPI `current_page` 동기화)
+- 쿼리: `lectureId` (**필수** — 권한 검증 + FastAPI `EventRequest.lecture_id` 용), `page` / `pageNumber` / `currentPage` (1-based, FastAPI `current_page` 동기화)
 - 본문(`SessionEventRequest`): `type` + `@JsonAnySetter` 로 임의 필드 자유 추가 → 그대로 FastAPI 페이로드로 변환
 - 내부: `FastApiSessionClient.streamEvent(sessionId, body)` → `POST /api/v3/session/{sessionId}/event/stream` (NDJSON 라인 스트림)
 - NDJSON → SSE 변환: 빈 라인·heartbeat 제외(`NdjsonLineFilters.isHeartbeatLine`) 후 라인을 `event: message` 의 data 로 그대로 래핑

@@ -3,9 +3,15 @@ package io.github.uou_capstone.aiplatform.domain.learning.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
+import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
+import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
+import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import io.github.uou_capstone.aiplatform.util.BridgeResponseLogger;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamSupport;
@@ -40,6 +46,9 @@ public class LearningSessionService {
     private final FastApiSessionClient fastApiSessionClient;
     private final ObjectMapper objectMapper;
     private final MaterialRepository materialRepository;
+    private final LectureRepository lectureRepository;
+    private final EnrollmentRepository enrollmentRepository;
+    private final CurrentUserResolver currentUserResolver;
 
     /**
      * 강의 ID로 학습 세션 조회 또는 신규 생성.
@@ -54,6 +63,8 @@ public class LearningSessionService {
         if (lectureId == null || lectureId <= 0) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "유효한 강의 ID가 필요합니다.");
         }
+
+        validateLectureAccess(lectureId);
 
         // pdfPath가 없으면 강의에 업로드된 최신 PDF 자료 경로를 자동으로 조회
         String effectivePdfPath = pdfPath;
@@ -107,12 +118,15 @@ public class LearningSessionService {
         if (sessionId == null || sessionId <= 0) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "유효한 sessionId가 필요합니다.");
         }
-        if (lectureId != null && lectureId <= 0) {
-            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "lectureId는 양수여야 합니다.");
+        if (lectureId == null || lectureId <= 0) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "lectureId 는 권한 검증을 위해 필수입니다.");
         }
         if (eventRequest == null || eventRequest.getType() == null || eventRequest.getType().isBlank()) {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER, "이벤트 타입은 필수입니다.");
         }
+
+        validateLectureAccess(lectureId);
 
         Integer viewerPage = firstNonNullPositive(currentPage, pageNumber, page);
         log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}, viewerPage={}",
@@ -122,9 +136,7 @@ public class LearningSessionService {
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("type", eventRequest.getType());
-        if (lectureId != null) {
-            requestBody.put("lecture_id", lectureId);
-        }
+        requestBody.put("lecture_id", lectureId);
         requestBody.put("payload", payload);
 
         Flux<String> upstream = fastApiSessionClient.streamEvent(sessionId, requestBody);
@@ -139,6 +151,29 @@ public class LearningSessionService {
             String safeMsg = e.getMessage() != null ? e.getMessage().replace("\"", "'") : "알 수 없는 오류";
             return String.format("{\"type\":\"error\",\"message\":\"%s\"}", safeMsg);
         });
+    }
+
+    /**
+     * 강의실 접근 권한 검증.
+     * - TEACHER 는 해당 강의가 속한 course 의 소유 교사여야 한다.
+     * - STUDENT 는 해당 course 에 활성 Enrollment 가 있어야 한다.
+     * 둘 다 아니면 FORBIDDEN.
+     */
+    void validateLectureAccess(Long lectureId) {
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
+        Course course = lecture.getCourse();
+
+        User currentUser = currentUserResolver.getUser();
+
+        boolean isTeacherOfCourse = currentUser.getTeacher() != null
+                && currentUser.getTeacher().getId().equals(course.getTeacher().getId());
+        boolean isStudentEnrolled = currentUser.getStudent() != null
+                && enrollmentRepository.existsByStudentAndCourse(currentUser.getStudent(), course);
+
+        if (!isTeacherOfCourse && !isStudentEnrolled) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
     }
 
     /** 쿼리 파라미터 여러 별칭 중 첫 유효값(양의 정수) */

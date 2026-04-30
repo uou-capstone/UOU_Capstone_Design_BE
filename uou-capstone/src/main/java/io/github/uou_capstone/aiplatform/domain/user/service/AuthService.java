@@ -67,16 +67,16 @@ public class AuthService {
         if (requestDto.getRole() == Role.STUDENT) {
             Student student = Student.builder()
                     .user(savedUser)
-                    .grade(requestDto.getGrade() != null ? requestDto.getGrade() : 0)
-                    .classNumber(requestDto.getClassNumber() != null ? requestDto.getClassNumber() : "반 미지정")
+                    .grade(requestDto.getGrade())
+                    .classNumber(requestDto.getClassNumber())
                     .build();
             studentRepository.save(student);
 
         } else if (requestDto.getRole() == Role.TEACHER) {
             Teacher teacher = Teacher.builder()
                     .user(savedUser)
-                    .schoolName(requestDto.getSchoolName() != null ? requestDto.getSchoolName() : "학교 미지정")
-                    .department(requestDto.getDepartment() != null ? requestDto.getDepartment() : "학과 미지정")
+                    .schoolName(requestDto.getSchoolName())
+                    .department(requestDto.getDepartment())
                     .build();
             teacherRepository.save(teacher);
 

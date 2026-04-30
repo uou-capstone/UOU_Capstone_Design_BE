@@ -1119,3 +1119,87 @@ Flyway 미사용. `ddl-auto=create`(local) / `update`(prod)로 `notifications` �
   - `domain/course/service/CourseJoinRequestService.java` — `getMyJoinRequests` + approve/reject/block 알림 발행 wiring
   - `domain/course/controller/CourseJoinRequestController.java` — `GET /api/courses/join-requests/me` 추가
   - `FRONTEND_V2_V3_API.md` — 학생 상태 조회 / 알림 API 섹션 추가
+
+---
+
+## [2026-05-01] 보안·가입·세션 안정화 — learning 권한 게이트 + join 우회 차단 + PENDING 동시성 + signup 검증
+
+### 배경
+
+`feat/v3-springboot` 의 기능은 거의 완성됐지만 다음 5건의 보안/정합성 구멍이 남아있었다.
+
+1. **learning 세션 API 권한 게이트 누락** — `LearningSessionController` 의 두 엔드포인트는 `@PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")` 만 검사. 학생이 자기가 수강하지 않은 강의실의 `lectureId` 로도 세션을 만들 수 있었다.
+2. **deprecated `/api/courses/join?code=` 가 즉시 Enrollment 생성** — 승인형 가입(`CourseJoinRequest`) 흐름을 우회하는 역방향 경로.
+3. **`CourseJoinRequest` 동시성 미방어** — exists+save 구조라 동시 요청 시 PENDING 중복 가능.
+4. **회원가입 입력 검증 부재** — `AuthService.signup()` 이 role 별 필수 필드를 검사하지 않고 `"반 미지정"` / `"학교 미지정"` 같은 더미 문자열을 강제 주입.
+5. **테스트 부재** — `course/`, `user/`, `notification/`, `learning/service` 테스트 디렉토리 자체가 없었다.
+
+### 변경
+
+**1) learning 세션 권한 게이트**
+- `LearningSessionService.validateLectureAccess(Long lectureId)` 패키지-private 메서드 신설.
+- `LectureRepository.findByIdWithCourse` (기존 JOIN FETCH 메서드) + `EnrollmentRepository.existsByStudentAndCourse` 로 권한 검증.
+- TEACHER 는 강의가 속한 course 의 소유 교사여야 함, STUDENT 는 활성 Enrollment 가 있어야 함. 둘 다 아니면 `BusinessException(FORBIDDEN)`.
+- `getOrCreateSession()` / `streamSessionEvent()` 진입부에서 호출.
+- 이벤트 API 의 `lectureId` 쿼리 파라미터를 `required = true` 로 변경 (권한 검증 + FastAPI `EventRequest.lecture_id` 양쪽에 필요).
+
+**2) deprecated `/api/courses/join` 위임 전환**
+- `CourseController.joinCourse(...)` 가 `enrollmentService.enrollCourseByCode()` 대신 `joinRequestService.createJoinRequest(new CourseJoinRequestCreateDto(invitationCode))` 호출.
+- 응답 메시지: `"가입 요청이 접수되었습니다."`. 이미 등록 / BLOCKED / PENDING 분기는 `CourseJoinRequestService` 의 기존 분기와 동일.
+- `CourseJoinRequestCreateDto` 에 `@JsonCreator` 생성자 추가 — Jackson 역직렬화 + 호환 컨트롤러에서의 직접 생성 양쪽 지원.
+- `EnrollmentService.enrollCourseByCode()` 는 호출처가 사라졌지만 즉시 삭제하지 않고 다음 라운드에 정리.
+
+**3) CourseJoinRequest 동시성 방어**
+- `CourseJoinRequestService.createJoinRequest` 를 **lock → transaction → 재검증 → 저장** 구조로 재구성.
+- `DistributedLockService.executeWithLock("course-join-request:{studentId}:{courseId}", 3, 5, ...)` 로 (student, course) 단위 직렬화.
+- 락 안에서 `TransactionTemplate.execute(...)` 로 트랜잭션 commit 까지 끝내기 — 단순 `@Transactional` 만 쓰면 commit 전에 락이 풀려 중복 PENDING 이 새는 시나리오 차단.
+- 락 안 재검증: Enrollment / BLOCKED / PENDING 순.
+- `TransactionTemplate` 빈 등록을 위해 `config/TransactionConfig.java` 신설.
+
+**4) Signup 입력 검증**
+- `SignUpRequestDto` 에 클래스 레벨 `@AssertTrue` 메서드 2개:
+  - `isStudentFieldsValid()` — STUDENT 면 `grade != null && classNumber 비어있지 않음`
+  - `isTeacherFieldsValid()` — TEACHER 면 `schoolName`/`department` 둘 다 채워져 있음
+- `AuthService.signup()` 의 `?:` 더미 폴백 (`grade ?: 0`, `?: "반 미지정"` 등) 전부 삭제. 검증 통과한 값을 그대로 저장.
+
+**5) 테스트**
+- `LearningSessionAuthorizationTest` — 교사 소유/타교사/수강 학생/비수강 학생/존재하지 않는 강의 5케이스
+- `CourseJoinRequestServiceTest` — 최초 생성 / Enrollment 중복 / BLOCKED / PENDING 중복 / REJECTED 후 재요청 허용 / 승인·거절·차단 알림. 락+트랜잭션은 inline 실행하도록 stub
+- `NotificationServiceTest` — save / unread count / markAsRead (정상·404) / markAllAsRead / streamRegistry push
+- `CourseControllerJoinDelegationTest` — deprecated `/join` 이 `CourseJoinRequestService` 로 위임되는지
+
+### 설계 결정
+
+| 결정 | 사유 |
+|---|---|
+| 권한 검증을 `LearningSessionService` 내부 메서드로 두고 `LectureService` 호출 안 함 | `LectureService` 는 의존성이 8+개로 무거움. 단순 검증을 위해 cross-domain 강결합 추가는 과함. 로직 자체는 10줄. |
+| 락 → 트랜잭션 (역순 X) | 트랜잭션이 락보다 먼저 시작되면 commit 전에 락이 풀려 동시 요청이 직전 commit 을 보지 못함. `TransactionTemplate` 으로 commit 까지 락 안에서 완료. |
+| `EnrollmentService.enrollCourseByCode()` 즉시 삭제 안 함 | deprecated 경로가 위임으로 전환됐으므로 호출처가 사라졌지만, 안전을 위해 후속 PR 에서 grep 으로 호출처 0 확인 후 제거 |
+| `lectureId` 이벤트 API 필수화 | 기존 `required=false` 였으나 권한 검증의 단일 진입점이 필요. FE 가 이미 보내고 있다는 사용자 명시. |
+| DB 의 `"반 미지정"` 같은 더미 데이터 마이그레이션 안 함 | 이번 라운드는 신규 가입 입력 차단까지. 기존 데이터 정리는 별도 데이터 작업 |
+
+### 보류 (다음 라운드)
+
+- `EnrollmentService.enrollCourseByCode()` 완전 삭제
+- 멀티 인스턴스 SSE 알림 브로드캐스트 (저장형 알림이 복구 수단)
+- v1 legacy AI 흐름의 권한 게이트 (이번 라운드는 v3 learning 만)
+- 기존 DB 의 더미 문자열 마이그레이션
+
+### 관련 파일
+
+- 신규:
+  - `config/TransactionConfig.java`
+  - `src/test/.../domain/learning/service/LearningSessionAuthorizationTest.java`
+  - `src/test/.../domain/course/service/CourseJoinRequestServiceTest.java`
+  - `src/test/.../domain/notification/service/NotificationServiceTest.java`
+  - `src/test/.../domain/course/controller/CourseControllerJoinDelegationTest.java`
+- 변경:
+  - `domain/learning/service/LearningSessionService.java` — `validateLectureAccess` + 진입부 호출 + `lectureId` 필수화
+  - `domain/learning/controller/LearningSessionController.java` — 이벤트 API `lectureId` `required = true`
+  - `domain/course/controller/CourseController.java` — deprecated `/join` 을 `CourseJoinRequestService` 로 위임
+  - `domain/course/service/CourseJoinRequestService.java` — lock → transaction → 재검증 구조로 재구성
+  - `domain/course/dto/CourseJoinRequestCreateDto.java` — `@JsonCreator` 생성자 추가
+  - `domain/user/dto/SignUpRequestDto.java` — role 별 `@AssertTrue` 검증
+  - `domain/user/service/AuthService.java` — 더미 폴백 제거
+  - 도메인 README 4건 (user/course/security/learning) — refresh 회전·OAuth one-time code·deprecated join·learning 게이트 정정
+
