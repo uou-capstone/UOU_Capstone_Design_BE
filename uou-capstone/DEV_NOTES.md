@@ -872,3 +872,171 @@ sudo -n systemctl reload nginx
 - 신규: `common/dto/PageResponse.java`, `common/web/PageableSupport.java`, `security/jwt/RefreshTokenStore.java`, `security/oauth/OAuthExchangeStore.java`, `domain/user/dto/OAuthExchangeRequestDto.java`, `util/sse/{SseEventNames,SseStreamPolicy,SseStreamSupport}.java`, `domain/course/report/dto/{StudentReportListItem,StudentReportDetailResponse}.java`
 - 변경: `security/jwt/JwtTokenProvider.java`, `security/oauth/OAuth2AuthenticationSuccessHandler.java`, `domain/user/service/AuthService.java`, `domain/user/controller/AuthController.java`, `domain/course/{controller/CourseController,service/CourseService}.java`, `domain/course/report/{controller/CourseReportController,service/CourseStudentReportService}.java`, `domain/learning/service/LearningSessionService.java`, `domain/exam/controller/ExamGenerationStreamController.java`, `domain/material/generation/controller/MaterialGenerationStreamController.java`
 - 삭제: `domain/course/report/dto/{StudentReportCardDto,CourseStudentReportListResponse,CourseStudentReportDetailResponse}.java`
+
+---
+
+## [2026-04-30] 학생 강의실 입장 흐름 단일화 — 초대코드 단일 경로
+
+### 증상
+
+학생이 강의실에 입장하는 경로가 두 개로 이원화되어 있었다.
+
+- `POST /api/courses/{courseId}/enroll` — 강의실 ID 기반 (`enrollCourse(Long)`)
+- `POST /api/courses/join?code={invitationCode}` — 초대코드 기반 (`enrollCourseByCode(String)`)
+
+ID 기반 경로는 학생이 **강의실 ID만 알면 누구나 임의의 강의실에 등록**할 수 있어
+초대 모델에 어긋났다. 또 FE/QA 가 두 경로 중 어느 쪽이 정식 계약인지 판단하기 어려운 상태였고,
+`course/README.md` 에는 "구버전, 유지" 로 표시된 채 코드만 살아 있는 모호한 상태였다.
+
+### 원인
+
+초기 구현 시점에는 `enrollCourse(Long)` 만 존재했고, 이후 초대 모델로 전환하면서 `enrollCourseByCode(String)` 가 추가됐다. 새 경로 도입 시 기존 ID 기반 경로를 정리하지 않고 "일단 둠" 주석과 함께 남겨두면서 두 경로가 공존하게 되었다.
+
+### 수정 방법
+
+ID 기반 입장 경로를 컨트롤러·서비스 양쪽에서 완전히 제거하고, 초대코드 기반 경로 하나만 남겼다.
+
+```java
+// CourseController — 매핑 1개 + 주석 라인 제거
+// (제거됨)
+// @PostMapping("/{courseId}/enroll")
+// public ResponseEntity<String> enrollCourse(@PathVariable Long courseId) { ... }
+
+// 유지
+@PostMapping("/join")
+@PreAuthorize("hasAuthority('STUDENT')")
+public ResponseEntity<String> joinCourse(@RequestParam("code") String invitationCode) {
+    enrollmentService.enrollCourseByCode(invitationCode);
+    return ResponseEntity.status(HttpStatus.CREATED).body("강의실 입장이 완료되었습니다.");
+}
+```
+
+```java
+// EnrollmentService — enrollCourse(Long) 메서드 전체 제거
+// enrollCourseByCode(String) 만 남음
+```
+
+### 계약 영향
+
+| 상황 | 예외 코드 | HTTP |
+|---|---|---|
+| 잘못된 초대코드 | `INVALID_INVITATION_CODE` | 400 |
+| 이미 수강 중 | `DUPLICATE_RESOURCE` | 409 |
+| 제거된 경로 호출 | (Spring 기본) Not Found | 404 |
+
+`Course.invitationCode` 필드, `CourseService.createCourse()` UUID 자동 발급, `CourseResponseDto.invitationCode`
+응답 노출은 모두 그대로다. 선생님이 강의실 생성 시 자동 발급된 코드를 학생에게 공유하는 UX 는 동일하게 유지된다.
+
+DB 마이그레이션은 없다. 기존 `enrollments` 데이터는 입장 경로와 무관하게 `(student, course)` 유니크 제약만으로 동작하므로 그대로 유효하다.
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/controller/CourseController.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/service/EnrollmentService.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/README.md`
+
+---
+
+## [2026-04-30] 강의실 승인형 등록 도입 (CourseJoinRequest 1단계)
+
+### 배경
+
+기존 학생 입장 흐름은 초대 코드 입력 → 즉시 Enrollment 생성이었다. 교사가 누가 들어왔는지 관여할 수 없고, 코드를 알면 누구나 등록되는 구조라 "교사 승인 후 등록" 모델이 필요했다.
+
+이번 라운드는 그 1단계 — **course 도메인의 승인형 등록(CourseJoinRequest)** 만 구현한다. 2단계(learning 세션 입장 토큰 게이트)는 별도 라운드.
+
+### 1단계 핵심 변경
+
+#### 신규 도메인
+
+`CourseJoinRequest` 엔티티 + `CourseJoinRequestStatus` enum (`PENDING`/`APPROVED`/`REJECTED`/`BLOCKED`).
+`Course` 엔티티에 `Set<CourseJoinRequest> joinRequests` 컬렉션 추가 (`cascade=ALL`, `orphanRemoval=true`) — 강의실 삭제 시 자동 정리.
+
+```java
+@Entity
+@Table(name = "course_join_requests",
+        indexes = {
+                @Index(name = "idx_join_request_course_status", columnList = "course_id, status"),
+                @Index(name = "idx_join_request_student_course", columnList = "student_id, course_id")
+        })
+public class CourseJoinRequest extends BaseTimeEntity {
+    // id, student, course, status (PENDING으로 시작)
+    public void approve() { ... }
+    public void reject()  { ... }
+    public void block()   { ... }
+}
+```
+
+DB 유니크 제약은 **두지 않음**. `(student, course, status)` 같은 제약을 걸면 REJECTED → PENDING → REJECTED 반복 정책과 충돌. 중복 PENDING 차단은 서비스 레이어의 `existsByStudentAndCourseAndStatus`로 처리.
+
+#### 신규 API (`CourseJoinRequestController`)
+
+| 메서드/경로 | 권한 | 동작 |
+|---|---|---|
+| `POST /api/courses/join-requests` | STUDENT | body `{ invitationCode }` → PENDING 생성 |
+| `GET /api/courses/{courseId}/join-requests?status=PENDING` | TEACHER | PageResponse, 기본 createdAt,desc |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/approve` | TEACHER | Enrollment 생성 + APPROVED |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/reject` | TEACHER | REJECTED |
+| `POST /api/courses/{courseId}/join-requests/{requestId}/block` | TEACHER | BLOCKED |
+
+#### 학생 요청 검증 순서 (서비스 레이어)
+
+1. invitationCode → course 조회 (없으면 `INVALID_INVITATION_CODE` 400)
+2. 이미 Enrollment 있음 → `ENROLLMENT_ALREADY_EXISTS` (409)
+3. BLOCKED 이력 있음 → `JOIN_REQUEST_BLOCKED` (403)
+4. PENDING 이력 있음 → `JOIN_REQUEST_PENDING_EXISTS` (409)
+5. REJECTED 이력만 있음 → 새 PENDING 생성 허용 (재요청)
+
+#### 교사 처리 검증
+
+- 본인 소유 강의실인지 확인 (`course.teacher.id == currentTeacher.id`) — 아니면 `FORBIDDEN`
+- requestId가 해당 courseId 소속 + 상태 PENDING — 아니면 `JOIN_REQUEST_NOT_FOUND` 또는 `JOIN_REQUEST_ALREADY_PROCESSED`
+- approve 시: Enrollment가 이미 있으면 요청만 APPROVED, 없으면 새로 생성 (이중 안전망)
+
+#### 신규 에러 코드 (`CommonErrorCode`)
+
+| 코드 | HTTP | code |
+|---|---|---|
+| `JOIN_REQUEST_BLOCKED` | 403 | 4031 |
+| `JOIN_REQUEST_NOT_FOUND` | 404 | 4053 |
+| `JOIN_REQUEST_PENDING_EXISTS` | 409 | 4093 |
+| `JOIN_REQUEST_ALREADY_PROCESSED` | 409 | 4094 |
+| `ENROLLMENT_ALREADY_EXISTS` | 409 | 4095 |
+
+#### 호환 계층
+
+기존 `POST /api/courses/join?code=...`는 **그대로 유지**(즉시 Enrollment 생성). FE 전환 부담을 줄이려는 결정. Swagger `@Operation(deprecated = true)` 마킹 + 설명에 "신규 승인형 흐름은 /api/courses/join-requests 사용" 명시.
+
+#### Repository 메서드
+
+- `existsByStudentAndCourseAndStatus(Student, Course, Status)` — 중복 PENDING/BLOCKED 차단용
+- `findByCourseIdAndStatusWithStudent(courseId, status, pageable)` — JOIN FETCH `r.student JOIN FETCH s.user`로 N+1 방지. `countQuery`를 별도 명시해 페이지 카운트 정합성 확보 (fetch join은 카운트 쿼리에 포함하면 부적절)
+- `findByIdAndCourseId(Long, Long)` — 승인/거절/차단 시 path 일관성 검증
+
+### 보류 (다음 라운드)
+
+- **2단계**: lectureId 기반 세션 입장 토큰 회전 게이트 (`POST /api/learning/sessions/{lectureId}` 앞단)
+- 학생 본인의 PENDING/REJECTED/BLOCKED 상태 조회 API — 폴링 필요해지면 추가
+- 교사 → 학생 승인 알림 (notification 인프라 부재)
+- 호환 경로(`POST /api/courses/join?code=`) 제거 — FE 전환 완료 후
+
+### DB 마이그레이션
+
+Flyway 미사용. `ddl-auto=create`(local) / `update`(prod)로 `course_join_requests` 테이블 자동 생성. 인덱스 2개(`idx_join_request_course_status`, `idx_join_request_student_course`)는 엔티티 `@Index`로 정의.
+
+### 관련 파일
+
+- 신규:
+  - `domain/course/entity/CourseJoinRequest.java`
+  - `domain/course/entity/CourseJoinRequestStatus.java`
+  - `domain/course/repository/CourseJoinRequestRepository.java`
+  - `domain/course/service/CourseJoinRequestService.java`
+  - `domain/course/controller/CourseJoinRequestController.java`
+  - `domain/course/dto/CourseJoinRequestCreateDto.java`
+  - `domain/course/dto/CourseJoinRequestResponseDto.java`
+  - `domain/course/dto/CourseJoinRequestListItemDto.java`
+- 변경:
+  - `domain/course/entity/Course.java` — `joinRequests` 컬렉션 추가
+  - `domain/course/controller/CourseController.java` — `/join` 핸들러 `@Operation(deprecated = true)` 마킹
+  - `common/error/CommonErrorCode.java` — 5개 코드 추가
+  - `domain/course/README.md` — 가입 요청 흐름 섹션 추가, 주요 파일 갱신

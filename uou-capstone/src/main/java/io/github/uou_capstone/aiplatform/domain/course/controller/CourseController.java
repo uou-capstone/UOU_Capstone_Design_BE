@@ -80,7 +80,13 @@ public class CourseController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "초대 코드로 강의실 입장", description = "학생이 초대 링크 등을 통해 전달받은 코드로 강의실에 입장(수강 신청)합니다.")
+    @Operation(
+            summary = "[Deprecated] 초대 코드 즉시 입장",
+            description = "초대 코드로 즉시 수강 등록(Enrollment)되는 호환용 경로입니다. " +
+                    "신규 승인형 흐름은 POST /api/courses/join-requests 를 사용하세요. " +
+                    "본 경로는 호환성 유지를 위해 남겨졌으며 추후 라운드에서 제거될 수 있습니다.",
+            deprecated = true
+    )
     @PostMapping("/join")
     @PreAuthorize("hasAuthority('STUDENT')")
     public ResponseEntity<String> joinCourse(@RequestParam("code") String invitationCode) {

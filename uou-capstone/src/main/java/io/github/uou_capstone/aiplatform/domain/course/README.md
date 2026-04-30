@@ -7,11 +7,12 @@
 
 ## 개요
 
-- **Course 엔티티**: 한 명의 `Teacher` 가 소유. `title`, `description`, `invitationCode` (UUID, 유니크). 자식: `lectures`, `assessments`, `enrollments` (모두 `cascade=ALL`, `orphanRemoval=true`)
+- **Course 엔티티**: 한 명의 `Teacher` 가 소유. `title`, `description`, `invitationCode` (UUID, 유니크). 자식: `lectures`, `assessments`, `enrollments`, `joinRequests` (모두 `cascade=ALL`, `orphanRemoval=true`)
 - **Enrollment 엔티티**: `(student, course)` 유니크. `EnrollmentStatus` (`ACTIVE`/`COMPLETED`/`DROPPED`) — 현재 항상 `ACTIVE` 로 생성, 상태 전이 미구현
+- **CourseJoinRequest 엔티티**: 학생의 가입 요청. `CourseJoinRequestStatus` (`PENDING`/`APPROVED`/`REJECTED`/`BLOCKED`). DB 유니크 제약 없음 — REJECTED→PENDING→REJECTED 반복 정책과 충돌하기 때문. 중복 차단은 서비스 레이어에서 처리.
 - 역할:
-  - **TEACHER**: 강의실 생성/수정/삭제, 자료·시험 일괄 삭제
-  - **STUDENT**: 강의실 입장 (ID/초대코드), 본인 수강 목록 조회
+  - **TEACHER**: 강의실 생성/수정/삭제, 자료·시험 일괄 삭제, 가입 요청 승인/거절/차단
+  - **STUDENT**: 강의실 가입 요청, 본인 수강 목록 조회
   - **공통**: 상세 + 주차별 자료(`/contents`) 조회
 
 ---
@@ -29,8 +30,32 @@ prefix: `/api/courses`
 | `POST ./{courseId}/contents/delete` | TEACHER | 자료/시험세션/생성세션 ID 리스트 일괄 삭제 |
 | `PUT ./{courseId}` | TEACHER | 제목·설명 수정 |
 | `DELETE ./{courseId}` | TEACHER | 강의실 삭제 + 자식 정리 |
-| `POST ./{courseId}/enroll` | STUDENT | 강의실 ID 기반 수강 신청 (구버전, 유지) |
-| `POST ./join?code=` | STUDENT | 초대코드로 입장 — 권장 경로 |
+| `POST ./join?code=` | STUDENT | **[Deprecated]** 초대코드로 즉시 등록 — 호환용. 신규는 아래 `/join-requests` 사용 |
+| `POST ./join-requests` | STUDENT | 초대코드로 가입 요청 생성 (PENDING) — 권장 경로 |
+| `GET ./{courseId}/join-requests?status=` | TEACHER | 본인 강의실 가입 요청 목록 (기본 PENDING) |
+| `POST ./{courseId}/join-requests/{requestId}/approve` | TEACHER | 승인 — Enrollment 생성 + APPROVED |
+| `POST ./{courseId}/join-requests/{requestId}/reject` | TEACHER | 거절 — REJECTED (학생 재요청 가능) |
+| `POST ./{courseId}/join-requests/{requestId}/block` | TEACHER | 차단 — BLOCKED (학생 재요청 불가) |
+
+---
+
+## 가입 요청 흐름 (CourseJoinRequest)
+
+### 학생 요청 생성 단계 검증
+1. 초대코드로 course 조회 — 없으면 `INVALID_INVITATION_CODE` (400)
+2. 이미 Enrollment 있음 → `ENROLLMENT_ALREADY_EXISTS` (409)
+3. 같은 (student, course)에 BLOCKED 이력 존재 → `JOIN_REQUEST_BLOCKED` (403)
+4. 같은 (student, course)에 PENDING 이력 존재 → `JOIN_REQUEST_PENDING_EXISTS` (409)
+5. REJECTED 이력만 있음 → 새 PENDING 생성 허용
+
+### 교사 처리 단계 검증
+- 본인 소유 강의실인지 검증 (`course.teacher.id == currentTeacher.id`) — 아니면 `FORBIDDEN`
+- requestId가 해당 courseId 소속인지 검증 — 아니면 `JOIN_REQUEST_NOT_FOUND`
+- 상태가 PENDING이 아니면 `JOIN_REQUEST_ALREADY_PROCESSED` (409)
+- approve 시 Enrollment 이미 있으면 요청만 APPROVED로 갱신, 없으면 새로 생성 (이중 안전망)
+
+### DB 유니크 제약 없음 — 의도된 설계
+`(student, course, status)` 같은 유니크 제약을 **두지 않음**. 이유: REJECTED→PENDING→REJECTED 반복 정책과 충돌하기 때문. 중복 PENDING 차단은 `existsByStudentAndCourseAndStatus` 서비스 레벨 검증으로 처리.
 
 ---
 
@@ -81,25 +106,33 @@ courseRepository.delete(course);                                  // cascade: le
 ## 주요 파일
 
 ### Controller
-- `controller/CourseController.java` — 강의실 CRUD + 수강 신청 + contents 조회/삭제
+- `controller/CourseController.java` — 강의실 CRUD + 즉시 등록(deprecated) + contents 조회/삭제
+- `controller/CourseJoinRequestController.java` — 학생 가입 요청 + 교사 승인/거절/차단
 
 ### Service
 - `service/CourseService.java` (266줄) — 강의실 CRUD, contents 집계, 자식 정리 + 도메인 위임 삭제
-- `service/EnrollmentService.java` (70줄) — ID 기반 / 초대코드 기반 수강 신청
+- `service/EnrollmentService.java` — 초대코드 기반 즉시 등록 (호환용)
+- `service/CourseJoinRequestService.java` — 가입 요청 생성/조회/승인/거절/차단 (승인 시 Enrollment 생성)
 
 ### Repository
 - `repository/CourseRepository.java` — `findByTeacherOrderByCreatedAtDesc`, `findByInvitationCode`, `existsByInvitationCode`, `findByIdWithLectures` (LEFT JOIN FETCH)
 - `repository/EnrollmentRepository.java` — `existsByStudentAndCourse` (권한 체크 핵심), `findByStudent`
+- `repository/CourseJoinRequestRepository.java` — `existsByStudentAndCourseAndStatus` (중복 차단), `findByCourseIdAndStatusWithStudent` (목록, JOIN FETCH + countQuery), `findByIdAndCourseId`
 
 ### Entity
-- `entity/Course.java` — `teacher`, `title`, `description`, `invitationCode`(UUID), 자식 컬렉션 3종
+- `entity/Course.java` — `teacher`, `title`, `description`, `invitationCode`(UUID), 자식 컬렉션 4종(lectures/assessments/enrollments/joinRequests)
 - `entity/Enrollment.java` — `(student, course)` 유니크
 - `entity/EnrollmentStatus.java` — ACTIVE/COMPLETED/DROPPED (현재 ACTIVE 만 사용)
+- `entity/CourseJoinRequest.java` — `student`, `course`, `status`. 유니크 제약 없음, 중복 차단은 서비스 레벨
+- `entity/CourseJoinRequestStatus.java` — PENDING/APPROVED/REJECTED/BLOCKED
 
 ### DTO
 - `dto/CourseCreateRequestDto.java`, `CourseUpdateRequestDto.java`, `CourseResponseDto.java`
 - `dto/CourseContentsResponseDto.java`, `LectureContentsDto.java`, `MaterialSummaryDto.java`, `ExamSessionSummaryDto.java` — 주차별 contents 응답
 - `dto/CourseContentsDeleteRequestDto.java` — `materialIds` / `examSessionIds` / `generationSessionIds` 묶어서
+- `dto/CourseJoinRequestCreateDto.java` — 학생 요청 body (`invitationCode`)
+- `dto/CourseJoinRequestResponseDto.java` — 요청 생성 응답 (`requestId`, `courseId`, `courseTitle`, `status`, `requestedAt`)
+- `dto/CourseJoinRequestListItemDto.java` — 교사 목록 항목 (`requestId`, `studentId`, `studentName`, `studentEmail`, `status`, `requestedAt`)
 
 ### 의존 (다른 도메인)
 - `material.service.MaterialService` — 자료 삭제 위임

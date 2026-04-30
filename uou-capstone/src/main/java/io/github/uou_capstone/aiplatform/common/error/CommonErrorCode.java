@@ -27,7 +27,8 @@ public enum CommonErrorCode implements ErrorCode {
     
     // 403 Forbidden
     FORBIDDEN(HttpStatus.FORBIDDEN, "4030", "접근 권한이 없습니다."),
-    
+    JOIN_REQUEST_BLOCKED(HttpStatus.FORBIDDEN, "4031", "해당 강의실 가입이 차단된 사용자입니다."),
+
     // 404 Not Found
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "4040", "요청한 리소스를 찾을 수 없습니다."),
     MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "4041", "존재하지 않는 회원입니다."),
@@ -42,11 +43,15 @@ public enum CommonErrorCode implements ErrorCode {
     SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "4050", "세션을 찾을 수 없습니다."),
     DATA_NOT_FOUND(HttpStatus.NOT_FOUND, "4051", "데이터를 찾을 수 없습니다."),
     TASK_NOT_FOUND(HttpStatus.NOT_FOUND, "4052", "작업을 찾을 수 없습니다."),
+    JOIN_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "4053", "가입 요청을 찾을 수 없습니다."),
 
     // 409 Conflict
     DUPLICATE_EMAIL(HttpStatus.CONFLICT, "4090", "이미 존재하는 이메일입니다."),
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "4091", "이미 존재하는 리소스입니다."),
     OPERATION_IN_PROGRESS(HttpStatus.CONFLICT, "4092", "작업이 이미 진행 중입니다."),
+    JOIN_REQUEST_PENDING_EXISTS(HttpStatus.CONFLICT, "4093", "이미 대기 중인 가입 요청이 있습니다."),
+    JOIN_REQUEST_ALREADY_PROCESSED(HttpStatus.CONFLICT, "4094", "이미 처리된 가입 요청입니다."),
+    ENROLLMENT_ALREADY_EXISTS(HttpStatus.CONFLICT, "4095", "이미 수강 중인 강의실입니다."),
     
     // 429 Too Many Requests
     RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "4290", "요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요."),
