@@ -48,6 +48,9 @@ public class Course extends BaseTimeEntity {
     @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
     private Set<Enrollment> enrollments = new HashSet<>();
 
+    @OneToMany(mappedBy = "course", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<CourseJoinRequest> joinRequests = new HashSet<>();
+
     @Builder
     public Course(Teacher teacher, String title, String description, String invitationCode) {
         this.teacher = teacher;
