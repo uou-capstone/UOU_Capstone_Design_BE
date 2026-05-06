@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.report.controller;
 import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -50,5 +51,17 @@ public class CourseReportController {
             @PathVariable Long studentId
     ) {
         return ResponseEntity.ok(courseStudentReportService.getStudentReportDetail(courseId, studentId));
+    }
+
+    @Operation(summary = "학생 AI 분석 Context",
+            description = "FastAPI POST /api/v3/report/student/analyze 가 입력으로 받는 분석용 Context DTO 를 반환합니다. " +
+                    "Spring 은 FastAPI 를 호출하지 않습니다 — FE/AI 클라이언트가 이 응답을 받아 직접 FastAPI 로 전달합니다.")
+    @GetMapping("/students/{studentId}/ai-context")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<StudentAiReportContextResponse> getStudentAiReportContext(
+            @PathVariable Long courseId,
+            @PathVariable Long studentId
+    ) {
+        return ResponseEntity.ok(courseStudentReportService.getStudentAiReportContext(courseId, studentId));
     }
 }

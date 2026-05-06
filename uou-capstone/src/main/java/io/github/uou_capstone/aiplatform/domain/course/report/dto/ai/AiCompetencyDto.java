@@ -1,0 +1,21 @@
+package io.github.uou_capstone.aiplatform.domain.course.report.dto.ai;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.Builder;
+import lombok.Getter;
+
+import java.util.List;
+
+@Getter
+@Builder
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class AiCompetencyDto {
+    private final String key;
+    private final String label;
+    /** 0.0 ~ 100.0. */
+    private final Double score;
+    private final AiCompetencyLevel level;
+    private final String latestFeedback;
+    private final int evidenceCount;
+    private final List<AiEvidenceItemDto> evidence;
+}
