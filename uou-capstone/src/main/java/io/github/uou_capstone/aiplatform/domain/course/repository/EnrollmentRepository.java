@@ -3,6 +3,8 @@ package io.github.uou_capstone.aiplatform.domain.course.repository;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -23,6 +25,18 @@ public interface EnrollmentRepository extends JpaRepository<Enrollment, Long> {
             WHERE e.course.id = :courseId
             """)
     List<Enrollment> findByCourseIdWithStudentUser(@Param("courseId") Long courseId);
+
+    @Query(value = """
+            SELECT e FROM Enrollment e
+            JOIN FETCH e.student s
+            JOIN FETCH s.user
+            WHERE e.course.id = :courseId
+            """,
+           countQuery = """
+            SELECT COUNT(e) FROM Enrollment e
+            WHERE e.course.id = :courseId
+            """)
+    Page<Enrollment> findByCourseIdWithStudentUser(@Param("courseId") Long courseId, Pageable pageable);
 
     @Query("""
             SELECT e FROM Enrollment e

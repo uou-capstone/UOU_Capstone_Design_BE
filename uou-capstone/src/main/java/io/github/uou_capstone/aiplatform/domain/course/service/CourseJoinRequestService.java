@@ -7,6 +7,8 @@ import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestListItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.JoinRequestBulkRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.JoinRequestBulkResultDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.MyJoinRequestItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequest;
@@ -30,6 +32,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 @Service
@@ -46,6 +50,7 @@ public class CourseJoinRequestService {
     private final NotificationService notificationService;
     private final DistributedLockService distributedLockService;
     private final TransactionTemplate transactionTemplate;
+    private final CourseAuditLogger auditLogger;
 
     /**
      * 가입 요청 생성. (student, course) 단위 분산 락으로 동시 요청을 직렬화한다.
@@ -76,6 +81,14 @@ public class CourseJoinRequestService {
         if (joinRequestRepository.existsByStudentAndCourseAndStatus(
                 student, course, CourseJoinRequestStatus.PENDING)) {
             throw new BusinessException(CommonErrorCode.JOIN_REQUEST_PENDING_EXISTS);
+        }
+
+        // 과거에 APPROVED 또는 REJECTED 이력이 있는 학생이 다시 들어오는 경우 — 재가입 감사 로그.
+        boolean hadHistory = joinRequestRepository.existsByStudentIdAndCourseIdAndStatusIn(
+                student.getId(), course.getId(),
+                Set.of(CourseJoinRequestStatus.APPROVED, CourseJoinRequestStatus.REJECTED));
+        if (hadHistory) {
+            auditLogger.studentRejoined(course.getId(), student.getId());
         }
 
         CourseJoinRequest saved = joinRequestRepository.save(
@@ -117,7 +130,70 @@ public class CourseJoinRequestService {
     public void approveJoinRequest(Long courseId, Long requestId) {
         Course course = loadOwnedCourse(courseId);
         CourseJoinRequest request = loadPendingRequest(courseId, requestId);
+        approveInternal(course, request);
+    }
 
+    @Transactional
+    public void rejectJoinRequest(Long courseId, Long requestId) {
+        Course course = loadOwnedCourse(courseId);
+        CourseJoinRequest request = loadPendingRequest(courseId, requestId);
+        rejectInternal(course, request);
+    }
+
+    @Transactional
+    public void blockJoinRequest(Long courseId, Long requestId) {
+        Course course = loadOwnedCourse(courseId);
+        CourseJoinRequest request = loadPendingRequest(courseId, requestId);
+        request.block();
+        notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_BLOCKED, "강의실 가입 차단",
+                "%s 강의실에서 차단되었습니다.".formatted(course.getTitle()));
+        auditLogger.joinBlocked(course.getId(), request.getStudent().getId(),
+                currentUserResolver.getUser().getId());
+    }
+
+    /**
+     * 가입 요청 일괄 승인. 각 요청은 개별 트랜잭션으로 처리되어 한 건 실패가 다른 건을 막지 않는다.
+     * 학기 초 대량 승인 처리에 사용한다.
+     */
+    public JoinRequestBulkResultDto approveJoinRequestsBulk(Long courseId, JoinRequestBulkRequestDto dto) {
+        return processBulk(courseId, dto, this::approveInternal);
+    }
+
+    /**
+     * 가입 요청 일괄 거절. 각 요청은 개별 트랜잭션으로 처리된다.
+     */
+    public JoinRequestBulkResultDto rejectJoinRequestsBulk(Long courseId, JoinRequestBulkRequestDto dto) {
+        return processBulk(courseId, dto, this::rejectInternal);
+    }
+
+    private JoinRequestBulkResultDto processBulk(Long courseId,
+                                                 JoinRequestBulkRequestDto dto,
+                                                 BulkAction action) {
+        // 권한 체크는 매 요청마다 다시 일어나지만, 한 번 미리 검증해 잘못된 courseId 일 때 빠르게 끊는다.
+        loadOwnedCourse(courseId);
+
+        List<JoinRequestBulkResultDto.Item> items = new ArrayList<>(dto.getRequestIds().size());
+        for (Long requestId : dto.getRequestIds()) {
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    Course course = loadOwnedCourse(courseId);
+                    CourseJoinRequest request = loadPendingRequest(courseId, requestId);
+                    action.run(course, request);
+                });
+                items.add(JoinRequestBulkResultDto.Item.success(requestId));
+            } catch (BusinessException ex) {
+                items.add(JoinRequestBulkResultDto.Item.failure(requestId, ex.getErrorCode().getCode()));
+            }
+        }
+        return new JoinRequestBulkResultDto(items);
+    }
+
+    @FunctionalInterface
+    private interface BulkAction {
+        void run(Course course, CourseJoinRequest request);
+    }
+
+    private void approveInternal(Course course, CourseJoinRequest request) {
         if (!enrollmentRepository.existsByStudentAndCourse(request.getStudent(), course)) {
             enrollmentRepository.save(
                     Enrollment.builder()
@@ -129,24 +205,16 @@ public class CourseJoinRequestService {
         request.approve();
         notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_APPROVED, "강의실 가입 승인",
                 "%s 강의실 가입이 승인되었습니다.".formatted(course.getTitle()));
+        auditLogger.joinApproved(course.getId(), request.getStudent().getId(),
+                currentUserResolver.getUser().getId());
     }
 
-    @Transactional
-    public void rejectJoinRequest(Long courseId, Long requestId) {
-        Course course = loadOwnedCourse(courseId);
-        CourseJoinRequest request = loadPendingRequest(courseId, requestId);
+    private void rejectInternal(Course course, CourseJoinRequest request) {
         request.reject();
         notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_REJECTED, "강의실 가입 거절",
                 "%s 강의실 가입이 거절되었습니다.".formatted(course.getTitle()));
-    }
-
-    @Transactional
-    public void blockJoinRequest(Long courseId, Long requestId) {
-        Course course = loadOwnedCourse(courseId);
-        CourseJoinRequest request = loadPendingRequest(courseId, requestId);
-        request.block();
-        notifyJoinRequestProcessed(request, NotificationType.COURSE_JOIN_BLOCKED, "강의실 가입 차단",
-                "%s 강의실에서 차단되었습니다.".formatted(course.getTitle()));
+        auditLogger.joinRejected(course.getId(), request.getStudent().getId(),
+                currentUserResolver.getUser().getId());
     }
 
     private void notifyJoinRequestProcessed(CourseJoinRequest request,

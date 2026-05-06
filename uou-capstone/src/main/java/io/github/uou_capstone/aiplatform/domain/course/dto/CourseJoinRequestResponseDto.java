@@ -5,6 +5,8 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequestS
 import lombok.Getter;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 
 @Getter
 public class CourseJoinRequestResponseDto {
@@ -13,13 +15,17 @@ public class CourseJoinRequestResponseDto {
     private final Long courseId;
     private final String courseTitle;
     private final CourseJoinRequestStatus status;
-    private final LocalDateTime requestedAt;
+    private final OffsetDateTime requestedAt;
 
     public CourseJoinRequestResponseDto(CourseJoinRequest request) {
         this.requestId = request.getId();
         this.courseId = request.getCourse().getId();
         this.courseTitle = request.getCourse().getTitle();
         this.status = request.getStatus();
-        this.requestedAt = request.getCreatedAt();
+        this.requestedAt = toUtcOffset(request.getCreatedAt());
+    }
+
+    private static OffsetDateTime toUtcOffset(LocalDateTime value) {
+        return value == null ? null : value.atOffset(ZoneOffset.UTC);
     }
 }

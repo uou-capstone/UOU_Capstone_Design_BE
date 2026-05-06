@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface CourseJoinRequestRepository extends JpaRepository<CourseJoinRequest, Long> {
@@ -22,6 +23,14 @@ public interface CourseJoinRequestRepository extends JpaRepository<CourseJoinReq
     boolean existsByStudentAndCourseAndStatusIn(Student student,
                                                 Course course,
                                                 Collection<CourseJoinRequestStatus> statuses);
+
+    List<CourseJoinRequest> findByStudentAndCourseAndStatus(Student student,
+                                                            Course course,
+                                                            CourseJoinRequestStatus status);
+
+    boolean existsByStudentIdAndCourseIdAndStatusIn(Long studentId,
+                                                    Long courseId,
+                                                    Collection<CourseJoinRequestStatus> statuses);
 
     @Query(value = """
             SELECT r FROM CourseJoinRequest r
