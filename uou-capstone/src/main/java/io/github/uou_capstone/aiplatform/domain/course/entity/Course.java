@@ -29,11 +29,13 @@ public class Course extends BaseTimeEntity {
     private Teacher teacher;
 
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 255)
     private String title;
 
-    @Lob
-    @Column
+    // 긴 강의실 설명을 허용하기 위해 MySQL LONGTEXT로 명시.
+    // 주의: ddl-auto:update는 신규 테이블에만 LONGTEXT를 적용하며, 기존 운영 DB의 컬럼 타입은
+    // 변경하지 않는다. 기 배포 환경에서는 별도 ALTER TABLE 적용이 필요하다 (DEV_NOTES 참고).
+    @Column(columnDefinition = "LONGTEXT")
     private String description;
 
     @Column(name = "invitation_code", nullable = false, unique = true)

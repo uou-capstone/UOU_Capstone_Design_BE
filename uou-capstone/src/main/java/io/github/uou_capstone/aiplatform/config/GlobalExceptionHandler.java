@@ -11,6 +11,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.DataException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -235,7 +237,59 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 9. 나머지 서버 에러 -> 5000번 (서버 오류)
+     * 9. DB 제약 위반 -> 4000번 (BAD_REQUEST)
+     *
+     * - 컬럼 길이 초과 (MysqlDataTruncation: "Data too long for column 'X'")
+     * - NOT NULL 위반, FK/UNIQUE 위반 등
+     *
+     * 운영 DB의 컬럼이 엔티티 정의보다 작은 길이로 남아있을 때 발생하는 500을 막기 위함.
+     * 기존에는 catch-all에서 5000으로 떨어졌으나, 입력 길이 초과는 명백한 클라이언트 잘못이므로 400으로 매핑한다.
+     * root cause는 서버 로그에만 남기고, 응답에는 사용자에게 안전한 고정 메시지를 반환한다.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex,
+                                                                       HttpServletRequest request) {
+        Throwable root = rootCause(ex);
+        String rootMessage = root != null ? root.getMessage() : null;
+        log.warn("[Data Integrity Violation] path={}, rootType={}, rootMessage={}",
+                request.getRequestURI(),
+                root != null ? root.getClass().getName() : "null",
+                rootMessage);
+
+        String message;
+        if (isLengthExceeded(ex, rootMessage)) {
+            message = "입력값이 허용된 길이를 초과했습니다. 입력 길이를 확인해주세요.";
+        } else {
+            message = "요청 데이터가 제약 조건을 위반했습니다.";
+        }
+
+        return ErrorResponse.toResponseEntity(
+                CommonErrorCode.INVALID_PARAMETER, // "4000"
+                message,
+                request.getRequestURI()
+        );
+    }
+
+    private boolean isLengthExceeded(DataIntegrityViolationException ex, String rootMessage) {
+        if (ex.getMostSpecificCause() instanceof DataException) {
+            return true;
+        }
+        if (rootMessage == null) {
+            return false;
+        }
+        return rootMessage.contains("Data too long") || rootMessage.contains("Data truncation");
+    }
+
+    private Throwable rootCause(Throwable ex) {
+        Throwable cause = ex;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    /**
+     * 10. 나머지 서버 에러 -> 5000번 (서버 오류)
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleAllExceptions(Exception ex, HttpServletRequest request) {

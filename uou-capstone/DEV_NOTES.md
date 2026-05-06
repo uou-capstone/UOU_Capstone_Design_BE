@@ -1203,3 +1203,84 @@ Flyway 미사용. `ddl-auto=create`(local) / `update`(prod)로 `notifications` �
   - `domain/user/service/AuthService.java` — 더미 폴백 제거
   - 도메인 README 4건 (user/course/security/learning) — refresh 회전·OAuth one-time code·deprecated join·learning 게이트 정정
 
+---
+
+## [2026-05-06] 강의실 정보 수정 500 — `description` 컬럼 길이 초과 + DB 제약 예외 미처리
+
+### 증상
+
+`PUT /api/courses/{courseId}` 로 긴/여러 줄/특수문자 포함 설명을 저장하려 하면 500 응답.
+운영 로그(예상):
+
+```
+org.springframework.dao.DataIntegrityViolationException
+  → root cause: com.mysql.cj.jdbc.exceptions.MysqlDataTruncation:
+    Data truncation: Data too long for column 'description' at row 1
+```
+
+500이 떨어지는 이유는 두 가지가 동시에 작용:
+
+1. 운영 DB의 `courses.description` 컬럼이 과거 `VARCHAR(255)` 등 짧은 타입으로 남아있음
+   (`@Lob` + `ddl-auto:update` 조합은 신규 테이블에만 LONGTEXT를 적용하고 기존 컬럼 타입은 변경하지 않음)
+2. `GlobalExceptionHandler` 가 `DataIntegrityViolationException` 을 별도 처리하지 않아
+   catch-all(Exception) 로 떨어져 500 으로 변환됨
+
+### 원인 분석
+
+- `Course` 엔티티는 `@Lob @Column private String description;` — Hibernate는 신규 생성 시 LONGTEXT로 만들지만 prod 의 기존 컬럼은 그대로 둔다.
+- `CourseUpdateRequestDto` 에 길이 제약이 없어 컨트롤러 단에서 거대 문자열을 막지 못한다 (`@NotBlank` 만 있음).
+- `GlobalExceptionHandler` 의 마지막 catch-all 핸들러가 `INTERNAL_SERVER_ERROR(5000)` 으로 매핑하므로
+  DB 길이 초과 같은 명백한 클라이언트 입력 오류도 5xx 로 응답된다.
+
+### 수정 방법
+
+1. **DTO validation 보강**
+   - `CourseCreateRequestDto`, `CourseUpdateRequestDto`
+     - `title` : `@NotBlank` + `@Size(max = 255)`
+     - `description` : `@NotBlank` + `@Size(max = 20000)`
+   - 줄바꿈/이모지/특수문자는 그대로 허용 (별도 치환·필터링 없음).
+2. **Course 엔티티 컬럼 정의 명시**
+   - `@Lob @Column` → `@Column(columnDefinition = "LONGTEXT")` 로 교체.
+   - 신규 환경에는 자동으로 LONGTEXT 적용. 기존 운영 DB는 별도 `ALTER TABLE` 필요 (아래 절차 참고).
+3. **GlobalExceptionHandler 보강**
+   - `@ExceptionHandler(DataIntegrityViolationException.class)` 추가.
+   - root cause 가 Hibernate `DataException` 또는 메시지에 `Data too long`/`Data truncation` 포함 시
+     → "입력값이 허용된 길이를 초과했습니다." (HTTP 400, code `4000`)
+   - 그 외 무결성 위반 → "요청 데이터가 제약 조건을 위반했습니다." (HTTP 400, code `4000`)
+   - root cause 는 `log.warn` 으로만 남기고 응답 본문엔 노출하지 않음.
+
+### 운영 DB 보정 절차 (수동)
+
+ddl-auto:update 만으로는 기존 컬럼 타입이 LONGTEXT로 바뀌지 않으므로 배포 후 한 번 실행:
+
+```sql
+-- 1) 현재 상태 확인
+SHOW FULL COLUMNS FROM courses;
+
+-- 2) description 을 LONGTEXT로 (NULL 허용 그대로)
+ALTER TABLE courses MODIFY description LONGTEXT NULL;
+
+-- 3) title 길이가 255 미만이면 명시적으로 맞춰둠
+ALTER TABLE courses MODIFY title VARCHAR(255) NOT NULL;
+
+-- 4) 검증
+SHOW FULL COLUMNS FROM courses;
+```
+
+확인 명령:
+
+```bash
+docker exec -it dev-mysql mysql -u root -p uoucapstone -e "SHOW FULL COLUMNS FROM courses;"
+```
+
+### 관련 파일
+
+- 변경
+  - `domain/course/dto/CourseCreateRequestDto.java` — `@Size` 추가
+  - `domain/course/dto/CourseUpdateRequestDto.java` — `@Size` 추가
+  - `domain/course/entity/Course.java` — `@Lob` → `columnDefinition = "LONGTEXT"`, `title` `length = 255` 명시
+  - `config/GlobalExceptionHandler.java` — `DataIntegrityViolationException` 핸들러 추가
+- 신규 테스트
+  - `src/test/.../domain/course/dto/CourseRequestDtoValidationTest.java`
+  - `src/test/.../config/GlobalExceptionHandlerDataIntegrityTest.java`
+
