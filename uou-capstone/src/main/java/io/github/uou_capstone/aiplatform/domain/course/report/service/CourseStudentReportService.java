@@ -4,6 +4,7 @@ import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
+import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
@@ -19,6 +20,17 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentInfoDto
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.SubmissionSummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiActivitySummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiAssessmentItemDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyLevel;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCourseInfoDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceItemDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiNarrativeDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreSummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiStudentInfoDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
@@ -69,6 +81,11 @@ public class CourseStudentReportService {
     private static final int MAX_EVIDENCE = 10;
     private static final int RECENT_TREND_SIZE = 3;
     private static final int NARRATIVE_LIST_SIZE = 2;
+
+    private static final int MAX_AI_EVIDENCE = 20;
+    private static final double AI_TREND_DELTA = 5.0;
+    private static final double AI_EXCELLENT_THRESHOLD = 90.0;
+    private static final double AI_WEAK_CONCEPT_SCORE_THRESHOLD = 70.0;
 
     private static final double STRONG_THRESHOLD = 85.0;
     private static final double WATCH_THRESHOLD = 70.0;
@@ -180,6 +197,405 @@ public class CourseStudentReportService {
                 .reportStatus(reportStatus.value())
                 .reportWarnings(warnings)
                 .build();
+    }
+
+    // ===========================================================
+    // AI Context — FastAPI POST /api/v3/report/student/analyze 입력 DTO
+    // ===========================================================
+
+    /**
+     * 학생 한 명의 AI 분석용 Context. 기존 상세 리포트와 별도 응답 shape 을 사용한다.
+     *
+     * - Spring 은 FastAPI 를 호출하지 않는다. FastAPI 가 이 DTO 를 받아 자체 분석.
+     * - 권한/소유 검증은 기존 학생 상세 리포트와 동일.
+     */
+    @Transactional(readOnly = true)
+    public StudentAiReportContextResponse getStudentAiReportContext(Long courseId, Long studentId) {
+        Course course = loadCourseAsOwner(courseId);
+
+        Enrollment enrollment = enrollmentRepository
+                .findByCourseIdAndStudentIdWithUser(courseId, studentId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+
+        Student student = enrollment.getStudent();
+        User studentUser = student.getUser();
+
+        List<ExamResult> examResults = examResultRepository
+                .findByCourseIdAndUserIdWithSession(courseId, studentUser.getId());
+        List<Submission> submissions = submissionRepository
+                .findByCourseIdAndStudentIdWithAssessment(courseId, student.getId());
+
+        List<String> warnings = new ArrayList<>();
+
+        ScoreSummaryDto baseScore = computeScoreSummary(examResults);
+        AiScoreSummaryDto scoreSummary = toAiScoreSummary(baseScore, examResults);
+
+        long totalAssessments = assessmentRepository.countByCourse_Id(courseId);
+        AiActivitySummaryDto activitySummary = AiActivitySummaryDto.builder()
+                .totalAssessments(totalAssessments)
+                .submittedCount(submissions.size())
+                .missingCount(Math.max(0L, totalAssessments - submissions.size()))
+                .latestSubmittedAt(submissions.stream()
+                        .map(Submission::getCreatedAt)
+                        .filter(Objects::nonNull)
+                        .max(Comparator.naturalOrder())
+                        .orElse(null))
+                .build();
+
+        List<AiAssessmentItemDto> assessments = buildAiAssessments(courseId, submissions, warnings);
+
+        List<CompetencyDto> baseCompetencies = computeCompetencies(examResults, warnings);
+        List<AiCompetencyDto> competencies = toAiCompetencies(baseCompetencies, examResults);
+
+        List<AiEvidenceItemDto> evidence = buildAiEvidence(examResults, submissions);
+
+        ReportStatus reportStatus = computeReportStatus(examResults.size(), baseScore, baseCompetencies);
+        NarrativeReportDto baseNarrative = buildNarrative(baseScore, baseCompetencies, reportStatus);
+        AiNarrativeDto narrative = AiNarrativeDto.builder()
+                .summary(baseNarrative.getSummary())
+                .strengths(baseNarrative.getStrengths())
+                .weaknesses(baseNarrative.getImprovements())
+                .build();
+
+        return StudentAiReportContextResponse.builder()
+                .course(AiCourseInfoDto.builder()
+                        .courseId(course.getId())
+                        .courseName(course.getTitle())
+                        .teacherId(course.getTeacher() != null ? course.getTeacher().getId() : null)
+                        .build())
+                .student(AiStudentInfoDto.builder()
+                        .studentId(student.getId())
+                        .studentName(studentUser.getFullName())
+                        .enrollmentStatus(enrollment.getStatus() != null ? enrollment.getStatus().name() : null)
+                        .build())
+                .activitySummary(activitySummary)
+                .scoreSummary(scoreSummary)
+                .assessments(assessments)
+                .competencies(competencies)
+                .evidence(evidence)
+                .existingNarrative(narrative)
+                .reportWarnings(warnings)
+                .build();
+    }
+
+    private AiScoreSummaryDto toAiScoreSummary(ScoreSummaryDto base, List<ExamResult> examResults) {
+        Double avg = base.getAverageScorePercent();
+        Double ratio = avg == null ? null : round3(avg / 100.0);
+        List<Double> recentRatio = base.getRecentTrendPercent() == null
+                ? List.of()
+                : base.getRecentTrendPercent().stream()
+                        .map(p -> p == null ? null : round3(p / 100.0))
+                        .filter(Objects::nonNull)
+                        .toList();
+
+        return AiScoreSummaryDto.builder()
+                .averageScore(avg)
+                .averageScoreRatio(ratio)
+                .highestScore(base.getHighestScorePercent())
+                .lowestScore(base.getLowestScorePercent())
+                .recentTrend(recentRatio)
+                .trend(computeTrend(examResults))
+                .build();
+    }
+
+    private AiScoreTrend computeTrend(List<ExamResult> examResults) {
+        List<Double> ascPercents = examResults.stream()
+                .sorted(Comparator.comparing(this::resultTimestamp,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(this::toScorePercent)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ascPercents.size() < 2) {
+            return AiScoreTrend.INSUFFICIENT_DATA;
+        }
+        double delta = ascPercents.get(ascPercents.size() - 1) - ascPercents.get(0);
+        if (delta >= AI_TREND_DELTA) {
+            return AiScoreTrend.IMPROVING;
+        }
+        if (delta <= -AI_TREND_DELTA) {
+            return AiScoreTrend.DECLINING;
+        }
+        return AiScoreTrend.STABLE;
+    }
+
+    private List<AiAssessmentItemDto> buildAiAssessments(Long courseId,
+                                                         List<Submission> studentSubmissions,
+                                                         List<String> warnings) {
+        List<Assessment> all = assessmentRepository.findByCourse_Id(courseId).stream()
+                .sorted(Comparator.comparing(Assessment::getCreatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+
+        Map<Long, Submission> byAssessmentId = studentSubmissions.stream()
+                .filter(s -> s.getAssessment() != null)
+                .collect(Collectors.toMap(
+                        s -> s.getAssessment().getId(),
+                        s -> s,
+                        (a, b) -> a.getCreatedAt() != null && b.getCreatedAt() != null
+                                && a.getCreatedAt().isAfter(b.getCreatedAt()) ? a : b));
+
+        List<AiAssessmentItemDto> items = new ArrayList<>(all.size());
+        for (Assessment assessment : all) {
+            Submission submission = byAssessmentId.get(assessment.getId());
+            if (submission == null) {
+                items.add(AiAssessmentItemDto.builder()
+                        .assessmentId(assessment.getId())
+                        .title(assessment.getTitle())
+                        .submitted(false)
+                        .weakConcepts(List.of())
+                        .build());
+                continue;
+            }
+
+            ExamResult result = submission.getExamResult();
+            BigDecimal score = result != null ? result.getTotalScore() : null;
+            BigDecimal max = result != null ? result.getMaxScore() : null;
+            Double scoreRatio = (score != null && max != null && max.signum() != 0)
+                    ? round3(score.doubleValue() / max.doubleValue())
+                    : null;
+            String feedback = result != null ? result.getOverallFeedback() : null;
+            List<String> weakConcepts = result != null
+                    ? extractWeakConceptsFromExamResult(result, warnings)
+                    : List.of();
+
+            items.add(AiAssessmentItemDto.builder()
+                    .assessmentId(assessment.getId())
+                    .title(assessment.getTitle())
+                    .submitted(true)
+                    .score(score)
+                    .maxScore(max)
+                    .scoreRatio(scoreRatio)
+                    .submittedAt(submission.getCreatedAt())
+                    .feedback(feedback)
+                    .weakConcepts(weakConcepts)
+                    .build());
+        }
+        return items;
+    }
+
+    /**
+     * userFeedbackJson.evaluationItems 중 score &lt; 70 또는 correct == false 인 항목의
+     * evaluationDetails 에서 약점 개념 후보를 best-effort 추출한다.
+     */
+    private List<String> extractWeakConceptsFromExamResult(ExamResult result, List<String> warnings) {
+        Map<String, Object> profile = result.getUserFeedbackJson();
+        if (profile == null) {
+            if (warnings != null) {
+                addWarningOnce(warnings, "feedback_profile_missing");
+            }
+            return List.of();
+        }
+        Object itemsRaw = profile.get("evaluationItems");
+        if (!(itemsRaw instanceof List<?> items)) {
+            if (warnings != null) {
+                addWarningOnce(warnings, "feedback_profile_invalid");
+            }
+            return List.of();
+        }
+
+        LinkedHashMap<String, Boolean> seen = new LinkedHashMap<>();
+        for (Object itemRaw : items) {
+            if (!(itemRaw instanceof Map<?, ?> itemMap)) {
+                continue;
+            }
+            if (!isWeakItem(itemMap)) {
+                continue;
+            }
+            Object detailsRaw = itemMap.get("evaluationDetails");
+            if (!(detailsRaw instanceof Map<?, ?> details)) {
+                continue;
+            }
+            for (String concept : collectConceptCandidates(details)) {
+                if (concept != null && !concept.isBlank()) {
+                    seen.putIfAbsent(concept.trim(), Boolean.TRUE);
+                }
+            }
+        }
+        return new ArrayList<>(seen.keySet());
+    }
+
+    private boolean isWeakItem(Map<?, ?> itemMap) {
+        Object correctRaw = itemMap.get("correct");
+        if (correctRaw instanceof Boolean correct && !correct) {
+            return true;
+        }
+        Double score = extractItemScore(itemMap);
+        return score != null && score < AI_WEAK_CONCEPT_SCORE_THRESHOLD;
+    }
+
+    private List<String> collectConceptCandidates(Map<?, ?> details) {
+        List<String> out = new ArrayList<>();
+        Object weakRaw = details.get("weakConcepts");
+        if (weakRaw instanceof List<?> list) {
+            for (Object v : list) {
+                String s = asString(v);
+                if (s != null) {
+                    out.add(s);
+                }
+            }
+        } else if (weakRaw instanceof String s && !s.isBlank()) {
+            out.add(s);
+        }
+        addIfPresent(out, details, "concept");
+        addIfPresent(out, details, "competency");
+        addIfPresent(out, details, "category");
+        addIfPresent(out, details, "skill");
+        return out;
+    }
+
+    private void addIfPresent(List<String> out, Map<?, ?> details, String key) {
+        String s = asString(details.get(key));
+        if (s != null && !s.isBlank()) {
+            out.add(s);
+        }
+    }
+
+    private List<AiCompetencyDto> toAiCompetencies(List<CompetencyDto> base, List<ExamResult> examResults) {
+        if (base.isEmpty()) {
+            return List.of();
+        }
+        Map<String, List<AiEvidenceItemDto>> evidenceByKey = collectCompetencyEvidence(examResults);
+
+        return base.stream()
+                .map(c -> AiCompetencyDto.builder()
+                        .key(c.getKey())
+                        .label(c.getLabel())
+                        .score(c.getAverageScorePercent())
+                        .level(mapCompetencyLevel(c))
+                        .latestFeedback(c.getLatestFeedback())
+                        .evidenceCount(c.getEvidenceCount())
+                        .evidence(evidenceByKey.getOrDefault(c.getKey(), List.of()))
+                        .build())
+                .toList();
+    }
+
+    private AiCompetencyLevel mapCompetencyLevel(CompetencyDto c) {
+        String status = c.getStatus();
+        Double score = c.getAverageScorePercent();
+        if (CompetencyStatus.INSUFFICIENT_DATA.value().equals(status)) {
+            return AiCompetencyLevel.INSUFFICIENT_DATA;
+        }
+        if (CompetencyStatus.STRONG.value().equals(status)) {
+            return score != null && score >= AI_EXCELLENT_THRESHOLD
+                    ? AiCompetencyLevel.EXCELLENT
+                    : AiCompetencyLevel.GOOD;
+        }
+        if (CompetencyStatus.WATCH.value().equals(status)) {
+            return AiCompetencyLevel.WATCH;
+        }
+        return AiCompetencyLevel.NEEDS_IMPROVEMENT;
+    }
+
+    /**
+     * 역량 키별로 등장한 ExamResult 목록을 evidence 항목으로 누적.
+     * 같은 (competencyKey, examResultId) 쌍이 중복 등장해도 한 번만 들어간다.
+     */
+    private Map<String, List<AiEvidenceItemDto>> collectCompetencyEvidence(List<ExamResult> examResults) {
+        Map<String, LinkedHashMap<Long, AiEvidenceItemDto>> acc = new LinkedHashMap<>();
+
+        for (ExamResult result : examResults) {
+            Map<String, Object> profile = result.getUserFeedbackJson();
+            if (profile == null) continue;
+            Object itemsRaw = profile.get("evaluationItems");
+            if (!(itemsRaw instanceof List<?> items)) continue;
+
+            for (Object itemRaw : items) {
+                if (!(itemRaw instanceof Map<?, ?> itemMap)) continue;
+                if (extractItemScore(itemMap) == null) continue;
+
+                String key = extractCompetencyKey(itemMap);
+                acc.computeIfAbsent(key, k -> new LinkedHashMap<>())
+                        .putIfAbsent(result.getId(), buildExamEvidence(result));
+            }
+        }
+
+        Map<String, List<AiEvidenceItemDto>> out = new LinkedHashMap<>();
+        for (Map.Entry<String, LinkedHashMap<Long, AiEvidenceItemDto>> e : acc.entrySet()) {
+            out.put(e.getKey(), List.copyOf(e.getValue().values()));
+        }
+        return out;
+    }
+
+    private List<AiEvidenceItemDto> buildAiEvidence(List<ExamResult> examResults, List<Submission> submissions) {
+        List<AiEvidenceItemDto> all = new ArrayList<>();
+        for (ExamResult er : examResults) {
+            all.add(buildExamEvidence(er));
+        }
+
+        for (Submission s : submissions) {
+            if (s.getExamResult() != null) {
+                continue; // ExamResult 가 이미 evidence 로 들어가므로 중복 방지
+            }
+            String title = s.getAssessment() != null ? s.getAssessment().getTitle() : "(과제)";
+            String status = s.getStatus() != null ? s.getStatus().name() : "UNKNOWN";
+            all.add(AiEvidenceItemDto.builder()
+                    .type("submission")
+                    .sourceId(s.getId())
+                    .summary("%s 제출 — %s".formatted(title, status))
+                    .rawText("%s 상태 제출".formatted(status))
+                    .occurredAt(s.getCreatedAt())
+                    .build());
+        }
+
+        return all.stream()
+                .sorted(Comparator.comparing(AiEvidenceItemDto::getOccurredAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(MAX_AI_EVIDENCE)
+                .toList();
+    }
+
+    private AiEvidenceItemDto buildExamEvidence(ExamResult result) {
+        String examType = result.getExamSession() != null && result.getExamSession().getExamType() != null
+                ? result.getExamSession().getExamType().name()
+                : null;
+        String lectureTitle = result.getExamSession() != null && result.getExamSession().getLecture() != null
+                ? result.getExamSession().getLecture().getTitle()
+                : null;
+        Double percent = toScorePercent(result);
+
+        StringBuilder summary = new StringBuilder();
+        if (lectureTitle != null) summary.append(lectureTitle).append(" ");
+        if (examType != null) summary.append(examType).append(" ");
+        summary.append("응시");
+        if (percent != null) summary.append(" — %.1f%%".formatted(percent));
+
+        return AiEvidenceItemDto.builder()
+                .type("exam")
+                .sourceId(result.getId())
+                .summary(summary.toString().trim())
+                .rawText(buildExamRawText(result))
+                .occurredAt(resultTimestamp(result))
+                .build();
+    }
+
+    private String buildExamRawText(ExamResult result) {
+        Map<String, Object> profile = result.getUserFeedbackJson();
+        if (profile != null) {
+            Object itemsRaw = profile.get("evaluationItems");
+            if (itemsRaw instanceof List<?> items) {
+                List<String> feedbacks = new ArrayList<>();
+                for (Object itemRaw : items) {
+                    if (itemRaw instanceof Map<?, ?> itemMap) {
+                        String fb = asString(itemMap.get("feedback"));
+                        if (fb != null && !fb.isBlank()) {
+                            feedbacks.add(fb);
+                        }
+                    }
+                }
+                if (!feedbacks.isEmpty()) {
+                    return String.join("\n", feedbacks);
+                }
+            }
+        }
+        if (result.getOverallFeedback() != null && !result.getOverallFeedback().isBlank()) {
+            return result.getOverallFeedback();
+        }
+        BigDecimal total = result.getTotalScore();
+        BigDecimal max = result.getMaxScore();
+        if (total != null && max != null) {
+            return "%s/%s 점 응시 결과".formatted(total.toPlainString(), max.toPlainString());
+        }
+        return "응시 결과 (피드백 없음)";
     }
 
     // ===========================================================
@@ -698,5 +1114,9 @@ public class CourseStudentReportService {
 
     private double round1(double value) {
         return BigDecimal.valueOf(value).setScale(1, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    private double round3(double value) {
+        return BigDecimal.valueOf(value).setScale(3, RoundingMode.HALF_UP).doubleValue();
     }
 }

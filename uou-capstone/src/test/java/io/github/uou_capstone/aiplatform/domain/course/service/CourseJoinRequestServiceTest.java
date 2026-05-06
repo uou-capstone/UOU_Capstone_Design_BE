@@ -53,6 +53,7 @@ class CourseJoinRequestServiceTest {
     @Mock private NotificationService notificationService;
     @Mock private DistributedLockService distributedLockService;
     @Mock private TransactionTemplate transactionTemplate;
+    @Mock private CourseAuditLogger auditLogger;
 
     @InjectMocks
     private CourseJoinRequestService service;
@@ -60,13 +61,17 @@ class CourseJoinRequestServiceTest {
     private Student student;
     private Teacher teacherOwner;
     private User studentUser;
+    private User teacherUser;
     private Course course;
 
     private static final String INVITATION_CODE = "code-1";
 
     @BeforeEach
     void setUp() {
-        teacherOwner = Teacher.builder().schoolName("s").department("d").build();
+        teacherUser = User.builder().email("teacher@example.com").password("p").fullName("teacher").build();
+        ReflectionTestUtils.setField(teacherUser, "id", 201L);
+
+        teacherOwner = Teacher.builder().schoolName("s").department("d").user(teacherUser).build();
         ReflectionTestUtils.setField(teacherOwner, "id", 10L);
 
         studentUser = User.builder().email("stu@example.com").password("p").fullName("stu").build();
@@ -185,6 +190,7 @@ class CourseJoinRequestServiceTest {
     @Test
     void approveJoinRequest_createsEnrollmentAndNotifies() {
         when(currentUserResolver.getTeacher()).thenReturn(teacherOwner);
+        when(currentUserResolver.getUser()).thenReturn(teacherUser);
         when(courseRepository.findById(50L)).thenReturn(Optional.of(course));
 
         CourseJoinRequest pending = CourseJoinRequest.builder().student(student).course(course).build();
@@ -208,6 +214,7 @@ class CourseJoinRequestServiceTest {
     @Test
     void rejectJoinRequest_marksRejectedAndNotifies() {
         when(currentUserResolver.getTeacher()).thenReturn(teacherOwner);
+        when(currentUserResolver.getUser()).thenReturn(teacherUser);
         when(courseRepository.findById(50L)).thenReturn(Optional.of(course));
 
         CourseJoinRequest pending = CourseJoinRequest.builder().student(student).course(course).build();
@@ -226,6 +233,7 @@ class CourseJoinRequestServiceTest {
     @Test
     void blockJoinRequest_marksBlockedAndNotifies() {
         when(currentUserResolver.getTeacher()).thenReturn(teacherOwner);
+        when(currentUserResolver.getUser()).thenReturn(teacherUser);
         when(courseRepository.findById(50L)).thenReturn(Optional.of(course));
 
         CourseJoinRequest pending = CourseJoinRequest.builder().student(student).course(course).build();
