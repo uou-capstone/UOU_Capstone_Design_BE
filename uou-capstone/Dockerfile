@@ -1,18 +1,8 @@
-FROM eclipse-temurin:21-jdk AS build
-
-WORKDIR /workspace
-
-# 현재 디렉토리(uou-capstone)의 모든 파일 복사
-COPY . ./
-
-RUN chmod +x gradlew \
-    && ./gradlew --no-daemon clean bootJar
-
 FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 
-COPY --from=build /workspace/build/libs/*.jar app.jar
+COPY build/libs/app.jar app.jar
 
 ENV SPRING_PROFILES_ACTIVE=prod \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport"
@@ -20,4 +10,3 @@ ENV SPRING_PROFILES_ACTIVE=prod \
 EXPOSE 8080
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
-

@@ -109,6 +109,10 @@ jobs:
         env:
           SPRING_PROFILES_ACTIVE: test
 
+      - name: Build Spring Boot jar
+        working-directory: uou-capstone
+        run: ./gradlew bootJar --no-daemon
+
       # ── 이미지 태그 계산 ──────────────────────────────────
       - name: Compute image tag
         id: tag

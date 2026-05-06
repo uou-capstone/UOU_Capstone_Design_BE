@@ -1,7 +1,8 @@
 # Gradle
 .gradle/
-build/
+build/*
 !build/libs/
+!build/libs/app.jar
 
 # IDE
 .idea/
