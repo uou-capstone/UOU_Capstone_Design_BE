@@ -97,8 +97,8 @@ public class LearningSessionController {
     @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<String>> sendEvent(
             @Parameter(description = "세션 ID (FastAPI 세션 식별자)") @PathVariable Long sessionId,
-            @Parameter(description = "강의 ID (신규 세션 생성 직후 이벤트에서만 필요, 이후 생략 가능)")
-            @RequestParam(required = false) Long lectureId,
+            @Parameter(description = "강의 ID — 권한 검증 및 FastAPI EventRequest.lecture_id 용으로 필수")
+            @RequestParam(required = true) Long lectureId,
             @Parameter(description = "PDF 뷰어 현재 페이지(1-based). 생략 시 본문 payload만 전달")
             @RequestParam(required = false) Integer page,
             @Parameter(description = "page와 동일(별칭)")

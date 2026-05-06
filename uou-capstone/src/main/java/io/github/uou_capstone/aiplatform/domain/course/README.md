@@ -30,7 +30,7 @@ prefix: `/api/courses`
 | `POST ./{courseId}/contents/delete` | TEACHER | 자료/시험세션/생성세션 ID 리스트 일괄 삭제 |
 | `PUT ./{courseId}` | TEACHER | 제목·설명 수정 |
 | `DELETE ./{courseId}` | TEACHER | 강의실 삭제 + 자식 정리 |
-| `POST ./join?code=` | STUDENT | **[Deprecated]** 초대코드로 즉시 등록 — 호환용. 신규는 아래 `/join-requests` 사용 |
+| `POST ./join?code=` | STUDENT | **[Deprecated]** 호환용 경로 — 내부적으로 `/join-requests` 로 위임되어 PENDING 생성. 즉시 Enrollment 가 생기지 않음 |
 | `POST ./join-requests` | STUDENT | 초대코드로 가입 요청 생성 (PENDING) — 권장 경로 |
 | `GET ./{courseId}/join-requests?status=` | TEACHER | 본인 강의실 가입 요청 목록 (기본 PENDING) |
 | `POST ./{courseId}/join-requests/{requestId}/approve` | TEACHER | 승인 — Enrollment 생성 + APPROVED |
@@ -56,6 +56,9 @@ prefix: `/api/courses`
 
 ### DB 유니크 제약 없음 — 의도된 설계
 `(student, course, status)` 같은 유니크 제약을 **두지 않음**. 이유: REJECTED→PENDING→REJECTED 반복 정책과 충돌하기 때문. 중복 PENDING 차단은 `existsByStudentAndCourseAndStatus` 서비스 레벨 검증으로 처리.
+
+### 동시성 방어 — 분산 락
+`createJoinRequest()` 는 `(student.id, course.id)` 단위로 Redisson 분산 락을 걸어 동시 요청을 직렬화. `DistributedLockService.executeWithLock("course-join-request:{studentId}:{courseId}", ...)` → 락 안에서 `TransactionTemplate` 으로 트랜잭션 commit 까지 종료한 뒤 락 해제. 단순 `@Transactional` + exists+save 만으로는 commit 전에 락이 풀려 중복 PENDING 이 생길 수 있어 **반드시 락 → 트랜잭션 → 재검증 → 저장** 순서를 지킬 것.
 
 ---
 
@@ -111,7 +114,7 @@ courseRepository.delete(course);                                  // cascade: le
 
 ### Service
 - `service/CourseService.java` (266줄) — 강의실 CRUD, contents 집계, 자식 정리 + 도메인 위임 삭제
-- `service/EnrollmentService.java` — 초대코드 기반 즉시 등록 (호환용)
+- `service/EnrollmentService.java` — `enrollCourseByCode()` 즉시 등록 메서드는 현재 호출처 없음(deprecated `/join` 도 `CourseJoinRequestService` 로 위임). 후속 라운드에서 제거 예정
 - `service/CourseJoinRequestService.java` — 가입 요청 생성/조회/승인/거절/차단 (승인 시 Enrollment 생성)
 
 ### Repository

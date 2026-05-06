@@ -14,6 +14,17 @@ on:
       - "docker-compose*.yml"
       - "deploy.sh"
       - ".github/workflows/**"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "uou-capstone/**"
+      - "ai-service/**"
+      - "docker-compose*.yml"
+      - "deploy.sh"
+      - ".github/workflows/**"
+  workflow_dispatch:
 
 # ── 전역 변수 ─────────────────────────────────────────────────
 env:
@@ -83,6 +94,7 @@ jobs:
           echo "RUNNER_OS=${RUNNER_OS}"
           git rev-parse HEAD
           git branch --show-current || true
+          git log --oneline -n 3
           git status --short
           echo ""
           echo "== JwtTokenProvider.java =="

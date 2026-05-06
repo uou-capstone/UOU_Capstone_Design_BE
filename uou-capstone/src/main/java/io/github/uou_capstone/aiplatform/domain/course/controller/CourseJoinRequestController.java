@@ -4,6 +4,8 @@ import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestCreateDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestListItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.CourseJoinRequestResponseDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.JoinRequestBulkRequestDto;
+import io.github.uou_capstone.aiplatform.domain.course.dto.JoinRequestBulkResultDto;
 import io.github.uou_capstone.aiplatform.domain.course.dto.MyJoinRequestItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.entity.CourseJoinRequestStatus;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseJoinRequestService;
@@ -86,5 +88,27 @@ public class CourseJoinRequestController {
                                                  @PathVariable Long requestId) {
         joinRequestService.blockJoinRequest(courseId, requestId);
         return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "강의실 가입 요청 일괄 승인 (교사)",
+               description = "PENDING 상태의 가입 요청 다수를 일괄 승인합니다. 한 건 실패가 다른 건의 처리를 막지 않으며, "
+                       + "결과는 요청 ID 별 success/errorCode 목록으로 반환합니다. 한 번에 최대 100건.")
+    @PostMapping("/{courseId}/join-requests/bulk/approve")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<JoinRequestBulkResultDto> approveJoinRequestsBulk(
+            @PathVariable Long courseId,
+            @Valid @RequestBody JoinRequestBulkRequestDto dto) {
+        return ResponseEntity.ok(joinRequestService.approveJoinRequestsBulk(courseId, dto));
+    }
+
+    @Operation(summary = "강의실 가입 요청 일괄 거절 (교사)",
+               description = "PENDING 상태의 가입 요청 다수를 일괄 거절합니다. 결과 형식은 일괄 승인과 동일하며, "
+                       + "거절된 학생은 동일 강의실에 다시 요청을 보낼 수 있습니다.")
+    @PostMapping("/{courseId}/join-requests/bulk/reject")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<JoinRequestBulkResultDto> rejectJoinRequestsBulk(
+            @PathVariable Long courseId,
+            @Valid @RequestBody JoinRequestBulkRequestDto dto) {
+        return ResponseEntity.ok(joinRequestService.rejectJoinRequestsBulk(courseId, dto));
     }
 }
