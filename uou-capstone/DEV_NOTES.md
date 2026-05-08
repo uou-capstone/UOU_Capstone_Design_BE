@@ -1284,3 +1284,83 @@ docker exec -it dev-mysql mysql -u root -p uoucapstone -e "SHOW FULL COLUMNS FRO
   - `src/test/.../domain/course/dto/CourseRequestDtoValidationTest.java`
   - `src/test/.../config/GlobalExceptionHandlerDataIntegrityTest.java`
 
+---
+
+## [2026-05-08] Flyway 도입 — 스키마 마이그레이션 버전 관리 + ddl-auto validate 전환
+
+### 배경
+
+운영/개발 DB 가 살아있는 상태에서 `ddl-auto: update`(prod) / `create`(local) 로 스키마를 관리하고 있었다. 두 가지 한계가 있었다:
+
+1. 어떤 DDL 이 언제 적용됐는지 코드 어디에도 기록이 남지 않음 → 롤백·감사 불가.
+2. 컬럼 rename, NOT NULL 추가, 인덱스 변경, 백필 같은 작업은 `update` 가 처리 못 하거나 위험하게 처리. 실제로 [2026-05-06] `courses.description` 사례에서 `@Lob + ddl-auto:update` 가 기존 컬럼 타입을 바꾸지 않아 수동 `ALTER TABLE` 보정이 필요했고, [2026-04-16] 의 `3-4 ddl-auto` 항목으로 미뤄두었던 처리도 같은 맥락.
+
+### 조치
+
+#### 1. 의존성
+
+```gradle
+// uou-capstone/build.gradle
+implementation 'org.flywaydb:flyway-core'
+implementation 'org.flywaydb:flyway-mysql'   // Flyway 10+ 부터 MySQL 별도 모듈 (누락 시 prod 부팅 실패)
+```
+
+Spring Boot 3.4 BOM 이 버전 관리하므로 명시 불필요.
+
+#### 2. 프로필별 yml 변경
+
+| 파일 | 변경 |
+|---|---|
+| `application-prod.yml` | `ddl-auto: update → validate`, `spring.flyway.enabled=true`, `baseline-on-migrate=true`, `baseline-version=1`, `validate-on-migrate=true` |
+| `application-local.yml` | `ddl-auto: create → validate`, 동일 Flyway 설정 |
+| `application-test.yml` | `spring.flyway.enabled=false` (H2 MODE=MySQL 호환 회피, Hibernate `create-drop` 유지) |
+
+#### 3. V1 baseline
+
+- 위치: `uou-capstone/src/main/resources/db/migration/V1__baseline_schema.sql`
+- 출처: develop EC2 의 `dev-mysql` 컨테이너 `mysqldump --no-data` 결과
+- 정리: `AUTO_INCREMENT=<숫자>` 절 제거 (환경별 노이즈)
+- 매칭: 도메인 `@Entity` 20개 ↔ DB 테이블 20개 1:1 확인 (BaseTimeEntity 는 `@MappedSuperclass`)
+
+### 동작 방식
+
+- **기존 develop/prod DB**: `baseline-on-migrate=true` + `baseline-version=1` 에 의해 V1 을 `type=BASELINE` 으로 기록만 하고 실행 skip. → 운영 DB 변경 없음.
+- **빈 DB (신규 환경, 새 로컬 DB)**: V1 이 실제 실행되어 모든 테이블 생성. `ddl-auto: validate` 가 entity ↔ DB mismatch 검사 통과해야 부팅.
+- **테스트 (H2 MODE=MySQL)**: Flyway off, Hibernate `create-drop` 만으로 스키마 생성. MySQL 전용 SQL(JSON 함수, `ENGINE=InnoDB`, `utf8mb4_0900_ai_ci`) 호환 이슈 회피.
+
+### 검증 결과
+
+- 로컬: `./gradlew test` 통과 (Flyway 비활성화로 H2 흐름 그대로).
+- V1 SQL syntax: dev-mysql 의 빈 DB(`flyway_v1_test`) 에 dump 실행 → 20 테이블 정상 생성.
+- develop 배포 후 부팅 로그:
+
+  ```
+  Database: jdbc:mysql://dev-mysql:3306/uoucapstone (MySQL 8.0)
+  Schema history table `uoucapstone`.`flyway_schema_history` does not exist yet
+  Creating Schema History table `uoucapstone`.`flyway_schema_history` with baseline ...
+  Successfully baselined schema with version: 1
+  Tomcat started on port 8080 (http) with context path '/'
+  Started UouCapstoneApplication in 23.417 seconds
+  ```
+
+  컨테이너 status: `Up (healthy)`. `ddl-auto=validate` 가 entity ↔ DB mismatch 없이 통과 → develop DB 와 entity 가 일치함을 부팅 자체로 보장.
+
+### 운영 주의사항
+
+- **V1 파일은 develop/prod 첫 배포 후 절대 수정 금지**. Flyway checksum 검증이 깨지면 이후 모든 마이그레이션이 차단됨. `flyway repair` 가 필요해지는데 운영 DB 에 손대는 일은 피해야 한다.
+- 향후 스키마 변경(컬럼 추가/rename/NOT NULL 부여/인덱스/백필)은 모두 `V2__add_xxx.sql`, `V3__...sql` 로 추가. 백필도 SQL(`UPDATE ... WHERE ...`)로 작성해 코드 리뷰 대상으로 만든다.
+- [2026-05-06] 같은 `@Lob` → `LONGTEXT` 보정도 향후에는 `V2__alter_courses_description.sql` 같은 마이그레이션으로 처리.
+- 부팅이 `ddl-auto: validate` 에서 깨지면 (entity ↔ DB 컬럼 mismatch) → PR revert + V1 재점검. V1 은 실행되지 않았으므로 DB 변경 없음.
+
+### 관련 파일
+
+- 변경
+  - `uou-capstone/build.gradle` — `flyway-core`, `flyway-mysql` 의존성 추가
+  - `uou-capstone/src/main/resources/application-prod.yml` — ddl-auto + flyway 설정
+  - `uou-capstone/src/main/resources/application-local.yml` — 동일
+  - `uou-capstone/src/test/resources/application-test.yml` — `spring.flyway.enabled=false`
+- 신규
+  - `uou-capstone/src/main/resources/db/migration/V1__baseline_schema.sql` — develop DB 기반 baseline (20 테이블)
+- PR
+  - `feat/flyway-baseline → feat/v3-springboot` (2026-05-08, commit `5f0b702`)
+
