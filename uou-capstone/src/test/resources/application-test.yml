@@ -12,6 +12,11 @@ spring:
       ddl-auto: create-drop
     show-sql: false
 
+  # 테스트는 H2(MODE=MySQL)를 사용하므로 MySQL 전용 SQL(JSON 함수, ENGINE=InnoDB 등)이 들어간 V1을 그대로 돌리면 깨질 수 있다.
+  # 스키마는 Hibernate ddl-auto: create-drop으로 만들고 Flyway는 끈다.
+  flyway:
+    enabled: false
+
   data:
     redis:
       # 테스트에서는 Redis에 붙지 않도록 더미 값
