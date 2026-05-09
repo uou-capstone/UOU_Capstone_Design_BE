@@ -32,6 +32,9 @@ class ExamStudioChatResponse(BaseModel):
     answerMarkdown: str
     operations: list[ExamStudioOperation] = Field(default_factory=list)
     source: str = "AI"
+    fallbackUsed: bool = False
+    reason: str | None = None
+    confidence: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -57,6 +60,9 @@ class ExamGradeResponse(BaseModel):
     items: list[ExamGradeItem]
     summaryMarkdown: str
     gradingSource: str = "AI"
+    fallbackUsed: bool = False
+    reason: str | None = None
+    confidence: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -215,6 +221,9 @@ def _fallback_studio_response(request: ExamStudioChatRequest, reason: str | None
         answerMarkdown="요청을 해석했지만 자동 변경안을 안정적으로 생성하지 못했습니다. 제목, 시간, 문항 추가처럼 구체적인 변경 내용을 다시 입력해 주세요.",
         operations=[],
         source="FALLBACK",
+        fallbackUsed=True,
+        reason=reason,
+        confidence="LOW",
         warnings=warnings,
     )
 
@@ -233,7 +242,10 @@ async def run_exam_studio_chat(request: ExamStudioChatRequest) -> ExamStudioChat
         return ExamStudioChatResponse(
             answerMarkdown=answer.strip(),
             operations=operations,
-            source=str(parsed.get("source") or "AI"),
+            source="AI",
+            fallbackUsed=False,
+            reason=None,
+            confidence="MEDIUM",
             warnings=warnings,
         )
     except Exception as exc:  # noqa: BLE001
@@ -327,6 +339,9 @@ def _fallback_grade(request: ExamGradeRequest, reason: str | None = None) -> Exa
         items=items,
         summaryMarkdown="AI 채점에 실패해 가능한 문항만 deterministic fallback으로 채점했습니다.",
         gradingSource="FALLBACK",
+        fallbackUsed=True,
+        reason=reason,
+        confidence="LOW",
         warnings=warnings,
     )
 
@@ -403,6 +418,9 @@ def _normalize_grade_payload(parsed: dict[str, Any], request: ExamGradeRequest) 
     parsed["scoreRatio"] = float(parsed.get("scoreRatio", (parsed["totalScore"] / parsed["maxScore"] if parsed["maxScore"] else 0.0)) or 0.0)
     parsed["summaryMarkdown"] = str(parsed.get("summaryMarkdown") or "채점이 완료되었습니다.")
     parsed["gradingSource"] = str(parsed.get("gradingSource") or "AI")
+    parsed.setdefault("fallbackUsed", False)
+    parsed.setdefault("reason", None)
+    parsed.setdefault("confidence", "MEDIUM")
     parsed.setdefault("warnings", [])
     return parsed
 

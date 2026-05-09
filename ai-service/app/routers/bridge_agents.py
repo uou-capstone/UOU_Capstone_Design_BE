@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -24,13 +24,15 @@ from app.routers.report import (
     StudentAiReportContext,
     StudentReportChatMessage,
     StudentReportChatRequest,
-    analyze_student_report,
-    answer_student_report_chat,
+    answer_student_report_chat_result,
 )
+from app.core.path_validator import validate_pdf_path
 
 router = APIRouter(prefix="/bridge", tags=["bridge-compatible-agents"])
 
 _PDF_CONTEXT_TTL_SECONDS = int(os.getenv("EXAM_STUDIO_CONTEXT_TTL_SECONDS", "21600"))
+_PDF_CONTEXT_MAX_BYTES = int(os.getenv("EXAM_STUDIO_PDF_CONTEXT_MAX_BYTES", str(50 * 1024 * 1024)))
+_PDF_TEXT_CONTEXT_MAX_CHARS = int(os.getenv("EXAM_STUDIO_PDF_TEXT_MAX_CHARS", "500000"))
 _PDF_CONTEXTS: dict[str, dict[str, Any]] = {}
 
 
@@ -138,7 +140,15 @@ def _fallback_discussion(req: DiscussionAssistantRequest) -> dict[str, Any]:
         draft or "이 단원에서 이해한 내용과 아직 헷갈리는 지점을 함께 정리해 보세요.",
         "구체적인 예시나 질문을 한 가지 이상 포함하면 더 좋은 토론 글이 됩니다.",
     ])
-    return {"title": title, "contentMarkdown": body, "source": "FALLBACK", "warnings": ["ai_fallback"]}
+    return {
+        "title": title,
+        "contentMarkdown": body,
+        "source": "FALLBACK",
+        "fallbackUsed": True,
+        "reason": "ai_fallback",
+        "confidence": "LOW",
+        "warnings": ["ai_fallback"],
+    }
 
 
 def _discussion_schema() -> dict[str, Any]:
@@ -181,20 +191,39 @@ async def _discussion_result(req: DiscussionAssistantRequest) -> dict[str, Any]:
             raise ValueError("invalid_discussion_payload")
         if not isinstance(parsed.get("source"), str) or not parsed["source"].strip():
             parsed["source"] = "AI"
+        parsed["fallbackUsed"] = False
+        parsed["reason"] = None
+        parsed["confidence"] = "MEDIUM"
         parsed.setdefault("warnings", [])
         return parsed
     except Exception:  # noqa: BLE001
         return _fallback_discussion(req)
 
 
+def _validate_pdf_context_path(pdf_path: str) -> Path:
+    safe_path = Path(validate_pdf_path(pdf_path))
+    if safe_path.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="pdfPath must point to a PDF file.")
+
+    stat = safe_path.stat()
+    if stat.st_size > _PDF_CONTEXT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="PDF file is too large for exam studio context.")
+
+    with safe_path.open("rb") as handle:
+        if handle.read(5) != b"%PDF-":
+            raise HTTPException(status_code=400, detail="Invalid PDF file header.")
+
+    return safe_path
+
+
 def _extract_pdf_context(req: ExamStudioPdfContextRequest) -> dict[str, Any]:
     if req.pdfText:
+        if len(req.pdfText) > _PDF_TEXT_CONTEXT_MAX_CHARS:
+            raise HTTPException(status_code=413, detail="pdfText is too large for exam studio context.")
         pages = [{"page": 1, "text": req.pdfText}]
         raw_key = f"text:{req.courseId}:{req.lectureId}:{req.materialId}:{req.pdfText[:200]}"
     elif req.pdfPath:
-        path = Path(req.pdfPath)
-        if not path.exists():
-            raise FileNotFoundError(f"PDF path not found: {req.pdfPath}")
+        path = _validate_pdf_context_path(req.pdfPath)
         reader = PdfReader(str(path))
         pages = [
             {"page": index + 1, "text": (page.extract_text() or "").strip()}
@@ -229,6 +258,8 @@ def _extract_pdf_context(req: ExamStudioPdfContextRequest) -> dict[str, Any]:
         "pageCount": len(pages),
         "charCount": len(full_text),
         "expiresInSeconds": _PDF_CONTEXT_TTL_SECONDS,
+        "cacheScope": "PROCESS_MEMORY",
+        "bestEffort": True,
     }
 
 
@@ -254,18 +285,27 @@ def _fallback_criteria(req: CriteriaAssistantRequest) -> list[dict[str, Any]]:
             "description": "강의 핵심 개념을 정확히 설명하고 구분할 수 있는가",
             "weight": 35,
             "source": "FALLBACK",
+            "fallbackUsed": True,
+            "reason": "ai_fallback",
+            "confidence": "LOW",
         },
         {
             "label": "문제 해결 적용력",
             "description": "개념을 새로운 문제 상황에 적용해 풀이 전략을 세울 수 있는가",
             "weight": 35,
             "source": "FALLBACK",
+            "fallbackUsed": True,
+            "reason": "ai_fallback",
+            "confidence": "LOW",
         },
         {
             "label": "학습 참여와 성찰",
             "description": "질문, 제출, 피드백 반영을 통해 학습 과정을 개선하는가",
             "weight": 30,
             "source": "FALLBACK",
+            "fallbackUsed": True,
+            "reason": "ai_fallback",
+            "confidence": "LOW",
         },
     ]
     return [item for item in base if item["label"] not in existing][: req.desiredCount]
@@ -319,6 +359,9 @@ weight는 0~100 정수이며 전체 추천 기준의 합은 100에 가깝게 맞
                 "description": str(item.get("description") or "").strip(),
                 "weight": int(item.get("weight") or 0),
                 "source": "AI",
+                "fallbackUsed": False,
+                "reason": None,
+                "confidence": "MEDIUM",
             })
         return out or _fallback_criteria(req)
     except Exception:  # noqa: BLE001
@@ -336,6 +379,9 @@ def _fallback_classroom_report(req: ClassroomReportAnalyzeRequest) -> dict[str, 
         "risks": ["데이터가 부족한 학생은 개별 확인이 필요합니다."],
         "coachingPriorities": ["공통 약점 개념 보강", "저득점 학생 우선 피드백"],
         "source": "FALLBACK",
+        "fallbackUsed": True,
+        "reason": "ai_fallback",
+        "confidence": "LOW",
         "warnings": ["ai_fallback"],
     }
 
@@ -412,6 +458,9 @@ async def _classroom_report(req: ClassroomReportAnalyzeRequest) -> dict[str, Any
         parsed.setdefault("courseId", req.courseId)
         if not isinstance(parsed.get("source"), str) or not parsed["source"].strip():
             parsed["source"] = "AI"
+        parsed["fallbackUsed"] = False
+        parsed["reason"] = None
+        parsed["confidence"] = "MEDIUM"
         parsed.setdefault("warnings", [])
         return parsed
     except Exception:  # noqa: BLE001
@@ -468,15 +517,15 @@ async def report_student_chat_stream(req: ReportStudentChatBridgeRequest) -> Str
             context = req.context or _context_from_report(req.report)
             question = req.question or _last_user_message(req.messages)
             yield _ndjson({"type": "thought_delta", "text": "학생 리포트와 질문을 연결하고 있습니다."})
-            answer = await answer_student_report_chat(StudentReportChatRequest(
+            result = await answer_student_report_chat_result(StudentReportChatRequest(
                 context=context,
                 question=question,
                 report=req.report,
                 history=req.messages,
                 model=req.model,
             ))
-            yield _ndjson({"type": "answer_delta", "text": answer})
-            yield _ndjson({"type": "done", "data": {"answer": answer}})
+            yield _ndjson({"type": "answer_delta", "text": result["answer"]})
+            yield _ndjson({"type": "done", "data": result})
         except Exception as exc:  # noqa: BLE001
             yield _ndjson({
                 "type": "error",
@@ -496,7 +545,13 @@ async def report_criteria_assistant_stream(req: CriteriaAssistantRequest) -> Str
             suggestions = await _criteria_suggestions(req)
             for suggestion in suggestions:
                 yield _ndjson({"type": "criterion_suggestion", "data": suggestion})
-            yield _ndjson({"type": "done", "data": {"suggestions": suggestions}})
+            yield _ndjson({
+                "type": "done",
+                "data": {
+                    "suggestions": suggestions,
+                    "fallbackUsed": any(bool(item.get("fallbackUsed")) for item in suggestions),
+                },
+            })
         except Exception as exc:  # noqa: BLE001
             yield _ndjson({
                 "type": "error",

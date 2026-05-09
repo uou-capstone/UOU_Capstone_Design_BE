@@ -40,6 +40,18 @@ def _configured_secret() -> str | None:
     return None if secret in _PLACEHOLDER_SECRETS else secret
 
 
+def _is_production_env() -> bool:
+    env = (os.getenv("APP_ENV") or os.getenv("ENV") or os.getenv("FASTAPI_ENV") or "").strip().lower()
+    return env in {"prod", "production"}
+
+
+def _assert_secret_configuration() -> None:
+    if _is_production_env() and not _configured_secret():
+        raise RuntimeError(
+            "AI_SECRET_KEY must be set to a non-placeholder value in production."
+        )
+
+
 def _cors_origins() -> list[str]:
     raw = os.getenv(
         "CORS_ALLOWED_ORIGINS",
@@ -56,6 +68,7 @@ def _cors_allow_credentials(origins: list[str]) -> bool:
 
 
 def create_app() -> FastAPI:
+    _assert_secret_configuration()
     app = FastAPI(title="AI Service")
 
     @app.middleware("http")

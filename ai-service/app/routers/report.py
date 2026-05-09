@@ -130,6 +130,9 @@ class StudentReportAnalysis(BaseModel):
     teachingSuggestions: list[str]
     followUpQuestions: list[str]
     confidence: Literal["LOW", "MEDIUM", "HIGH"]
+    source: str = "AI"
+    fallbackUsed: bool = False
+    reason: str | None = None
     evidenceUsed: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -236,6 +239,9 @@ def _fallback_analysis(
             "학생에게 가장 부담이 큰 평가 유형은 무엇인가요?",
         ],
         confidence=confidence,
+        source="FALLBACK",
+        fallbackUsed=True,
+        reason=reason,
         evidenceUsed=evidence_used,
         warnings=warnings,
     )
@@ -254,6 +260,9 @@ def _analysis_schema() -> dict[str, Any]:
             "teachingSuggestions": {"type": "array", "items": {"type": "string"}},
             "followUpQuestions": {"type": "array", "items": {"type": "string"}},
             "confidence": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+            "source": {"type": "string"},
+            "fallbackUsed": {"type": "boolean"},
+            "reason": {"type": ["string", "null"]},
             "evidenceUsed": {"type": "array", "items": {"type": "string"}},
             "warnings": {"type": "array", "items": {"type": "string"}},
         },
@@ -306,6 +315,9 @@ async def analyze_student_report(
         parsed = _normalize_analysis_payload(parsed, context)
         parsed.setdefault("studentId", context.student.studentId)
         parsed.setdefault("courseId", context.course.courseId)
+        parsed["source"] = "AI"
+        parsed["fallbackUsed"] = False
+        parsed["reason"] = None
         parsed.setdefault("warnings", context.reportWarnings)
         parsed.setdefault("evidenceUsed", [e.summary for e in context.evidence if e.summary][:8])
         return StudentReportAnalysis.model_validate(parsed)
@@ -421,10 +433,29 @@ def _build_chat_prompt(request: StudentReportChatRequest) -> str:
 
 
 async def answer_student_report_chat(request: StudentReportChatRequest) -> str:
+    result = await answer_student_report_chat_result(request)
+    return str(result["answer"])
+
+
+async def answer_student_report_chat_result(request: StudentReportChatRequest) -> dict[str, Any]:
     try:
-        return await _call_gemini_text(_build_chat_prompt(request), _model_name(request.model))
-    except Exception:  # noqa: BLE001
-        return _build_chat_answer(request)
+        answer = await _call_gemini_text(_build_chat_prompt(request), _model_name(request.model))
+        return {
+            "answer": answer,
+            "source": "AI",
+            "fallbackUsed": False,
+            "reason": None,
+            "confidence": "MEDIUM",
+        }
+    except Exception as exc:  # noqa: BLE001
+        reason = f"ai_fallback:{type(exc).__name__}"
+        return {
+            "answer": _build_chat_answer(request),
+            "source": "FALLBACK",
+            "fallbackUsed": True,
+            "reason": reason,
+            "confidence": "LOW",
+        }
 
 
 @router.post("/student/chat/stream")
@@ -432,9 +463,9 @@ async def student_report_chat_stream(request: StudentReportChatRequest) -> Strea
     async def events() -> AsyncIterator[bytes]:
         try:
             yield _ndjson({"type": "agent_delta", "channel": "thought", "text": "선택된 학생 리포트와 질문을 연결하고 있습니다."})
-            answer = await answer_student_report_chat(request)
-            yield _ndjson({"type": "agent_delta", "channel": "main", "text": answer})
-            yield _ndjson({"type": "done", "data": {"answer": answer}})
+            result = await answer_student_report_chat_result(request)
+            yield _ndjson({"type": "agent_delta", "channel": "main", "text": result["answer"]})
+            yield _ndjson({"type": "done", "data": result})
         except Exception as exc:  # noqa: BLE001
             yield _ndjson({
                 "type": "error",
