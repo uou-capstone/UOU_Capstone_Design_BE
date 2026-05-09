@@ -30,46 +30,8 @@
 
 ---
 
-## 코드 패턴 — 반드시 준수
+## SSE 응답 규약
 
-### 현재 유저 조회
-```java
-// ❌ 금지 — users WHERE email=? 반복 (요청당 최대 11회 관측됨)
-User user = userRepository.findByEmail(email).orElseThrow(...);
-
-// ✅ 표준
-User user = currentUserResolver.getUser();
-Teacher teacher = currentUserResolver.getTeacher();
-```
-예외: `@Async` 메서드는 `@RequestScope` 접근 불가 → `userRepository.findByEmailWithRoles(email)` 1회 허용.
-
-### 에러 처리
-```java
-// ❌ 금지 — JwtAuthenticationFilter의 catch에서 안 잡혀 4010 오진단 유발
-throw new RuntimeException("...");
-
-// ✅ 표준
-throw new BusinessException(CommonErrorCode.XXX);
-```
-
-### N+1 방지
-연관 엔티티 접근(예: `lecture.getCourse().getTeacher()`)이 있으면 Repository에 **JOIN FETCH 전용 메서드** 추가:
-```java
-@Query("""
-    SELECT l FROM Lecture l
-    JOIN FETCH l.course c
-    JOIN FETCH c.teacher
-    WHERE l.id = :id
-""")
-Optional<Lecture> findByIdWithCourse(@Param("id") Long id);
-```
-명명 규칙: `findByXxxWith<Entity>` / `findByIdIn...` (벌크).
-
-### 권한
-- 역할: `STUDENT`, `TEACHER` 2종
-- 컨트롤러: `@PreAuthorize("hasAuthority('TEACHER')")` / `hasAnyAuthority('STUDENT','TEACHER')`
-
-### SSE 스트리밍
 - 반환: `Flux<ServerSentEvent<Map<String,Object>>>`
 - `SecurityConfig`에 `DispatcherType.ASYNC`/`ERROR` permit 유지 (Tomcat async dispatch용)
 - 클라이언트는 `fetch` + `ReadableStream` 권장 — `EventSource`는 Authorization 헤더 불가
@@ -87,6 +49,7 @@ Optional<Lecture> findByIdWithCourse(@Param("id") Long id);
 
 ## 관련 워크플로우 (Skill)
 
+- 금지 패턴 자동 검사: `/spring-lint` (위 "금지 사항" 항목들 검사)
 - 주제별 분리 커밋: `/commit-by-topic`
 - DEV_NOTES 항목 추가: `/dev-notes-entry`
 
@@ -96,19 +59,20 @@ Optional<Lecture> findByIdWithCourse(@Param("id") Long id);
 
 | 문서 | 용도 |
 |---|---|
-| [DEV_NOTES.md](uou-capstone/DEV_NOTES.md) | 버그·성능 수정 이력 (이번 작업이 어디에 속하는지 확인) |
-| [FRONTEND_V2_V3_API.md](uou-capstone/FRONTEND_V2_V3_API.md) | FE-BE API 계약 |
-| [V27_E2E_SMOKE_TEST.md](uou-capstone/V27_E2E_SMOKE_TEST.md) | E2E 스모크 시나리오 |
-| [scripts/smoke-v27.ps1](uou-capstone/scripts/smoke-v27.ps1) | 스모크 스크립트 (`pwsh ./scripts/smoke-v27.ps1 ...`) |
-
-### 도메인별 README
+| `uou-capstone/DEV_NOTES.md` | 버그·성능 수정 이력 (이번 작업이 어디에 속하는지 확인) |
+| `uou-capstone/FRONTEND_V2_V3_API.md` | FE-BE API 계약 |
+| `uou-capstone/V27_E2E_SMOKE_TEST.md` | E2E 스모크 시나리오 |
+| `uou-capstone/scripts/smoke-v27.ps1` | 스모크 스크립트 (`pwsh ./scripts/smoke-v27.ps1 ...`) |
 
 각 도메인 작업 전 해당 README를 먼저 확인 (외부 의존·Gotcha·주요 파일 정리됨).
 
 | 도메인 | 핵심 |
 |---|---|
-| [course](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/README.md) | 강의실(Course) + 수강(Enrollment) — invitationCode 입장, 자식 정리 순서 |
+| [course](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/README.md) | 강의실(Course) + 수강(Enrollment) — invitationCode 입장, 자식 정리 순서. `CourseAccessService` 권한 헬퍼 (notice/discussion/attendance 공유) |
 | [course/lecture](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/course/lecture/README.md) | 강의 CRUD + v1 legacy AI 흐름 + AI 콜백 (secret 검증) |
+| course/notice | 공지사항 + 댓글 (1단계 답글). 작성/수정 교사, 댓글 학생도 가능. 작성 시 ACTIVE 수강생 알림 발송 |
+| course/discussion | 토론·자유게시판 + 댓글 (1단계 답글). 학생도 작성 가능. viewCount 증가, allowComments 토글 |
+| course/attendance | 명시 출석 — 회차(lecture 매핑 OR 독립) + record 일괄. 회차 생성 시 ACTIVE 수강생 ABSENT 자동 |
 | [material](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/material/README.md) | PDF 업로드·스트리밍 + AI 5-Phase 생성 (Redis Pub/Sub → SSE) |
 | [exam](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/exam/README.md) | 5종 시험 생성·응시·채점·토론 (`@Async("taskExecutor")`, FastApiBridgeClient/SessionClient) |
 | [learning](uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/README.md) | v3 학습 세션 — FastAPI MergeEduAgent 프록시 (NDJSON → SSE) |
