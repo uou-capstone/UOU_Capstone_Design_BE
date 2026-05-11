@@ -10,13 +10,12 @@
 
 FastAPI 측에서 `feat/refactor` 브랜치에 신규 MergeEdu Agent `/bridge/*` 계약을 확정 (`ai-service/docs/BRIDGE_AGENT_ENDPOINTS.md`, `ai-service/docs/SPRING_BRIDGE_AUTH_INTEGRATION.md`). 운영/공유 환경부터 모든 `/bridge/*` 요청에 `X-AI-SECRET-KEY` 헤더가 요구된다. Spring 측 WebClient에는 헤더 주입 코드가 전혀 없는 상태였다.
 
-MERGEEDU 5종 중 4종을 이번 라운드에 신설:
+MERGEEDU 5종 모두 신설 (초기엔 4종 + 후속에 5번째 추가):
 1. Discussion AI Assistant
 2. Exam Studio (PDF Context + Chat)
 3. Report Criteria CRUD + AI Assistant
 4. Classroom Report (sync + stream)
-
-`/bridge/report/student_chat_stream` (Student Report Chatbot) 은 이번 라운드 제외 — FastAPI 팀에 인계 (후술).
+5. Student Report Chatbot — FastAPI 팀 인계 항목으로 미루었다가 같은 라운드에 추가.
 
 ### 인프라 변경
 
@@ -81,6 +80,15 @@ MERGEEDU 5종 중 4종을 이번 라운드에 신설:
 - `language` 기본 `"ko"`, `desiredCount` 기본 3.
 - 권한: 교사.
 
+#### 5) `domain/course/report/studentchat/` *(후속 추가)*
+
+- `POST /api/courses/{cid}/reports/students/{sid}/chat/stream` (SSE) — 교사가 학생 리포트로 follow-up 질문.
+- `StudentReportChatController` 메서드는 `CourseReportController`에 추가.
+- `StudentReportChatService` 가 기존 `CourseStudentReportService.getStudentAiReportContext` + `getStudentReportDetail` 호출 결과를 묶어 FastAPI `/bridge/report/student_chat_stream` 으로 forward (대화 이력 미저장 — FE 가 매 요청 `messages[]` 전달).
+- `FastApiBridgeClient.studentReportChatStream` 신규.
+- Request DTO `@AssertTrue` 로 `question` 또는 `messages` 중 하나 필수 검증.
+- 권한: 교사 (`CourseStudentReportService` 내부 검증).
+
 #### 4) `domain/course/report/classroom/`
 
 - `GET /api/courses/{cid}/reports/classroom` — 저장된 분석 결과 1행 조회 (미생성 시 204).
@@ -109,7 +117,7 @@ MERGEEDU 5종 중 4종을 이번 라운드에 신설:
 
 별도 메모로 전달할 항목 (사용자 요청):
 
-1. **`/bridge/report/student_chat_stream` (Student Report Chatbot)** — FastAPI 계약은 BRIDGE_AGENT_ENDPOINTS.md 에 명시되어 있으나 이번 Spring 라운드 제외. 다음 라운드에 `domain/course/report/` 확장으로 추가 예정. FastAPI 측은 endpoint 활성 상태 유지하면 됨.
+1. **~~`/bridge/report/student_chat_stream` (Student Report Chatbot)~~** — *후속 추가로 같은 라운드에 구현 완료.* `StudentReportChatService` 가 context + report DTO 묶어 FastAPI 에 forward. 대화 이력 미저장.
 2. **Spring 가정값** (FastAPI 측 확정 필요):
    - Discussion 컨텍스트 이전 게시글 — Spring 5개 가정.
    - Criteria `weight` 0–100, `desiredCount` 3, `language` `"ko"`.
@@ -123,13 +131,13 @@ MERGEEDU 5종 중 4종을 이번 라운드에 신설:
 2. Exam Studio `contextId` 만료 자동 재발급 retry 1회.
 3. Exam Studio `pdfPath` vs `pdfText` 자동 결정 (운영 공유 볼륨 보장 여부에 따라).
 4. Classroom Report 학생 수 100명+ 배치 분할 — 현재 1000개 페이지 fetch 후 forward.
-5. Student Report Chatbot 도메인 (3번 항목).
+5. Student Report Chatbot 대화 이력 영속화 (현재는 stateless — FE 가 messages 매번 보냄).
 
 ### 관련 파일
 
 - 인프라: `config/WebClientConfig.java`, `application.yml`
 - Bridge: `integration/fastapi/FastApiBridgeClient.java`, `util/sse/SseStreamSupport.java`
-- 신규 도메인: `domain/course/discussion/assistant/`, `domain/exam/studio/`, `domain/course/report/criteria/`, `domain/course/report/classroom/`
+- 신규 도메인: `domain/course/discussion/assistant/`, `domain/exam/studio/`, `domain/course/report/criteria/`, `domain/course/report/classroom/`, `domain/course/report/studentchat/`
 - 컨트롤러 확장: `domain/course/report/controller/CourseReportController.java`
 - 마이그레이션: `db/migration/V3__report_criteria_and_classroom.sql`
 - 인계 문서: `docs/handoff/MERGEEDU_AGENT_FEATURES.md` (FastAPI 합의 사항 기록)

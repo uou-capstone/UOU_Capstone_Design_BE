@@ -128,6 +128,15 @@ public class FastApiBridgeClient {
                 .bodyToFlux(String.class);
     }
 
+    /** Student Report Chatbot — NDJSON 스트림. 교사가 특정 학생 리포트로 follow-up 질문. */
+    public Flux<String> studentReportChatStream(Map<String, Object> body) {
+        return aiServiceStreamingWebClient.post()
+                .uri("/bridge/report/student_chat_stream")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(String.class);
+    }
+
     /** Report Criteria AI 추천 — NDJSON 스트림 ({@code criterion_suggestion} 중간 이벤트 포함). */
     public Flux<String> reportCriteriaAssistantStream(Map<String, Object> body) {
         return aiServiceStreamingWebClient.post()
