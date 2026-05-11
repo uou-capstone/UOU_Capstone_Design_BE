@@ -1,11 +1,14 @@
 package io.github.uou_capstone.aiplatform.util.sse;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.util.NdjsonLineFilters;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
@@ -90,6 +93,110 @@ public final class SseStreamSupport {
         }
 
         return events;
+    }
+
+    /**
+     * NDJSON 라인을 라인의 {@code type} 필드를 SSE 이벤트 이름으로 매핑해서 변환한다.
+     *
+     * <p>MergeEdu {@code /bridge/*} 계약 전용. 표준 NDJSON 이벤트:
+     * <ul>
+     *   <li>{@code thought_delta} / {@code answer_delta} / {@code criterion_suggestion}
+     *       → 동일 이름의 SSE 이벤트 + payload Map 그대로 forward</li>
+     *   <li>{@code error} → {@code details.errorType} 필드는 서버 로그에만 남기고 SSE forward에서 제거</li>
+     *   <li>{@code done} → {@code event:done} (정상 종료 신호)</li>
+     *   <li>{@code heartbeat} → {@code event:heartbeat} (UI 변화 없음)</li>
+     *   <li>{@code type} 없거나 파싱 실패 라인 → {@code event:message} + {@code {"raw": "..."}}</li>
+     * </ul>
+     *
+     * <p>FastAPI 가 {@code done} 라인을 자체적으로 emit 하므로, 호출자는
+     * {@code policy.appendDoneOnComplete(false)} 로 정책을 끄는 것을 권장한다.
+     */
+    public static Flux<ServerSentEvent<Map<String, Object>>> wrapNdjsonByType(
+            Flux<String> ndjsonLines,
+            ObjectMapper objectMapper,
+            SseStreamPolicy policy,
+            Function<Throwable, Map<String, Object>> errorPayloadMapper) {
+
+        Flux<ServerSentEvent<Map<String, Object>>> events = ndjsonLines
+                .filter(line -> line != null && !line.isBlank())
+                .map(line -> toTypedSseEvent(objectMapper, line));
+
+        if (policy.getIdleTimeout() != null && !policy.getIdleTimeout().isZero()) {
+            events = events.timeout(policy.getIdleTimeout())
+                    .onErrorResume(TimeoutException.class, e -> {
+                        log.info("SSE idle timeout reached: {}ms", policy.getIdleTimeout().toMillis());
+                        Map<String, Object> payload = new LinkedHashMap<>();
+                        payload.put("reason", "idle_timeout");
+                        payload.put("timeoutMs", policy.getIdleTimeout().toMillis());
+                        return Flux.just(sse(SseEventNames.TIMEOUT, payload));
+                    });
+        }
+
+        events = events.onErrorResume(e -> {
+            if (e instanceof TimeoutException) {
+                return Flux.error(e);
+            }
+            Map<String, Object> payload = errorPayloadMapper != null
+                    ? errorPayloadMapper.apply(e)
+                    : defaultErrorPayloadMap(e);
+            log.error("SSE upstream error", e);
+            return Flux.just(sse(SseEventNames.ERROR, payload));
+        });
+
+        if (policy.isAppendDoneOnComplete()) {
+            events = events.concatWith(Flux.just(sse(SseEventNames.DONE, new LinkedHashMap<>())));
+        }
+
+        return events;
+    }
+
+    private static ServerSentEvent<Map<String, Object>> toTypedSseEvent(ObjectMapper objectMapper, String line) {
+        try {
+            Map<String, Object> payload = objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {});
+            Object rawType = payload.get("type");
+            String type = rawType == null ? "" : String.valueOf(rawType);
+            if (type.isBlank()) {
+                type = SseEventNames.MESSAGE;
+            }
+            if ("error".equals(type)) {
+                stripErrorTypeFromDetails(payload);
+            }
+            return sse(type, payload);
+        } catch (Exception e) {
+            log.debug("NDJSON 라인 파싱 실패 — message 이벤트로 raw forward: {}", line);
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("raw", line);
+            return sse(SseEventNames.MESSAGE, fallback);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void stripErrorTypeFromDetails(Map<String, Object> payload) {
+        Object detailsObj = payload.get("details");
+        if (!(detailsObj instanceof Map)) {
+            return;
+        }
+        Map<String, Object> details = (Map<String, Object>) detailsObj;
+        Object errorType = details.get("errorType");
+        if (errorType == null) {
+            return;
+        }
+        log.warn("FastAPI bridge error received: code={}, message={}, errorType={}",
+                payload.get("code"), payload.get("message"), errorType);
+        Map<String, Object> sanitized = new LinkedHashMap<>(details);
+        sanitized.remove("errorType");
+        if (sanitized.isEmpty()) {
+            payload.remove("details");
+        } else {
+            payload.put("details", sanitized);
+        }
+    }
+
+    private static Map<String, Object> defaultErrorPayloadMap(Throwable e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "error");
+        m.put("message", e.getMessage() != null ? e.getMessage() : "알 수 없는 오류");
+        return m;
     }
 
     public static <T> ServerSentEvent<T> sse(String name, T data) {

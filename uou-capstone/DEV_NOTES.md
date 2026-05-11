@@ -4,6 +4,138 @@
 
 ---
 
+## [2026-05-11] FastAPI `/bridge/*` 인증 + MergeEdu 신규 4종 도메인
+
+### 배경
+
+FastAPI 측에서 `feat/refactor` 브랜치에 신규 MergeEdu Agent `/bridge/*` 계약을 확정 (`ai-service/docs/BRIDGE_AGENT_ENDPOINTS.md`, `ai-service/docs/SPRING_BRIDGE_AUTH_INTEGRATION.md`). 운영/공유 환경부터 모든 `/bridge/*` 요청에 `X-AI-SECRET-KEY` 헤더가 요구된다. Spring 측 WebClient에는 헤더 주입 코드가 전혀 없는 상태였다.
+
+MERGEEDU 5종 중 4종을 이번 라운드에 신설:
+1. Discussion AI Assistant
+2. Exam Studio (PDF Context + Chat)
+3. Report Criteria CRUD + AI Assistant
+4. Classroom Report (sync + stream)
+
+`/bridge/report/student_chat_stream` (Student Report Chatbot) 은 이번 라운드 제외 — FastAPI 팀에 인계 (후술).
+
+### 인프라 변경
+
+#### `WebClientConfig` — secret-key 전역 헤더 + prod 시작 실패 가드
+
+`aiServiceWebClient` / `aiServiceStreamingWebClient` 양쪽에 `defaultHeader("X-AI-SECRET-KEY", ...)` 적용. `@PostConstruct validateAiSecretKey()` 추가:
+- 활성 프로필에 `prod` / `production` 포함 시 secret이 blank/placeholder 면 `IllegalStateException` 으로 부팅 실패.
+- placeholder 목록: `YOUR_SUPER_SECRET_AI_KEY_12345`, `YOUR_AI_SECRET_KEY`, `CHANGE_ME`, `changeme`, `placeholder`.
+- local/test 는 blank/placeholder 도 경고 로그만.
+
+환경변수 명명: Spring 측은 기존 `AI_SERVICE_SECRET_KEY` 유지 (기존 yml 정합). FastAPI 측 `AI_SECRET_KEY` 와 **값은 같지만 변수명은 다름** — docker-compose / k8s 매핑에서 같은 값을 두 변수에 주입 필요.
+
+#### `application.yml` — 공통 ai.service.* 기본 선언
+
+`AI_SERVICE_BASE_URL` / `AI_SERVICE_SECRET_KEY` 환경변수의 기본 선언(공백). 프로필별 yml은 그대로.
+
+### `FastApiBridgeClient` — 신규 6 메서드 추가
+
+기존 4 메서드(`testGenGenerate`, `quizResult`, `gradeResult`, `streamQuiz`)는 그대로 유지. 신규는 모두 `/bridge/*` prefix (기존 `/api/v3/bridge/*` 와 별개 계약).
+
+| 메서드 | Path | WebClient |
+|---|---|---|
+| `discussionAssistantStream` | `POST /bridge/discussion_assistant_stream` | streaming |
+| `examStudioPdfContext` | `POST /bridge/exam_studio/pdf_context` | json |
+| `examStudioChatStream` | `POST /bridge/exam_studio/chat_stream` | streaming |
+| `reportCriteriaAssistantStream` | `POST /bridge/report/criteria_assistant_stream` | streaming |
+| `reportClassroomAnalyze` | `POST /bridge/report/classroom_analyze` | json |
+| `reportClassroomAnalyzeStream` | `POST /bridge/report/classroom_analyze_stream` | streaming |
+
+스트리밍 메서드는 `aiServiceStreamingWebClient` (HTTP/1.1 강제 + 256KB 버퍼) 주입. 기존 `streamQuiz`는 여전히 `aiServiceWebClient` 사용 — 후속 정리 후보 (Open Items).
+
+### `SseStreamSupport.wrapNdjsonByType` — NDJSON type → SSE event name 매핑
+
+기존 `wrapNdjson`은 모든 라인을 `event: message` 단일 이름으로 래핑. 신규 4종은 클라이언트가 `thought_delta` / `answer_delta` / `criterion_suggestion` / `done` / `error` 를 분기해야 하므로 신규 헬퍼 추가:
+- NDJSON line의 `type` 필드를 SSE event name으로 매핑.
+- 파싱 실패 라인은 `event: message` + `{"raw": "..."}` fallback.
+- **`error` 라인의 `details.errorType` 은 서버 로그에만 기록하고 SSE forward에서 제거** — CLAUDE.md "prod 에러 응답에 내부 정보 노출 금지" 준수.
+- FastAPI 가 자체 `done` 라인을 emit 하므로 호출자는 `SseStreamPolicy.appendDoneOnComplete(false)` 권장.
+
+### 도메인 4종 신규
+
+#### 1) `domain/course/discussion/assistant/`
+
+- `POST /api/courses/{cid}/discussions/assistant/stream` (SSE) — 학생/교사
+- `DiscussionAssistantService` 가 최근 5개 discussion (`findTop5ByCourseOrderByCreatedAtDesc`) + topic/category/previousDraft 컨텍스트 빌드 → FastAPI 호출 → SSE forward.
+- 권한: `CourseAccessService.loadCourseAsParticipant`.
+
+#### 2) `domain/exam/studio/`
+
+- `POST /api/courses/{cid}/exam-studio/pdf-context` (JSON) — Material 의 PDF 를 FastAPI 에 등록, contextId 발급.
+- `POST /api/courses/{cid}/exam-studio/chat/stream` (SSE) — contextId 와 메시지로 AI 대화.
+- `MaterialRepository.findByIdWithLectureAndCourse` 신규 (JOIN FETCH) — material → lecture → course 권한 체크 한 쿼리.
+- 권한: 교사 (`loadCourseAsTeacher`).
+- **MVP 한계**: `contextId` 만료(`PROCESS_MEMORY` cache TTL/재시작/multi-worker 라우팅) 시 자동 재발급 retry 미구현 — FE 측 contextId 재발급 흐름으로 위임 (TODO).
+
+#### 3) `domain/course/report/criteria/`
+
+- CRUD: GET/POST/PATCH/DELETE `/api/courses/{cid}/reports/criteria[/{id}]`
+- AI 추천: `POST .../criteria/assistant/stream` (SSE) — `criterion_suggestion` 중간 이벤트 multi-emit.
+- `CourseReportCriterion` 엔티티 신규 (`course_report_criteria` 테이블, V3).
+- `weight` 범위 0–100 (FastAPI 미정 → 우리 측 결정).
+- `language` 기본 `"ko"`, `desiredCount` 기본 3.
+- 권한: 교사.
+
+#### 4) `domain/course/report/classroom/`
+
+- `GET /api/courses/{cid}/reports/classroom` — 저장된 분석 결과 1행 조회 (미생성 시 204).
+- `POST .../classroom/analyze` (JSON) / `POST .../classroom/analyze/stream` (SSE) — FastAPI 분석 호출 후 UPSERT.
+- `ClassroomReport` 엔티티 신규 (`classroom_reports` 테이블, course_id UNIQUE, V3).
+- `ClassroomReportPersister` 별도 빈으로 분리 — `@Transactional` self-call 회피.
+- 스트림 경로: `doOnNext` 에서 `event: done` 수신 시 `data.data` 추출하여 UPSERT.
+- 권한: 교사.
+- **MVP 한계**: 학생 데이터는 `getStudentReportList(... PageRequest.of(0, 1000))` 로 collect — 1000명 이상 강의실은 일부만 포함, 경고 로그만. 페이지 분할은 후속.
+
+### Flyway V3 마이그레이션
+
+`src/main/resources/db/migration/V3__report_criteria_and_classroom.sql` — 2개 테이블 일괄:
+- `course_report_criteria` — `criterion_id`, `course_id` (FK ON DELETE CASCADE), `label`/`description`/`weight`, BaseTime 컬럼.
+- `classroom_reports` — `classroom_report_id`, `course_id` (FK + UNIQUE), `summary_markdown`/`highlights_json`/`risks_json`/`coaching_priorities_json` (LONGTEXT JSON), `source`/`fallback_used`/`fallback_reason`/`confidence`, `generated_at`.
+
+### CLAUDE.md 금지 패턴 준수 확인
+
+- `userRepository.findByEmail(` 직접 호출 — 신규 코드 없음 ✅
+- `RuntimeException` — 신규 코드 없음, 모두 `BusinessException(CommonErrorCode.AI_SERVER_ERROR)` ✅
+- `@Transactional` + `WebClient.block()` — 모든 FastAPI 호출 메서드는 `@Transactional` **없음**. `ClassroomReportPersister.upsert(@Transactional)` 는 DB UPSERT 만 (block 호출 없음) ✅
+- prod SSE 응답에 `errorType` / stack trace 노출 — `wrapNdjsonByType` 가 `details.errorType` 자동 strip ✅
+- CORS origin 하드코딩 — 변경 없음 ✅
+
+### FastAPI 팀 인계 사항
+
+별도 메모로 전달할 항목 (사용자 요청):
+
+1. **`/bridge/report/student_chat_stream` (Student Report Chatbot)** — FastAPI 계약은 BRIDGE_AGENT_ENDPOINTS.md 에 명시되어 있으나 이번 Spring 라운드 제외. 다음 라운드에 `domain/course/report/` 확장으로 추가 예정. FastAPI 측은 endpoint 활성 상태 유지하면 됨.
+2. **Spring 가정값** (FastAPI 측 확정 필요):
+   - Discussion 컨텍스트 이전 게시글 — Spring 5개 가정.
+   - Criteria `weight` 0–100, `desiredCount` 3, `language` `"ko"`.
+   - Classroom 캐싱: 1 course = 1 row UPSERT, 새 학생 추가 시 invalidate 없음 (수동 재생성).
+   - 학생 100명+ 시 배치 분할 미구현 (현재 1000개 한계).
+3. **NDJSON `details.errorType` 처리**: Spring 은 내부 로그용으로만 사용, SSE forward 시 제거. FastAPI 가 raw exception class name 을 넣어도 사용자에게 노출되지 않음.
+
+### Open Items (후속 PR 후보)
+
+1. `streamQuiz`(기존)를 `aiServiceStreamingWebClient` 로 이전 — 일관성.
+2. Exam Studio `contextId` 만료 자동 재발급 retry 1회.
+3. Exam Studio `pdfPath` vs `pdfText` 자동 결정 (운영 공유 볼륨 보장 여부에 따라).
+4. Classroom Report 학생 수 100명+ 배치 분할 — 현재 1000개 페이지 fetch 후 forward.
+5. Student Report Chatbot 도메인 (3번 항목).
+
+### 관련 파일
+
+- 인프라: `config/WebClientConfig.java`, `application.yml`
+- Bridge: `integration/fastapi/FastApiBridgeClient.java`, `util/sse/SseStreamSupport.java`
+- 신규 도메인: `domain/course/discussion/assistant/`, `domain/exam/studio/`, `domain/course/report/criteria/`, `domain/course/report/classroom/`
+- 컨트롤러 확장: `domain/course/report/controller/CourseReportController.java`
+- 마이그레이션: `db/migration/V3__report_criteria_and_classroom.sql`
+- 인계 문서: `docs/handoff/MERGEEDU_AGENT_FEATURES.md` (FastAPI 합의 사항 기록)
+
+---
+
 ## [2026-05-09] 학생-선생 상호작용 기능 신규 도입 — Notice / Discussion / Attendance
 
 ### 배경
