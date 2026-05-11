@@ -119,6 +119,17 @@ public class ExamStudioService {
             throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
                     "Material 의 PDF 파일 경로가 비어 있습니다. 업로드를 다시 시도하세요.");
         }
+        // FastAPI 보안 정책 (BRIDGE_AGENT_ENDPOINTS.md): pdfPath 는 uploads/ 하위·.pdf 확장자만 허용.
+        // 동일 정책을 Spring 측에서 선제 검증 — path mismatch 가 AI 서버 오류로 보이는 것을 방지.
+        // (%PDF- header 검증은 Spring 과 FastAPI 가 같은 볼륨을 공유해야 가능 — 인프라 보장 후 추가)
+        if (!filePath.toLowerCase().endsWith(".pdf")) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "Material 파일이 .pdf 확장자가 아닙니다: " + filePath);
+        }
+        if (!filePath.startsWith("uploads/") && !filePath.contains("/uploads/")) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "Material 경로가 uploads/ 하위가 아닙니다. 업로드 정책을 확인하세요.");
+        }
 
         return new MaterialContext(material.getId(), material.getLecture().getId(),
                 filePath, material.getDisplayName());
