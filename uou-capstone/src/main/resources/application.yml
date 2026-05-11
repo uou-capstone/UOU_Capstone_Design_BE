@@ -85,3 +85,10 @@ oauth2:
     frontend-url: ${OAUTH2_FRONTEND_URL:http://localhost:3000}
     # 리다이렉트 경로 (환경 변수로 오버라이드 가능)
     path: ${OAUTH2_REDIRECT_PATH:/auth/callback}
+
+# AI 서비스 — 공통 기본 선언 (프로필별 yml에서 override)
+# secret-key 는 FastAPI AI_SECRET_KEY 와 동일 값. prod 프로필에서 blank/placeholder면 부팅 실패.
+ai:
+  service:
+    base-url: ${AI_SERVICE_BASE_URL:}
+    secret-key: ${AI_SERVICE_SECRET_KEY:}
