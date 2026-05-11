@@ -108,8 +108,20 @@ public class ExamStudioService {
         if (!materialCourseId.equals(course.getId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
+
+        String materialType = material.getMaterialType();
+        if (materialType == null || !"PDF".equalsIgnoreCase(materialType)) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "Exam Studio 는 PDF 자료만 지원합니다 (materialType=" + materialType + ").");
+        }
+        String filePath = material.getFilePath();
+        if (filePath == null || filePath.isBlank()) {
+            throw new BusinessException(CommonErrorCode.INVALID_PARAMETER,
+                    "Material 의 PDF 파일 경로가 비어 있습니다. 업로드를 다시 시도하세요.");
+        }
+
         return new MaterialContext(material.getId(), material.getLecture().getId(),
-                material.getFilePath(), material.getDisplayName());
+                filePath, material.getDisplayName());
     }
 
     private Map<String, Object> mapError(Throwable e) {
