@@ -4,6 +4,67 @@
 
 ---
 
+## [2026-05-09] 학생-선생 상호작용 기능 신규 도입 — Notice / Discussion / Attendance
+
+### 배경
+
+레퍼런스 (`uou-capstone/UOU_Capstone_Design_AI` 의 `new` 브랜치 `MergeEduAgentFull/`) 에는 있지만 우리 v3 에 없던 학생-선생 상호작용 API 를 이식했다. 충돌(invitation/join-request, 평면 course→lecture, exam 모델)은 우리 모델 유지. 에이전트 5종은 FastAPI 합의 필요 → `docs/handoff/MERGEEDU_AGENT_FEATURES.md` 로 분리.
+
+### 신규 도메인
+
+- **`domain/course/notice/`** — 공지사항 + 댓글. 교사 작성, ACTIVE 수강생 알림 (`NOTICE_PUBLISHED`). 댓글은 학생 작성 가능. 1단계 답글 (`NOTICE_COMMENT_REPLIED`).
+- **`domain/course/discussion/`** — 토론·자유게시판 + 댓글. 학생도 작성. viewCount 증가, allowComments 토글. 알림 `DISCUSSION_COMMENT_RECEIVED`.
+- **`domain/course/attendance/`** — 명시 출석. 회차(lecture 매핑 OR 독립) + 학생별 record. 회차 생성 시 ACTIVE 수강생 ABSENT record 자동 일괄. PUT 일괄 저장은 분산 락 + TransactionTemplate (CourseJoinRequest 패턴).
+
+### 공통 헬퍼 신설
+
+- **`domain/course/service/CourseAccessService`** — `loadCourseAsTeacher` / `loadCourseAsParticipant` / `ensureAuthor` / `ensureAuthorOrCourseTeacher` / `isCourseTeacher`. **중요**: `currentUserResolver.getTeacher()` 직접 호출 시 학생에 대해 `MEMBER_NOT_FOUND` 가 떨어져 권한 의미상 어긋난다 → `getUser()` 받아서 role 부재 시 `FORBIDDEN` 으로 던진다.
+- **`common/util/NotificationBodyFormatter.summarize(text, maxLen)`** — 댓글 알림 body 100자 truncate. notification 도메인이 아니라 common 에 둠 (도메인 의존 회피).
+
+### `EnrollmentRepository` 보강
+
+- `existsByStudentAndCourseAndStatus(student, course, EnrollmentStatus.ACTIVE)` — 신규 도메인은 ACTIVE 만 허용 (`COMPLETED`/`DROPPED` 차단).
+- `findByCourseAndStatusWithStudentUser(course, ACTIVE)` — 알림 발송·출석 자동 생성·summary 에서 student.user 까지 자주 접근하므로 JOIN FETCH 명시. `existsByStudentAndCourse` 는 다른 도메인이 사용 중이라 그대로 유지.
+
+### NotificationType enum 확장 (DDL 변경 없음)
+
+`notifications.type` 칼럼은 `@Enumerated(STRING)` 으로 `varchar(40)` → 신규 enum 추가만으로 충분:
+- `NOTICE_PUBLISHED`, `NOTICE_COMMENT_REPLIED`, `DISCUSSION_COMMENT_RECEIVED`
+
+`resourceType` 문자열은 대문자 고정: `"NOTICE"` / `"DISCUSSION"` / `"ATTENDANCE"`.
+
+### Flyway V2 마이그레이션
+
+`src/main/resources/db/migration/V2__course_interaction_features.sql` — 6개 테이블 일괄:
+- `notices`, `notice_comments`
+- `discussions`, `discussion_comments`
+- `attendance_sessions`, `attendance_records`
+
+특이 사항:
+- `parent_comment_id` FK 는 `ON DELETE CASCADE` (부모 댓글 삭제 시 답글 자동 정리). 엔티티에는 `@OnDelete(action = CASCADE)` 도 명시 — H2 (`ddl-auto: create-drop`, Flyway 비활성화) 테스트 환경에서도 동일 동작 보장.
+- `attendance_sessions.lecture_id` FK 는 `ON DELETE SET NULL` — lecture 삭제 시 출석 세션은 보존 (의도된 동작, README 명시).
+- `attendance_records (attendance_session_id, student_id)` UNIQUE — 중복 record 차단 + 동시 insert 방어.
+
+### 하지 말아야 했던 결정
+
+- **Course 엔티티에 역참조 컬렉션 추가 X** — `notices`/`discussions`/`attendanceSessions` 같은 OneToMany 컬렉션을 Course 에 두면 cascade 영향면이 광범위해진다. 강의실 삭제 시 자식 정리는 V2 DDL 의 `ON DELETE CASCADE` 로 처리.
+- **첨부파일 미지원** — 본문 markdown 만. Material PDF 인프라 재사용 검토는 후속 PR.
+- **Notice 예약 발행 / Discussion view debounce / 댓글 좋아요 미지원** — 후속 PR 후보.
+
+### 테스트 환경 한계 (V2 DDL 검증 불가능)
+
+`application-test.yml` 은 H2 (`MODE=MySQL`) + `ddl-auto: create-drop` + `spring.flyway.enabled: false`. 따라서 V2 SQL 자체는 단위 테스트로 검증 불가 — Hibernate 가 엔티티 매핑으로 스키마를 생성한다. 운영(MySQL) 부팅 시 `ddl-auto: validate` 가 V2 DDL 과 엔티티 매핑이 일치하는지 검증.
+
+### 관련 파일
+
+- 도메인: `domain/course/{notice,discussion,attendance}/` (각 README 있음)
+- 헬퍼: `domain/course/service/CourseAccessService.java`, `common/util/NotificationBodyFormatter.java`
+- 마이그레이션: `src/main/resources/db/migration/V2__course_interaction_features.sql`
+- 핸드오프: `docs/handoff/MERGEEDU_AGENT_FEATURES.md` (에이전트 5종 — FastAPI 합의 필요)
+- 테스트: `src/test/java/.../course/{notice,discussion,attendance,service}/...` 7개
+
+---
+
 ## [2026-03-31] N+1 쿼리 문제 — 강의 에이전트 API
 
 ### 증상
