@@ -13,6 +13,7 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.CourseReposito
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
@@ -51,6 +52,7 @@ class CourseJoinRequestServiceTest {
     @Mock private EnrollmentRepository enrollmentRepository;
     @Mock private CurrentUserResolver currentUserResolver;
     @Mock private NotificationService notificationService;
+    @Mock private TeacherNotificationPublisher teacherNotificationPublisher;
     @Mock private DistributedLockService distributedLockService;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private CourseAuditLogger auditLogger;

@@ -10,6 +10,8 @@ import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationPh
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.generation.dto.*;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiNoteGenClient;
 import io.github.uou_capstone.aiplatform.service.AsyncTaskService;
@@ -61,6 +63,7 @@ public class MaterialGenerationService {
     private final FastApiNoteGenClient fastApiNoteGenClient;
     private final CacheService cacheService;          // Redis 캐싱 서비스
     private final StringRedisTemplate redisTemplate;  // Redis Pub/Sub 발행자
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     /**
      * Phase 1: 초기 키워드 기반 DraftPlan 생성
@@ -513,6 +516,8 @@ public class MaterialGenerationService {
 
                         publishProgress(sessionId, 100, "완료: 최종 문서 생성 완료", "PHASE5");
                         asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료되었습니다.", objectMapper.writeValueAsString(Map.of("sessionId", sessionId)));
+
+                        notifyTeacherOfMaterialGeneration(session, true, null);
                     }
                 }
                 if (!completed) throw new BusinessException(CommonErrorCode.AI_SERVER_TIMEOUT, "AI 서버 응답 시간 초과");
@@ -520,6 +525,52 @@ public class MaterialGenerationService {
         } catch (Exception e) {
             log.error("비동기 처리 실패: {}", e.getMessage());
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.FAILED, null, "오류 발생: " + e.getMessage());
+            notifyTeacherOfMaterialGenerationById(sessionId, false, e.getMessage());
+        }
+    }
+
+    /**
+     * AI 자료 생성 비동기 완료/실패를 담당 교사에게 알림.
+     * actor=null 이라 publisher 의 자기 작업 분기는 발동하지 않고, 항상 일반 알림으로 발행된다
+     * (요청자가 곧 담당 교사라도 비동기 결과 통지는 받아야 하므로 의도된 동작).
+     */
+    private void notifyTeacherOfMaterialGeneration(GenerationSession session, boolean success, String errorMessage) {
+        try {
+            if (session == null || session.getLecture() == null || session.getLecture().getCourse() == null) return;
+            String lectureTitle = session.getLecture().getTitle() != null ? session.getLecture().getTitle() : "강의";
+            if (success) {
+                teacherNotificationPublisher.notifyCourseTeacher(
+                        session.getLecture().getCourse(),
+                        null,
+                        NotificationType.AI_GENERATION_COMPLETED,
+                        "AI 자료 생성 완료",
+                        "'%s' 강의의 AI 자료 생성이 완료되었습니다.".formatted(lectureTitle),
+                        "material",
+                        session.getId()
+                );
+            } else {
+                teacherNotificationPublisher.notifyCourseTeacher(
+                        session.getLecture().getCourse(),
+                        null,
+                        NotificationType.AI_GENERATION_FAILED,
+                        "AI 자료 생성 실패",
+                        "'%s' 강의의 AI 자료 생성에 실패했습니다: %s".formatted(lectureTitle, errorMessage),
+                        "material",
+                        session.getId()
+                );
+            }
+        } catch (Exception ex) {
+            log.warn("AI 자료 생성 알림 발행 실패: sessionId={}", session != null ? session.getId() : null, ex);
+        }
+    }
+
+    /** catch 블록에서 session 객체를 잃었을 수 있을 때 sessionId 로 lazy 조회. */
+    private void notifyTeacherOfMaterialGenerationById(Long sessionId, boolean success, String errorMessage) {
+        try {
+            GenerationSession session = generationSessionRepository.findByIdWithLecture(sessionId).orElse(null);
+            notifyTeacherOfMaterialGeneration(session, success, errorMessage);
+        } catch (Exception ex) {
+            log.warn("AI 자료 생성 알림 조회 실패: sessionId={}", sessionId, ex);
         }
     }
 

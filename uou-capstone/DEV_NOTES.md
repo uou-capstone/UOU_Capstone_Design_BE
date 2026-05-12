@@ -4,6 +4,81 @@
 
 ---
 
+## [2026-05-12] 교사 알림 확장 — 학생 이벤트 8종 + 자기 작업 토글
+
+### 배경
+
+알림 인프라(`Notification`/`NotificationService`/SSE)는 학생/교사 공통이지만, 발행 지점은 **학생을 향한 8종**(`COURSE_JOIN_*`, `COURSE_MEMBER_*`, `NOTICE_*`, `DISCUSSION_COMMENT_RECEIVED`)뿐이었다. 교사 입장에서 자신의 강의실에 일어난 일(가입 요청·새 토론글·과제·시험 제출·AI 생성 결과)을 알 수 없어 매번 페이지를 들어가 확인해야 했다.
+
+### 변경 — 핵심
+
+#### `NotificationType` enum 9종 추가
+
+학생/공통 8종은 그대로. 교사용 신규:
+`COURSE_JOIN_REQUESTED`, `DISCUSSION_CREATED`, `DISCUSSION_COMMENTED`, `NOTICE_COMMENTED`, `ASSESSMENT_SUBMITTED`, `EXAM_SUBMITTED`, `AI_GENERATION_COMPLETED`, `AI_GENERATION_FAILED`, `TEACHER_ACTION_CONFIRMED`.
+
+#### `TeacherNotificationPreference` 엔티티 + 토글 1개
+
+`teacher_notification_preferences` 테이블 신설 (Teacher OneToOne, `include_self_action_notifications` bit, 기본 `false`).
+- `false`: 학생/시스템 이벤트만 수신.
+- `true`: 본인 작업 시 추가로 `TEACHER_ACTION_CONFIRMED` 알림 수신.
+- 조회 시 row 없으면 lazy-create.
+
+#### `TeacherNotificationPublisher` 단일 경유 헬퍼
+
+도메인 서비스가 직접 `NotificationService` 를 호출하던 패턴 대신:
+- `notifyCourseTeacher(course, actor, …)` — actor 가 교사 본인이면 `TEACHER_ACTION_CONFIRMED` 로 자동 변환 후 설정 ON 시에만 발행. 아니면 일반 알림 그대로.
+- `notifySelfAction(teacher, …)` — 설정 ON 시에만 발행.
+
+이 단일 지점에서 자기 작업 분기를 처리해 도메인 코드는 "담당 교사에게 알리고 싶다" 만 신경쓰면 됨.
+
+#### REST API 2종
+
+`NotificationController` 에 추가, 둘 다 `@PreAuthorize("hasAuthority('TEACHER')")`:
+- `GET  /api/notifications/teacher-preferences`
+- `PATCH /api/notifications/teacher-preferences`
+
+응답/요청 DTO: `{ "includeSelfActionNotifications": boolean }`.
+
+#### 자동 발행 지점 7개
+
+| 도메인 | 메서드 | 발행 |
+|---|---|---|
+| `CourseJoinRequestService.persistPendingJoinRequest` | save 직후 | `COURSE_JOIN_REQUESTED` |
+| `DiscussionService.createDiscussion` | save 직후 | `DISCUSSION_CREATED` (작성자가 교사면 자동 분기) |
+| `DiscussionCommentService.createComment` | save 직후 | `DISCUSSION_COMMENTED` (parent 작성자가 곧 담당 교사면 중복 방지) |
+| `NoticeCommentService.createComment` | save 직후 | `NOTICE_COMMENTED` (parent 작성자가 곧 담당 교사면 중복 방지) |
+| `SubmissionService.createSubmission` | save 직후 | `ASSESSMENT_SUBMITTED` |
+| `ExamSubmissionService.submitExam` | 채점 결과 저장 직후 | `EXAM_SUBMITTED` |
+| `MaterialGenerationService.processPhase3To5Async` | try 완료 / catch 실패 | `AI_GENERATION_COMPLETED` / `AI_GENERATION_FAILED` (resourceType=`material`) |
+| `ExamGenerationService.generateExamAsync` | try 완료 / catch 실패 | `AI_GENERATION_COMPLETED` / `AI_GENERATION_FAILED` (resourceType=`exam`) |
+
+AI 생성 알림은 actor=null 로 호출 — 요청자가 곧 담당 교사라도 비동기 결과 통지는 항상 받아야 하므로 자기 작업 분기 미발동.
+
+### Flyway V4 — `notifications.type` 컬럼 정렬
+
+`V4__teacher_notification_prefs_and_type_widen.sql`:
+1. `ALTER TABLE notifications MODIFY COLUMN type VARCHAR(40)` — V1 baseline 의 `ENUM(...)` 을 VARCHAR로 정렬. NotificationType.java 의 주석/설계 의도(`@Enumerated(STRING)` + varchar(40))와 일치. 이후 enum 값 추가 시 DDL 변경 영원히 불필요.
+2. `teacher_notification_preferences` 테이블 생성.
+
+### 회귀 보호
+
+- 기존 학생 알림 8종 발행 코드는 그대로 유지 → 기존 학생 흐름 무영향.
+- 기존 테스트 4종 (`CourseJoinRequestServiceTest`, `Discussion[Comment]ServiceTest`, `NoticeCommentServiceTest`) 에 `@Mock TeacherNotificationPublisher` 1줄 추가 — 동작 검증은 그대로.
+- 신규 테스트 2종: `TeacherNotificationPreferenceServiceTest` (lazy-create / TEACHER 권한 차단 / `isSelfActionNotificationsEnabled`), `TeacherNotificationPublisherTest` (actor 분기 / opt-in/out / null 안전성).
+- `./gradlew test --no-daemon` 전체 통과 (Spring 컨텍스트 로드 + V4 마이그레이션 적용 검증 포함).
+
+### FE 인계
+
+`docs/handoff/TEACHER_NOTIFICATION_FE.md` — 새 alert 타입 라우팅 매핑 + 설정 API 사용 예시 + 검증 시나리오.
+
+### Open Items
+
+- `TEACHER_ACTION_CONFIRMED` 의 명시 발행 지점(강의실/강의/공지/자료/평가 본인 CRUD 완료) 은 초기엔 좁게 시작 — 사용자 피드백 후 확장 검토.
+- 멀티 인스턴스 환경에서 SSE 분배는 여전히 in-memory `NotificationStreamRegistry` 단일 노드 한정. Redis Pub/Sub 분배는 별도 라운드 (학생 알림과 동일 제약).
+
+---
+
 ## [2026-05-11] FastAPI `/bridge/*` 인증 + MergeEdu 신규 4종 도메인
 
 ### 배경

@@ -16,6 +16,7 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,7 @@ public class DiscussionCommentService {
     private final CourseAccessService courseAccessService;
     private final CurrentUserResolver currentUserResolver;
     private final NotificationService notificationService;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     @Transactional
     public DiscussionCommentResponseDto createComment(Long courseId,
@@ -92,6 +94,26 @@ public class DiscussionCommentService {
                     NotificationType.DISCUSSION_COMMENT_RECEIVED,
                     title,
                     body,
+                    RESOURCE_TYPE,
+                    discussion.getId()
+            );
+        }
+
+        // 강의실 담당 교사 알림 — 위 notifyTarget 이 이미 담당 교사인 경우 중복 방지
+        Long teacherUserId = course.getTeacher() != null && course.getTeacher().getUser() != null
+                ? course.getTeacher().getUser().getId() : null;
+        boolean alreadyNotifiedTeacher = teacherUserId != null
+                && !notifyTarget.getId().equals(currentUser.getId())
+                && teacherUserId.equals(notifyTarget.getId());
+        if (!alreadyNotifiedTeacher) {
+            String teacherBody = currentUser.getFullName() + ": "
+                    + NotificationBodyFormatter.summarize(dto.getContentMarkdown(), BODY_SUMMARY_LEN);
+            teacherNotificationPublisher.notifyCourseTeacher(
+                    course,
+                    currentUser,
+                    NotificationType.DISCUSSION_COMMENTED,
+                    "토론 새 댓글",
+                    teacherBody,
                     RESOURCE_TYPE,
                     discussion.getId()
             );

@@ -9,6 +9,7 @@ import io.github.uou_capstone.aiplatform.domain.course.discussion.entity.Discuss
 import io.github.uou_capstone.aiplatform.domain.course.discussion.repository.DiscussionRepository;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
@@ -36,6 +37,7 @@ class DiscussionServiceTest {
     @Mock private DiscussionRepository discussionRepository;
     @Mock private CourseAccessService courseAccessService;
     @Mock private CurrentUserResolver currentUserResolver;
+    @Mock private TeacherNotificationPublisher teacherNotificationPublisher;
 
     @InjectMocks
     private DiscussionService service;

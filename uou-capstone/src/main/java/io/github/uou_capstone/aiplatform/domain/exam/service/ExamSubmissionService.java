@@ -7,6 +7,8 @@ package io.github.uou_capstone.aiplatform.domain.exam.service;
 
 
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -197,6 +199,7 @@ public class ExamSubmissionService {
 
 
     private final ObjectMapper objectMapper;  // JSON 변환용
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
 
 
@@ -571,6 +574,24 @@ public class ExamSubmissionService {
 
 
 
+
+        // 담당 교사 알림: ExamSession.lecture.course.teacher 에게 EXAM_SUBMITTED.
+        // 학생이 actor 라 자기 작업 분기는 발동하지 않는다.
+        if (examSession.getLecture() != null && examSession.getLecture().getCourse() != null) {
+            String displayName = examSession.getDisplayName() != null
+                    ? examSession.getDisplayName() : examSession.getExamType().name();
+            teacherNotificationPublisher.notifyCourseTeacher(
+                    examSession.getLecture().getCourse(),
+                    currentUser,
+                    NotificationType.EXAM_SUBMITTED,
+                    "새 시험 제출",
+                    "%s 학생이 '%s' 시험을 응시했습니다. (점수 %s/%s)".formatted(
+                            currentUser.getFullName(), displayName,
+                            gradingResult.getTotalScore(), gradingResult.getMaxScore()),
+                    "EXAM",
+                    examSession.getId()
+            );
+        }
 
         // ========== 9단계: 응답 반환 ==========
 

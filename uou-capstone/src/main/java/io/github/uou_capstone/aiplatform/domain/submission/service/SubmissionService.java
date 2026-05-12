@@ -7,6 +7,8 @@ import io.github.uou_capstone.aiplatform.domain.assessment.entity.ChoiceOption;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.ChoiceOptionRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.submission.dto.StudentAnswerRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.dto.SubmissionRequestDto;
 import io.github.uou_capstone.aiplatform.domain.submission.dto.SubmissionResponseDto;
@@ -37,6 +39,7 @@ public class SubmissionService {
     private final ChoiceOptionRepository choiceOptionRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     @Transactional
     public Long createSubmission(Long assessmentId, SubmissionRequestDto requestDto) {
@@ -82,6 +85,19 @@ public class SubmissionService {
                     .build();
             studentAnswerRepository.save(studentAnswer);
         }
+
+        // 담당 교사에게 과제 제출 알림 (학생이 actor 라 자기 작업 분기 미발동)
+        teacherNotificationPublisher.notifyCourseTeacher(
+                assessment.getCourse(),
+                student.getUser(),
+                NotificationType.ASSESSMENT_SUBMITTED,
+                "새 과제 제출",
+                "%s 학생이 '%s' 과제를 제출했습니다."
+                        .formatted(student.getUser().getFullName(), assessment.getTitle()),
+                "ASSESSMENT",
+                assessment.getId()
+        );
+
         return submission.getId();
     }
 
