@@ -16,6 +16,8 @@ import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import io.github.uou_capstone.aiplatform.service.CacheService;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
@@ -56,6 +58,7 @@ public class ExamGenerationService {
     private final AsyncTaskService asyncTaskService;
     private final SessionRecoveryService sessionRecoveryService;
     private final FastApiBridgeClient fastApiBridgeClient;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     /**
      * 시험 생성 요청 처리
@@ -416,15 +419,53 @@ public class ExamGenerationService {
                 "message", "시험 생성이 완료되었습니다."
             ));
             asyncTaskService.updateTaskStatus(taskId, TaskStatus.COMPLETED, 100, "완료: 시험 생성 완료", resultJson);
-            
+
+            notifyTeacherOfExamGeneration(requestDto.getLectureId(), response.getExamSessionId(), true, null);
         } catch (Exception e) {
             log.error("시험 생성 비동기 처리 실패: taskId={}", taskId, e);
             asyncTaskService.updateTaskStatus(
-                taskId, 
-                TaskStatus.FAILED, 
-                null, 
+                taskId,
+                TaskStatus.FAILED,
+                null,
                 "오류 발생: " + e.getMessage()
             );
+            notifyTeacherOfExamGeneration(requestDto.getLectureId(), null, false, e.getMessage());
+        }
+    }
+
+    /**
+     * AI 시험 생성 비동기 완료/실패를 담당 교사에게 알림. lecture 조회 실패는 무시 (부수 효과 방지).
+     * actor=null 이라 publisher 의 자기 작업 분기는 발동하지 않고, 항상 일반 알림으로 발행된다
+     * (요청자가 곧 담당 교사라도 비동기 결과 통지는 받아야 하므로 의도된 동작).
+     */
+    private void notifyTeacherOfExamGeneration(Long lectureId, Long examSessionId, boolean success, String errorMessage) {
+        try {
+            Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
+            if (lecture == null || lecture.getCourse() == null) return;
+            String lectureTitle = lecture.getTitle() != null ? lecture.getTitle() : "강의";
+            if (success) {
+                teacherNotificationPublisher.notifyCourseTeacher(
+                        lecture.getCourse(),
+                        null,
+                        NotificationType.AI_GENERATION_COMPLETED,
+                        "AI 시험 생성 완료",
+                        "'%s' 강의의 AI 시험 생성이 완료되었습니다.".formatted(lectureTitle),
+                        "exam",
+                        examSessionId
+                );
+            } else {
+                teacherNotificationPublisher.notifyCourseTeacher(
+                        lecture.getCourse(),
+                        null,
+                        NotificationType.AI_GENERATION_FAILED,
+                        "AI 시험 생성 실패",
+                        "'%s' 강의의 AI 시험 생성에 실패했습니다: %s".formatted(lectureTitle, errorMessage),
+                        "exam",
+                        null
+                );
+            }
+        } catch (Exception ex) {
+            log.warn("AI 시험 생성 알림 발행 실패: lectureId={}", lectureId, ex);
         }
     }
 

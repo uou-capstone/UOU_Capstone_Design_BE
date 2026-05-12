@@ -11,6 +11,7 @@ import io.github.uou_capstone.aiplatform.domain.course.notice.repository.NoticeR
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
@@ -42,6 +43,7 @@ class NoticeCommentServiceTest {
     @Mock private CourseAccessService courseAccessService;
     @Mock private CurrentUserResolver currentUserResolver;
     @Mock private NotificationService notificationService;
+    @Mock private TeacherNotificationPublisher teacherNotificationPublisher;
 
     @InjectMocks
     private NoticeCommentService service;
