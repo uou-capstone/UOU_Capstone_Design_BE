@@ -20,6 +20,8 @@ from ai_agent.types.domain import (
     NdjsonEventType,
 )
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
+from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
+from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
 
 
 class Orchestrator:
@@ -28,6 +30,7 @@ class Orchestrator:
     """
     def __init__(self, bridge: GeminiBridgeClient):
         self._bridge = bridge
+        self._context_collector = LearningContextCollector()
 
     def _extract_page_context(self, pdf_path: str | None, current_page: int) -> str:
         """현재 페이지와 전후 인접 페이지의 텍스트 컨텍스트를 PDF에서 추출한다."""
@@ -64,21 +67,25 @@ class Orchestrator:
 
     def _build_prompt(self, event: AppEvent, state: SessionState) -> str:
         """시스템 프롬프트 생성"""
-        page_context = self._extract_page_context(state.pdf_path, state.current_page)
-        
+        learning_context = self._context_collector.collect(state)
+        page_context = learning_context.build_quiz_context(state.get_current_page_state().explanation)
+
         learner_info = {
             "level": state.learner.proficiency_level,
             "recent_scores": state.learner.recent_scores,
             "weak_concepts": getattr(state.learner, "weak_concepts", []),
             "quiz_attempt_counts": state.learner.quiz_attempt_counts,
             "avg_score": state.learner.average_recent_score,
+            "digest": learning_context.learner_memory_digest,
         }
         learner_memo = json.dumps(learner_info, ensure_ascii=False)
+        assessment_digest = quiz_diagnosis_service.consume_pending_assessment_digest(
+            state,
+            page_number=state.current_page,
+        )
+        active_intervention = json.dumps(state.active_intervention or {}, ensure_ascii=False)
         
         event_str = f"Type: {event.type.value}, Payload: {json.dumps(event.payload, ensure_ascii=False)}"
-        
-        recent_messages = state.messages[-5:] if state.messages else []
-        messages_str = json.dumps(recent_messages, ensure_ascii=False)
         
         prompt = f"""당신은 "MergeEduAgent LLM 플래너" (학습 오케스트레이터)입니다.
 당신의 절대적인 목표는 주어진 컨텍스트를 분석하여, 학생의 다음 학습을 위한 **도구 호출 계획(OrchestratorPlan)**을 확정하는 것입니다.
@@ -93,8 +100,14 @@ class Orchestrator:
 [학습자 성향 메모리]
 {learner_memo}
 
-[최근 대화 기록(최대 5건)]
-{messages_str}
+[현재 페이지 QA 흐름 요약]
+{learning_context.qa_thread_digest}
+
+[최근 퀴즈 진단 artifact]
+{assessment_digest or "(새 진단 artifact 없음)"}
+
+[활성 오개념 교정 상태]
+{active_intervention}
 
 [사용 가능한 도구 (ActionType.CALL_TOOL 할당)]
 - EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED"}}) -> 강의 설명이 필요할 경우 호출.
@@ -103,6 +116,7 @@ class Orchestrator:
 - GENERATE_QUIZ_OX: OX 퀴즈 (매개변수: {{"quiz_type": "OX_Problem"}})
 - AUTO_GRADE_MCQ_OX: 객관식 자동 채점 (매개변수: {{"quiz_type": "..."}})
 - GRADE_SHORT_OR_ESSAY: 주관식 채점 (매개변수: {{"quiz_type": "..."}})
+- REPAIR_MISCONCEPTION: 활성 오개념 교정 상태가 있을 때 학생 답변 기반으로 짧은 교정 설명을 생성 (매개변수: {{"student_message": "..."}})
 
 UI 조절 도구 (ActionType.SET_UI_STATE 할당): 
   ui_state 필드에 넘길 수 있는 예시: {{"modal": "QUIZ_TYPE_PICKER"}}, {{"widget": "START_EXPLANATION_DECISION"}}, {{"widget": "NEXT_PAGE_DECISION"}}, {{"widget": "QUIZ_DECISION"}}
@@ -115,6 +129,7 @@ UI 조절 도구 (ActionType.SET_UI_STATE 할당):
 3. 일반 질문/답변의 경우 `ANSWER_QUESTION` 툴을 부릅니다.
 4. 설명 직후에는 퀴즈 풀이를 제안하는 위젯(`QUIZ_DECISION`)을 노출시키거나, 이전 점수가 좋지 않다면 바로 해당 페이지 기반의 퀴즈를 생성하세요.
 5. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
+6. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
 """
         return prompt
 

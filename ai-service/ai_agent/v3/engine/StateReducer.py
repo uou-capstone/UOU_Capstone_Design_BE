@@ -42,6 +42,12 @@ class StateReducer:
                 self._on_quiz_type_selected(state, event)
             case AppEventType.QUIZ_SUBMITTED:
                 self._on_quiz_submitted(state, event)
+            case AppEventType.REVIEW_DECISION:
+                self._on_review_decision(state, event)
+            case AppEventType.RETEST_DECISION:
+                self._on_retest_decision(state, event)
+            case AppEventType.NEXT_PAGE_DECISION:
+                self._on_next_page_decision(state, event)
             case AppEventType.SAVE_AND_EXIT:
                 pass
 
@@ -52,15 +58,14 @@ class StateReducer:
     # ------------------------------------------------------------------
 
     def _on_session_entered(self, state: SessionState, event: AppEvent) -> None:
-        if state.current_page not in state.pages:
-            state.pages[state.current_page] = PageState(page_number=state.current_page)
+        state.get_current_page_state()
 
     def _on_page_changed(self, state: SessionState, event: AppEvent) -> None:
         raw_page = event.get("page", state.current_page)
         try:
             new_page = int(raw_page)
-            if new_page < 0:
-                raise ValueError("음수 페이지 번호")
+            if new_page < 1:
+                raise ValueError("페이지 번호는 1부터 시작")
         except (ValueError, TypeError):
             return  # 잘못된 페이지 번호는 무시, 현재 페이지 유지
         state.current_page = new_page
@@ -78,3 +83,27 @@ class StateReducer:
     def _on_quiz_submitted(self, state: SessionState, event: AppEvent) -> None:
         page_state = state.get_current_page_state()
         page_state.status = PageStatus.QUIZ_GRADED
+
+    def _on_review_decision(self, state: SessionState, event: AppEvent) -> None:
+        page_state = state.get_current_page_state()
+        page_state.status = PageStatus.REVIEW_IN_PROGRESS if _event_accepts(event) else PageStatus.DONE
+
+    def _on_retest_decision(self, state: SessionState, event: AppEvent) -> None:
+        page_state = state.get_current_page_state()
+        page_state.status = PageStatus.QUIZ_TYPE_PENDING if _event_accepts(event) else PageStatus.DONE
+
+    def _on_next_page_decision(self, state: SessionState, event: AppEvent) -> None:
+        if not _event_accepts(event):
+            return
+        current_page_state = state.get_current_page_state()
+        current_page_state.status = PageStatus.DONE
+        state.current_page = max(state.current_page, 1) + 1
+        if state.current_page not in state.pages:
+            state.pages[state.current_page] = PageState(page_number=state.current_page)
+
+
+def _event_accepts(event: AppEvent) -> bool:
+    value = event.get("accept", event.get("accepted", event.get("decision", False)))
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "next"}
+    return bool(value)

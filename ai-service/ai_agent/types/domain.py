@@ -113,11 +113,18 @@ _MESSAGE_WINDOW = 100  # 최근 메시지만 유지 (Redis 비대화 방지)
 class SessionState(BaseModel):
     session_id: int
     lecture_id: int
-    current_page: int = 0
+    current_page: int = 1
     pages: Dict[int, PageState] = Field(default_factory=dict)
     quiz_history: List[QuizRecord] = Field(default_factory=list)
     learner: LearnerModel = Field(default_factory=LearnerModel)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
+    qa_threads: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    integrated_memory: Dict[str, Any] = Field(default_factory=dict)
+    active_intervention: Optional[Dict[str, Any]] = None
+    quiz_assessments: List[Dict[str, Any]] = Field(default_factory=list)
+    conversation_summary: Optional[str] = None
+    page_index_path: Optional[str] = None
+    plan_verification_warnings: List[Dict[str, Any]] = Field(default_factory=list)
     waiting_for_answer: bool = False
     current_question_id: Optional[str] = None
     pdf_path: Optional[str] = None
@@ -126,6 +133,8 @@ class SessionState(BaseModel):
     updated_at: Optional[str] = None
 
     def get_current_page_state(self) -> PageState:
+        if self.current_page < 1:
+            self.current_page = 1
         if self.current_page not in self.pages:
             self.pages[self.current_page] = PageState(page_number=self.current_page)
         return self.pages[self.current_page]
@@ -159,6 +168,7 @@ class ToolName(str, Enum):
     GENERATE_QUIZ_FLASH = "GENERATE_QUIZ_FLASH"
     AUTO_GRADE_MCQ_OX = "AUTO_GRADE_MCQ_OX"
     GRADE_SHORT_OR_ESSAY = "GRADE_SHORT_OR_ESSAY"
+    REPAIR_MISCONCEPTION = "REPAIR_MISCONCEPTION"
     WRITE_FEEDBACK_ENTRY = "WRITE_FEEDBACK_ENTRY"
 
 
@@ -170,8 +180,32 @@ class OrchestratorAction(BaseModel):
     ui_state: Optional[Dict[str, Any]] = None
 
 
+class PedagogyMode(str, Enum):
+    EXPLAIN_FIRST = "EXPLAIN_FIRST"
+    DIAGNOSE = "DIAGNOSE"
+    MISCONCEPTION_REPAIR = "MISCONCEPTION_REPAIR"
+    MINIMAL_HINT = "MINIMAL_HINT"
+    CHECK_READINESS = "CHECK_READINESS"
+    HOLD_BACK = "HOLD_BACK"
+    SRL_REFLECTION = "SRL_REFLECTION"
+    ADVANCE = "ADVANCE"
+
+
+class PedagogyPolicy(BaseModel):
+    mode: PedagogyMode = PedagogyMode.ADVANCE
+    reason: Optional[str] = None
+    allow_direct_answer: bool = True
+    hint_depth: int = 0
+    intervention_budget: int = 2
+
+
 class OrchestratorPlan(BaseModel):
+    schema_version: str = "v1"
     actions: List[OrchestratorAction] = Field(default_factory=list)
+    memory_write: Dict[str, Any] = Field(default_factory=dict)
+    pedagogy_policy: PedagogyPolicy = Field(default_factory=PedagogyPolicy)
+    stop: bool = False
+    verification_warnings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

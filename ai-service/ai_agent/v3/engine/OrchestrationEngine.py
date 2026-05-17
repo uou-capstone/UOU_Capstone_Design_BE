@@ -17,11 +17,24 @@ import logging
 from typing import AsyncGenerator, Optional
 
 from ai_agent.v3.engine.Orchestrator import Orchestrator
+from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
 from ai_agent.v3.engine.StateReducer import StateReducer
 from ai_agent.v3.engine.ToolDispatcher import ToolDispatcher
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
-from ai_agent.types.domain import AppEvent, NdjsonEvent, NdjsonEventType, SessionState
+from ai_agent.types.domain import (
+    ActionType,
+    AppEvent,
+    AppEventType,
+    NdjsonEvent,
+    NdjsonEventType,
+    OrchestratorAction,
+    OrchestratorPlan,
+    SessionState,
+    ToolName,
+)
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 from app.core.session_store import SessionStore
+from app.services.error_mapping import stable_error_type
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +77,17 @@ class OrchestrationEngine:
             # 2. Apply state immediately (StateReducer)
             state = self._reducer.reduce(state, event)
 
+            fast_path_plan = self._fast_path_plan(event, state)
+            if fast_path_plan:
+                async for ndjson_event in self._dispatcher.dispatch(
+                    fast_path_plan,
+                    state,
+                    event.payload,
+                    event_type=event.type.value,
+                ):
+                    yield ndjson_event
+                return
+
             # 3. Build plan via LLM (Orchestrator Stream)
             plan = None
             async for ndjson_event in self._orchestrator.run_stream(event, state):
@@ -81,7 +105,7 @@ class OrchestrationEngine:
                 else:
                     yield ndjson_event
 
-            if not plan or not plan.actions:
+            if not plan:
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="system",
@@ -92,8 +116,23 @@ class OrchestrationEngine:
                 return
 
             # 4. Execute actions (ToolDispatcher)
-            async for ndjson_event in self._dispatcher.dispatch(plan, state, event.payload):
+            dispatched = False
+            async for ndjson_event in self._dispatcher.dispatch(
+                plan,
+                state,
+                event.payload,
+                event_type=event.type.value,
+            ):
+                dispatched = True
                 yield ndjson_event
+            if not dispatched:
+                yield NdjsonEvent(
+                    type=NdjsonEventType.AGENT_DELTA,
+                    agent="system",
+                    channel="main",
+                    delta="No actions to process.",
+                )
+                yield NdjsonEvent(type=NdjsonEventType.DONE, agent="system", final=True, data={})
 
         except Exception as exc:
             logger.error(
@@ -103,7 +142,9 @@ class OrchestrationEngine:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
                 agent="system",
-                message=f"Server error: {exc}",
+                code="SESSION_EVENT_FAILED",
+                message="학습 세션 이벤트 처리 중 오류가 발생했습니다.",
+                details=[{"errorType": stable_error_type(exc)}],
             )
 
         finally:
@@ -142,3 +183,31 @@ class OrchestrationEngine:
             "ui": ui_patches,
             "data": data_patches,
         }
+
+    def _fast_path_plan(self, event: AppEvent, state: SessionState) -> OrchestratorPlan | None:
+        if event.type != AppEventType.QUIZ_SUBMITTED:
+            return None
+        latest = self._latest_page_quiz(state)
+        if not latest:
+            return None
+        quiz_type = normalize_exam_type_string(
+            event.get("quiz_type", event.get("quizType", event.get("exam_type", latest.quiz_type)))
+        )
+        if quiz_type not in {"Five_Choice", "OX_Problem"}:
+            return None
+        if quiz_diagnosis_service.has_pending_assessment(state, page_number=state.current_page):
+            return None
+        return OrchestratorPlan(actions=[
+            OrchestratorAction(
+                type=ActionType.CALL_TOOL,
+                tool=ToolName.AUTO_GRADE_MCQ_OX,
+                params={"quiz_type": quiz_type},
+            )
+        ])
+
+    @staticmethod
+    def _latest_page_quiz(state: SessionState):
+        for record in reversed(state.quiz_history):
+            if record.page_number == state.current_page:
+                return record
+        return None
