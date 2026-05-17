@@ -1,4 +1,5 @@
 import hmac
+import logging
 import os
 from typing import Callable
 
@@ -19,6 +20,7 @@ from app.routers.lecture import router as lecture_router   # [v2] Classic Track
 from app.routers.qa import router as qa_router             # [v2] Classic Track
 from app.core.redis_client import redis_manager
 
+logger = logging.getLogger(__name__)
 
 _AUTH_EXEMPT_PATHS = {
     "/health",
@@ -93,19 +95,12 @@ def create_app() -> FastAPI:
     # Pydantic 검증 에러 핸들링
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        # 요청 본문 읽기 (한 번만)
-        try:
-            body = await request.body()
-            body_str = body.decode('utf-8') if body else "N/A"
-        except Exception:
-            body_str = "요청 본문 읽기 실패"
-        
-        print(f"[ERROR] ========== 요청 검증 실패 ==========")
-        print(f"[ERROR] URL: {request.url}")
-        print(f"[ERROR] Method: {request.method}")
-        print(f"[ERROR] 에러 상세: {exc.errors()}")
-        print(f"[ERROR] 요청 본문: {body_str}")
-        print(f"[ERROR] =====================================")
+        logger.warning(
+            "request validation failed path=%s method=%s errors=%s",
+            request.url.path,
+            request.method,
+            exc.errors(),
+        )
         
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,

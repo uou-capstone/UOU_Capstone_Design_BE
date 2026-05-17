@@ -30,6 +30,13 @@ _PROFICIENCY_MAP: Dict[str, str] = {
     "ADVANCED": "Advanced",
 }
 
+_PROBLEM_KEYS_BY_TYPE: Dict[str, str] = {
+    "Five_Choice": "mcq_problems",
+    "OX_Problem": "ox_problems",
+    "Flash_Card": "flash_cards",
+    "Short_Answer": "short_answer_problems",
+}
+
 
 # ---------------------------------------------------------------------------
 # 모듈 수준 헬퍼 (테스트에서도 독립적으로 사용 가능)
@@ -121,6 +128,62 @@ def _build_validation_error_event(exc: Exception) -> NdjsonEvent:
     )
 
 
+def _to_jsonable(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    return value
+
+
+def _as_problem_list(value: Any) -> List[Dict[str, Any]]:
+    value = _to_jsonable(value)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def normalize_quiz_generation_result(result: Any, quiz_type: str) -> List[Dict[str, Any]]:
+    """
+    Normalize v2 TestGenerationResponse wrappers to the v3 session contract.
+
+    The session/bridge layer expects done.data.quiz to be the problem array.
+    The v2 generator returns {"problems": {"mcq_problems": [...]}} style
+    wrappers, so this extracts the actual list while accepting older shapes.
+    """
+    raw = _to_jsonable(result)
+    if isinstance(raw, list):
+        return _as_problem_list(raw)
+    if not isinstance(raw, dict):
+        return []
+
+    if "quiz" in raw:
+        return normalize_quiz_generation_result(raw["quiz"], quiz_type)
+
+    normalized_type = normalize_exam_type_string(quiz_type)
+    expected_key = _PROBLEM_KEYS_BY_TYPE.get(normalized_type)
+
+    problems = raw.get("problems")
+    if isinstance(problems, list):
+        return _as_problem_list(problems)
+    if isinstance(problems, dict):
+        if expected_key and expected_key in problems:
+            return _as_problem_list(problems[expected_key])
+        for key in (*_PROBLEM_KEYS_BY_TYPE.values(), "topics"):
+            if key in problems:
+                return _as_problem_list(problems[key])
+
+    if expected_key and expected_key in raw:
+        return _as_problem_list(raw[expected_key])
+    for key in (*_PROBLEM_KEYS_BY_TYPE.values(), "topics"):
+        if key in raw:
+            return _as_problem_list(raw[key])
+
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -161,6 +224,7 @@ class QuizAgents:
             learner_hint: SessionState.learner.model_dump() 결과 (proficiency, 취약점 보강용)
             count: 생성할 문제 수
         """
+        quiz_type = normalize_exam_type_string(quiz_type)
         yield NdjsonEvent(
             type=NdjsonEventType.AGENT_DELTA,
             agent="quiz",
@@ -236,7 +300,7 @@ class QuizAgents:
 
         generator = self._get_generator()
         result = await generator.generate_test(request)
-        return result.model_dump() if hasattr(result, "model_dump") else result
+        return normalize_quiz_generation_result(result, qt)
 
     async def run(
         self,

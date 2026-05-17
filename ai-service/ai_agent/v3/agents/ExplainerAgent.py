@@ -15,11 +15,50 @@ from typing import AsyncGenerator, Optional
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
 
-SYSTEM_PROMPT = """# [Role]
+TEXT_CONTEXT_PROMPT = """너는 설명 에이전트다.
+현재 학생이 보고 있는 페이지는 {page_number}페이지다.
+반드시 현재 페이지 번호를 문장에 자연스럽게 명시하고, 한국어 Markdown으로 설명하라.
+현재 페이지 텍스트를 중심으로 설명하고, 이전/다음 페이지는 흐름 파악용 보조 참고로만 사용하라.
+PDF 원문이 영어 또는 다른 언어여도 설명, 요약, 예시는 자연스러운 한국어로 풀어 써라.
+전문 용어, 고유명사, 코드, 수식, API 이름은 필요한 경우 영어 원문을 괄호로 병기할 수 있다.
+매 페이지마다 새 강의를 시작하는 것처럼 인사하지 마라.
+답변 전체에서 "안녕하세요", "학생 여러분", "여러분", "지난 시간에 이어", "오늘은", "이번 시간에는" 같은 도입/호명 문구를 절대 쓰지 마라.
+첫 문장은 반드시 `## 핵심 요지` 헤딩으로 시작하라.
+
+{detail_instruction}
+
+포맷 규칙:
+- 수식이 등장하면 반드시 LaTeX 문법을 사용하라. 예: `$x^2 + y^2 = r^2$`, `$$E = mc^2$$`
+- 프로그래밍 코드, 터미널 명령어, 파일명, 키워드가 등장하면 반드시 코드 포맷을 사용하라. 예: `pip install fastapi`
+- 중요한 개념, 용어, 정의, 조건은 **굵게** 표시하라.
+- 짧은 문단과 글머리 기호를 사용해 읽기 쉽게 구성하라.
+
+학생 수준: {learner_level}
+학생 통합 메모리:
+{learner_memory_digest}
+
+현재 페이지 텍스트:
+{page_text}
+
+이전 페이지 참고:
+{prev_text}
+
+다음 페이지 참고:
+{next_text}
+"""
+
+PDF_FALLBACK_PROMPT = """# [Role]
 당신은 학생들에게 강의를 진행하는, 친절하고 전문 지식을 갖춘 교수입니다.
 
 # [Task]
 학생이 현재 보고 있는 PDF 페이지를 기준으로 직관적이고 이해하기 쉽게 설명해주세요.
+
+# [언어 규칙]
+- 최종 설명은 반드시 자연스러운 한국어로 작성하세요.
+- PDF 원문이 영어 또는 다른 언어여도 설명, 요약, 예시는 한국어로 풀어 쓰세요.
+- 전문 용어, 고유명사, 코드, 수식, API 이름은 필요한 경우 영어 원문을 괄호로 병기할 수 있습니다.
+- 제목과 소제목도 한국어로 작성하세요.
+- 원문 문장을 길게 영어로 그대로 옮기지 말고, 학습자가 이해하기 쉬운 한국어 설명으로 바꾸세요.
 
 # [출력 형식 (가독성 및 포맷팅: 매우 중요)]
 - 출력은 **마크다운**으로 작성하세요.
@@ -63,6 +102,19 @@ DETAILED_SUFFIX = """
 """
 
 
+def _detail_instruction(detail: str) -> str:
+    if detail == "DETAILED":
+        return (
+            "- 최근 퀴즈 성과가 낮을 수 있으니 설명을 더 자세히 제공하라.\n"
+            "- 정의, 직관, 예시, 오개념 교정 포인트를 구조화해 설명하라."
+        )
+    return "- 설명 깊이는 보통 수준으로 유지하고 핵심 개념을 짧고 명확하게 설명하라."
+
+
+def _learner_memory_text(value: Optional[str]) -> str:
+    return value.strip() if value and value.strip() else "(개인화 메모리 없음)"
+
+
 class ExplainerAgent:
     """
     페이지 단위 설명을 스트리밍으로 생성하는 에이전트.
@@ -78,6 +130,11 @@ class ExplainerAgent:
         pdf_path: str,
         chapter_title: Optional[str] = None,
         detail: str = "NORMAL",
+        page_text: Optional[str] = None,
+        prev_text: str = "",
+        next_text: str = "",
+        learner_level: str = "INTERMEDIATE",
+        learner_memory_digest: Optional[str] = None,
     ) -> AsyncGenerator[NdjsonEvent, None]:
         """
         페이지 단위 강의 설명 스트리밍 생성.
@@ -88,7 +145,21 @@ class ExplainerAgent:
             chapter_title: 챕터 제목 (선택, 없으면 페이지 번호로 대체)
             detail: "NORMAL" | "DETAILED" (복습 모드)
         """
-        system = SYSTEM_PROMPT + (DETAILED_SUFFIX if detail == "DETAILED" else "")
+        if page_text and page_text.strip():
+            prompt = TEXT_CONTEXT_PROMPT.format(
+                page_number=page_number,
+                detail_instruction=_detail_instruction(detail),
+                learner_level=learner_level or "INTERMEDIATE",
+                learner_memory_digest=_learner_memory_text(learner_memory_digest),
+                page_text=page_text.strip(),
+                prev_text=(prev_text or "").strip() or "(없음)",
+                next_text=(next_text or "").strip() or "(없음)",
+            )
+            async for event in self._bridge.stream([prompt], agent="explainer", tool="EXPLAIN_PAGE"):
+                yield event
+            return
+
+        system = PDF_FALLBACK_PROMPT + (DETAILED_SUFFIX if detail == "DETAILED" else "")
 
         pdf_part = await self._bridge.load_pdf_part(pdf_path)
 
@@ -98,6 +169,7 @@ class ExplainerAgent:
             f"[챕터/제목 참고]: {label}\n\n"
             f"현재 학생은 PDF의 {page_number}페이지를 보고 있습니다.\n"
             "이 페이지의 내용을 중심으로 강의를 진행해주세요.\n"
+            "반드시 한국어로 설명하고, 영어 원문은 필요한 전문 용어만 괄호로 병기하세요.\n"
             "다른 페이지 내용으로 벗어나지 말고, 이 페이지에 집중해서 설명하세요.\n"
         )
 
@@ -112,9 +184,26 @@ class ExplainerAgent:
         pdf_path: str,
         chapter_title: Optional[str] = None,
         detail: str = "NORMAL",
+        page_text: Optional[str] = None,
+        prev_text: str = "",
+        next_text: str = "",
+        learner_level: str = "INTERMEDIATE",
+        learner_memory_digest: Optional[str] = None,
     ) -> str:
         """비스트리밍 버전: 전체 설명 텍스트 반환"""
-        system = SYSTEM_PROMPT + (DETAILED_SUFFIX if detail == "DETAILED" else "")
+        if page_text and page_text.strip():
+            prompt = TEXT_CONTEXT_PROMPT.format(
+                page_number=page_number,
+                detail_instruction=_detail_instruction(detail),
+                learner_level=learner_level or "INTERMEDIATE",
+                learner_memory_digest=_learner_memory_text(learner_memory_digest),
+                page_text=page_text.strip(),
+                prev_text=(prev_text or "").strip() or "(없음)",
+                next_text=(next_text or "").strip() or "(없음)",
+            )
+            return await self._bridge.generate([prompt])
+
+        system = PDF_FALLBACK_PROMPT + (DETAILED_SUFFIX if detail == "DETAILED" else "")
 
         pdf_part = await self._bridge.load_pdf_part(pdf_path)
 
@@ -124,6 +213,7 @@ class ExplainerAgent:
             f"[챕터/제목 참고]: {label}\n\n"
             f"현재 학생은 PDF의 {page_number}페이지를 보고 있습니다.\n"
             "이 페이지의 내용을 중심으로 강의를 진행해주세요.\n"
+            "반드시 한국어로 설명하고, 영어 원문은 필요한 전문 용어만 괄호로 병기하세요.\n"
         )
 
         contents = [system, pdf_part, user_prompt]

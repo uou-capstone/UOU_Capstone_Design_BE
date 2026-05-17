@@ -19,6 +19,7 @@ from ai_agent.v3.engine.OrchestrationEngine import OrchestrationEngine
 from ai_agent.types.domain import AppEvent, AppEventType
 from app.core.session_store import session_store
 from app.core.path_validator import validate_pdf_path_optional
+from app.services.error_mapping import stable_error_type
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,13 @@ async def handle_event_stream(
                 yield ndjson_event.to_ndjson_line()
         except Exception as exc:
             from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
-            err = NdjsonEvent(type=NdjsonEventType.ERROR, agent="system", message=str(exc))
+            err = NdjsonEvent(
+                type=NdjsonEventType.ERROR,
+                agent="system",
+                code="SESSION_STREAM_FAILED",
+                message="학습 세션 스트림 처리 중 오류가 발생했습니다.",
+                details=[{"errorType": stable_error_type(exc)}],
+            )
             yield err.to_ndjson_line()
 
     return StreamingResponse(

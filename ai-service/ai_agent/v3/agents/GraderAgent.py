@@ -55,6 +55,101 @@ GRADING_SYSTEM_PROMPT = """# [Role]
 PASS_SCORE_RATIO = 0.6
 
 
+def _extract_problem_answer(problem: Dict[str, Any]) -> Any:
+    for key in (
+        "answer",
+        "correct_answer",
+        "correctAnswer",
+        "correct_choice_id",
+        "correctChoiceId",
+        "correct_choice",
+        "correct",
+        "solution",
+    ):
+        if key in problem and problem[key] is not None:
+            return _extract_answer_value(problem[key])
+
+    for choice_key in ("choices", "options"):
+        choices = problem.get(choice_key)
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            is_correct_choice = (
+                choice.get("isCorrect")
+                or choice.get("isAnswer")
+                or choice.get("is_answer")
+                or choice.get("correct")
+                or choice.get("answer") is True
+            )
+            if is_correct_choice:
+                return _extract_answer_value(choice)
+
+    return None
+
+
+def _extract_user_answer(user_answer: Any) -> Any:
+    return _extract_answer_value(user_answer)
+
+
+def _extract_answer_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        for key in (
+            "answer",
+            "value",
+            "choiceId",
+            "choice_id",
+            "selectedChoiceId",
+            "selected_choice_id",
+            "selected",
+            "selectedOption",
+            "selected_option",
+            "option",
+            "id",
+            "label",
+            "content",
+        ):
+            if key in value and value[key] is not None:
+                return _extract_answer_value(value[key])
+    return value
+
+
+def _normalize_answer(value: Any) -> str:
+    value = _extract_answer_value(value)
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "O" if value else "X"
+
+    text = str(value).strip()
+    upper = text.upper()
+    compact = "".join(upper.split())
+
+    ox_aliases = {
+        "TRUE": "O",
+        "T": "O",
+        "YES": "O",
+        "Y": "O",
+        "O": "O",
+        "○": "O",
+        "〇": "O",
+        "맞음": "O",
+        "참": "O",
+        "정답": "O",
+        "FALSE": "X",
+        "F": "X",
+        "NO": "X",
+        "N": "X",
+        "X": "X",
+        "×": "X",
+        "틀림": "X",
+        "거짓": "X",
+        "오답": "X",
+    }
+    return ox_aliases.get(compact, compact)
+
+
 class GraderAgent:
     """
     퀴즈 채점 에이전트.
@@ -147,12 +242,11 @@ class GraderAgent:
         correct_count = 0
 
         for idx, (problem, user_answer) in enumerate(zip(problems, user_answers)):
-            correct = problem.get("answer") or problem.get("correct_answer")
-            # dict 형식 {"index": i, "answer": "..."} 또는 단순 문자열 모두 처리
-            answer_str = (
-                user_answer.get("answer", "") if isinstance(user_answer, dict) else str(user_answer)
-            )
-            is_correct = answer_str.strip().upper() == str(correct).strip().upper()
+            correct = _extract_problem_answer(problem)
+            answer = _extract_user_answer(user_answer)
+            correct_str = "" if correct is None else str(correct)
+            answer_str = "" if answer is None else str(answer)
+            is_correct = _normalize_answer(answer) == _normalize_answer(correct)
             if is_correct:
                 correct_count += 1
 
@@ -160,9 +254,9 @@ class GraderAgent:
                 "question_index": idx,
                 "score": 1.0 if is_correct else 0.0,
                 "passed": is_correct,
-                "feedback": "정답입니다!" if is_correct else f"오답입니다. 정답은 '{correct}' 입니다.",
+                "feedback": "정답입니다!" if is_correct else f"오답입니다. 정답은 '{correct_str}' 입니다.",
                 "user_answer": answer_str,
-                "correct_answer": str(correct),
+                "correct_answer": correct_str,
             })
 
         total = correct_count / max(len(problems), 1)
