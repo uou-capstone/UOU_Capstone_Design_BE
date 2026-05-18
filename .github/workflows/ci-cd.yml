@@ -276,6 +276,7 @@ jobs:
           {
             "commands": [
               "set -euo pipefail",
+              "git config --system --add safe.directory /home/ec2-user/UOU_Capstone_design_Be_v3 || git config --global --add safe.directory /home/ec2-user/UOU_Capstone_design_Be_v3",
               "cd /home/ec2-user/UOU_Capstone_design_Be_v3",
               "bash deploy.sh '${DEPLOY_BRANCH}'"
             ]
