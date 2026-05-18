@@ -42,6 +42,7 @@ from ai_agent.types.domain import (
     SessionState,
     ToolName,
 )
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 from app.services.error_mapping import stable_error_type
 
 _MSG_NO_QUIZ_RECORD = "채점할 퀴즈 기록을 찾지 못했습니다."
@@ -144,7 +145,19 @@ class ToolDispatcher:
         tool = action.tool
         # Only merge explicitly allowed keys from event_payload.
         # Prevents clients from injecting pdf_path, detail, etc. to override action.params.
-        _PAYLOAD_ALLOWED_KEYS = {"question", "text", "answers", "quiz_type", "accept", "decision", "page_number"}
+        _PAYLOAD_ALLOWED_KEYS = {
+            "question",
+            "text",
+            "answers",
+            "quiz_type",
+            "quizType",
+            "exam_type",
+            "examType",
+            "selectedType",
+            "accept",
+            "decision",
+            "page_number",
+        }
         safe_payload = {k: v for k, v in event_payload.items() if k in _PAYLOAD_ALLOWED_KEYS}
         params = {**action.params, **safe_payload}
         page_state = state.get_current_page_state()
@@ -180,6 +193,14 @@ class ToolDispatcher:
             page_state.explanation = full_text[:2000] if len(full_text) > 2000 else full_text
             page_state.status = PageStatus.EXPLAINED
             state.append_message("assistant", page_state.explanation)
+            next_widget = params.get("next_widget", "NEXT_PAGE_DECISION")
+            if next_widget:
+                yield NdjsonEvent(
+                    type=NdjsonEventType.DONE,
+                    agent="system",
+                    final=True,
+                    data={"ui": {"widget": next_widget}},
+                )
 
         # ----------------------------------------------------------------
         # ANSWER_QUESTION
@@ -215,6 +236,12 @@ class ToolDispatcher:
                     metadata={"agent": "qa"},
                 )
                 state.append_message("assistant", full_text[:2000], {"agent": "qa"})
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+            )
 
         # ----------------------------------------------------------------
         # GENERATE_QUIZ_*
@@ -223,9 +250,10 @@ class ToolDispatcher:
             ToolName.GENERATE_QUIZ_FIVE_CHOICE,
             ToolName.GENERATE_QUIZ_OX,
             ToolName.GENERATE_QUIZ_SHORT,
+            ToolName.GENERATE_QUIZ_ESSAY,
             ToolName.GENERATE_QUIZ_FLASH,
         ):
-            quiz_type = params.get("quiz_type", "Five_Choice")
+            quiz_type = _params_quiz_type(params, _default_quiz_type_for_tool(tool))
             learning_context = self._context_collector.collect(state, page_state)
             if not learning_context.has_page_text and not (page_state.explanation or "").strip():
                 yield NdjsonEvent(
@@ -281,7 +309,7 @@ class ToolDispatcher:
         elif tool == ToolName.AUTO_GRADE_MCQ_OX:
             quiz_record = self._get_latest_quiz_record(state)
             user_answers = params.get("answers", [])
-            quiz_type = params.get("quiz_type", "Five_Choice")
+            quiz_type = _params_quiz_type(params, quiz_record.quiz_type if quiz_record else "Five_Choice")
 
             if quiz_record:
                 async for event in self._grader.run_stream(
@@ -315,7 +343,7 @@ class ToolDispatcher:
         elif tool == ToolName.GRADE_SHORT_OR_ESSAY:
             quiz_record = self._get_latest_quiz_record(state)
             user_answers = params.get("answers", [])
-            quiz_type = params.get("quiz_type", "Short_Answer")
+            quiz_type = _params_quiz_type(params, quiz_record.quiz_type if quiz_record else "Short_Answer")
             learning_context = self._context_collector.collect(state, page_state)
             lecture_content = learning_context.build_quiz_context(page_state.explanation)
             pdf_path = page_state.pdf_path or state.pdf_path or None
@@ -498,3 +526,22 @@ class ToolDispatcher:
         if state.active_intervention:
             enriched["activeIntervention"] = state.active_intervention
         return enriched
+
+
+def _params_quiz_type(params: Dict[str, Any], default: str) -> str:
+    return normalize_exam_type_string(
+        params.get(
+            "quiz_type",
+            params.get("quizType", params.get("exam_type", params.get("examType", params.get("selectedType", default)))),
+        )
+    )
+
+
+def _default_quiz_type_for_tool(tool: ToolName | None) -> str:
+    return {
+        ToolName.GENERATE_QUIZ_FIVE_CHOICE: "Five_Choice",
+        ToolName.GENERATE_QUIZ_OX: "OX_Problem",
+        ToolName.GENERATE_QUIZ_SHORT: "Short_Answer",
+        ToolName.GENERATE_QUIZ_ESSAY: "Essay",
+        ToolName.GENERATE_QUIZ_FLASH: "Flash_Card",
+    }.get(tool, "Five_Choice")

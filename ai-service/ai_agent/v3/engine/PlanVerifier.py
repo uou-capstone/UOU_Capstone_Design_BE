@@ -22,6 +22,7 @@ _PLANNER_ALLOWED_TOOLS = {
     ToolName.GENERATE_QUIZ_FIVE_CHOICE,
     ToolName.GENERATE_QUIZ_OX,
     ToolName.GENERATE_QUIZ_SHORT,
+    ToolName.GENERATE_QUIZ_ESSAY,
     ToolName.GENERATE_QUIZ_FLASH,
     ToolName.AUTO_GRADE_MCQ_OX,
     ToolName.GRADE_SHORT_OR_ESSAY,
@@ -33,6 +34,7 @@ _INTERVENTION_TOOLS = {
     ToolName.GENERATE_QUIZ_FIVE_CHOICE,
     ToolName.GENERATE_QUIZ_OX,
     ToolName.GENERATE_QUIZ_SHORT,
+    ToolName.GENERATE_QUIZ_ESSAY,
     ToolName.GENERATE_QUIZ_FLASH,
     ToolName.GRADE_SHORT_OR_ESSAY,
     ToolName.REPAIR_MISCONCEPTION,
@@ -71,6 +73,11 @@ class PlanVerifier:
             state,
             event_type=event_type,
             event_payload=event_payload or {},
+            warnings=warnings,
+        )
+        candidate_actions = self._patch_event_followup_widgets(
+            candidate_actions,
+            event_type=event_type,
             warnings=warnings,
         )
 
@@ -199,6 +206,42 @@ class PlanVerifier:
             tool=ToolName.REPAIR_MISCONCEPTION.value,
         ))
         return [repair_action, *filtered]
+
+    def _patch_event_followup_widgets(
+        self,
+        actions: list[OrchestratorAction],
+        *,
+        event_type: str | None,
+        warnings: list[dict[str, Any]],
+    ) -> list[OrchestratorAction]:
+        if event_type == AppEventType.PAGE_CHANGED.value:
+            default_widget = "QUIZ_DECISION"
+        elif event_type in {
+            AppEventType.START_EXPLANATION_DECISION.value,
+            AppEventType.NEXT_PAGE_DECISION.value,
+        }:
+            default_widget = "NEXT_PAGE_DECISION"
+        else:
+            return list(actions)
+
+        patched: list[OrchestratorAction] = []
+        for index, action in enumerate(actions):
+            if action.type != ActionType.CALL_TOOL or action.tool != ToolName.EXPLAIN_PAGE:
+                patched.append(action)
+                continue
+            params = dict(action.params or {})
+            if params.get("next_widget"):
+                patched.append(action)
+                continue
+            params["next_widget"] = default_widget
+            patched.append(action.model_copy(update={"params": params}))
+            warnings.append(self._warning(
+                "EXPLAIN_PAGE_FOLLOWUP_WIDGET_PATCHED",
+                "EXPLAIN_PAGE action was patched with the expected follow-up widget for this event.",
+                action_index=index,
+                tool=ToolName.EXPLAIN_PAGE.value,
+            ))
+        return patched
 
     @staticmethod
     def _warning(

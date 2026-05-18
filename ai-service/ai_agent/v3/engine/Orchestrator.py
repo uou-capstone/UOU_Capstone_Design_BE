@@ -122,10 +122,12 @@ class Orchestrator:
 절대 enum class prefix나 클래스명과 점(.)을 붙인 형태를 쓰지 마세요.
 
 [사용 가능한 도구]
-- EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED"}}) -> 강의 설명이 필요할 경우 호출.
+- EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED", "next_widget": "NEXT_PAGE_DECISION" | "QUIZ_DECISION"}}) -> 강의 설명이 필요할 경우 호출.
 - ANSWER_QUESTION: 질문에 대한 답변 (매개변수: {{"question": "..."}}) -> 사용자가 메시지로 질문한 내용의 답변 호출.
 - GENERATE_QUIZ_FIVE_CHOICE: 객관식 퀴즈 (매개변수: {{"quiz_type": "Five_Choice"}})
 - GENERATE_QUIZ_OX: OX 퀴즈 (매개변수: {{"quiz_type": "OX_Problem"}})
+- GENERATE_QUIZ_SHORT: 단답형 퀴즈 (매개변수: {{"quiz_type": "Short_Answer"}})
+- GENERATE_QUIZ_ESSAY: 서술형 퀴즈 (매개변수: {{"quiz_type": "Essay"}})
 - AUTO_GRADE_MCQ_OX: 객관식 자동 채점 (매개변수: {{"quiz_type": "..."}})
 - GRADE_SHORT_OR_ESSAY: 주관식 채점 (매개변수: {{"quiz_type": "..."}})
 - REPAIR_MISCONCEPTION: 활성 오개념 교정 상태가 있을 때 학생 답변 기반으로 짧은 교정 설명을 생성 (매개변수: {{"student_message": "..."}})
@@ -142,9 +144,18 @@ UI 상태 action:
 2. 최종 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
 3. 최종 JSON에는 `thinking`, `thought`, `reasoning` 필드를 넣지 마세요. 사고 흐름은 스트리밍 thought 채널에서만 사용합니다.
 4. 일반 질문/답변의 경우 `ANSWER_QUESTION` 툴을 부릅니다.
-5. 설명 직후에는 퀴즈 풀이를 제안하는 위젯(`QUIZ_DECISION`)을 노출시키거나, 이전 점수가 좋지 않다면 바로 해당 페이지 기반의 퀴즈를 생성하세요.
+5. 설명 직후에는 후속 UI를 분명히 정하세요. 처음 설명을 시작한 흐름은 `NEXT_PAGE_DECISION`, 페이지 변경 기반 흐름은 `QUIZ_DECISION`을 우선 사용합니다.
 6. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
 7. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
+8. `SESSION_ENTERED`에서는 빈 actions를 반환하지 말고 `START_EXPLANATION_DECISION` 위젯을 표시하세요.
+9. `START_EXPLANATION_DECISION`이 수락되었거나 payload가 비어 있으면 `EXPLAIN_PAGE` 도구를 호출하세요. params에는 {{"detail":"NORMAL","next_widget":"NEXT_PAGE_DECISION"}}를 넣으세요.
+10. `PAGE_CHANGED` 이벤트는 PDF 뷰어가 이미 페이지를 바꾼 상태입니다. 현재 페이지에 대해 `EXPLAIN_PAGE`를 호출하고 params에는 {{"detail":"NORMAL","next_widget":"QUIZ_DECISION"}}를 넣으세요.
+11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. params에는 {{"detail":"NORMAL","next_widget":"NEXT_PAGE_DECISION"}}를 넣으세요.
+12. `QUIZ_DECISION`이 수락되면 퀴즈 유형 선택 UI만 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER"}}}}.
+13. `RETEST_DECISION`이 수락되면 재시험 유형 선택 UI를 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","mode":"RETEST"}}}}.
+14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`를 호출하세요.
+15. `QUIZ_SUBMITTED`에서 객관식/OX는 `AUTO_GRADE_MCQ_OX`, 단답형/서술형은 `GRADE_SHORT_OR_ESSAY`를 사용하세요. 기준 미달이면 진단/교정 흐름을 유지하고, 재시험 통과 후에도 다음 페이지 설명을 자동 시작하지 말고 사용자의 `PAGE_CHANGED`를 기다리세요.
+16. 일반 `USER_MESSAGE` 질문에는 `ANSWER_QUESTION` 도구를 호출하고, 답변 후 다음 페이지 이동 여부를 묻는 흐름을 유지하세요.
 """
         return prompt
 
