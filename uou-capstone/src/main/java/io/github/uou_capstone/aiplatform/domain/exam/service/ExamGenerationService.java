@@ -6,11 +6,17 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.assessment.entity.CreatedBy;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
+import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.*;
+import io.github.uou_capstone.aiplatform.domain.exam.dto.student.*;
+import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamQuestion;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
+import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamStatus;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamQuestionRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
@@ -49,6 +55,7 @@ import java.util.Map;
 public class ExamGenerationService {
 
     private final ExamSessionRepository examSessionRepository;
+    private final ExamQuestionRepository examQuestionRepository;
     private final LectureRepository lectureRepository;
     private final MaterialRepository materialRepository;
     private final UserRepository userRepository;
@@ -59,6 +66,7 @@ public class ExamGenerationService {
     private final SessionRecoveryService sessionRecoveryService;
     private final FastApiBridgeClient fastApiBridgeClient;
     private final TeacherNotificationPublisher teacherNotificationPublisher;
+    private final CourseAccessService courseAccessService;
 
     /**
      * 시험 생성 요청 처리
@@ -260,6 +268,13 @@ public class ExamGenerationService {
         if (fiveChoiceProblems != null) {
             fillFiveChoiceOptionCorrectFlags(fiveChoiceProblems);
         }
+
+        // ========== 7-2단계: ExamQuestion hydration ==========
+        // 응시(ExamSubmissionService) 가 examQuestionRepository 에서 문제를 읽으므로,
+        // 생성된 문제를 ExamQuestion 행으로 함께 저장한다. 정답·해설 등 메타데이터는
+        // questionMetadata(JSON) 에 보관. DEBATE 는 현재 빈 리스트라 행이 0개 생성된다.
+        hydrateExamQuestions(session, requestDto.getExamType(),
+                flashCards, oxProblems, fiveChoiceProblems, shortAnswerProblems);
 
         return ExamGenerationResponseDto.builder()
                 .examSessionId(session.getId())
@@ -660,5 +675,243 @@ public class ExamGenerationService {
                 opt.setIsCorrect(correct.equals(optId));
             }
         }
+    }
+
+    // ============================================================
+    // ExamQuestion hydration (응시 정상화)
+    //
+    // ExamSession.examContentJson 에만 저장되던 문제를 ExamQuestion 행으로도 함께 저장한다.
+    // ExamSubmissionService 가 examQuestionRepository.findByExamSessionIdOrderByQuestionOrder()
+    // 로 문제를 조회하기 때문에, hydration 이 없으면 응시 단계가 항상 "문제를 찾을 수 없습니다"
+    // 로 실패한다.
+    //
+    // assessment 는 null 로 둔다 (v2 흐름은 ExamSession 기반, V5 마이그레이션으로 nullable).
+    // FIVE_CHOICE 옵션은 ChoiceOption 테이블에 행을 만들지 않고 questionMetadata.options 에
+    // [{id:"1"~"5", content, intent, isCorrect}] 형태로 저장한다 — ChoiceOption 엔티티에
+    // 원본 option id 와 intent 를 담을 컬럼이 없기 때문.
+    // ============================================================
+
+    private void hydrateExamQuestions(
+            ExamSession session,
+            ExamType examType,
+            List<FlashCardDto> flashCards,
+            List<OxProblemDto> oxProblems,
+            List<FiveChoiceProblemDto> fiveChoiceProblems,
+            List<ShortAnswerProblemDto> shortAnswerProblems) {
+
+        // 재실행 대비: 기존 ExamQuestion 정리 (orphanRemoval cascade 안전성을 위해 load → deleteAll)
+        List<ExamQuestion> existing = examQuestionRepository.findByExamSession(session);
+        if (!existing.isEmpty()) {
+            examQuestionRepository.deleteAll(existing);
+            examQuestionRepository.flush();
+        }
+
+        switch (examType) {
+            case FLASH_CARD    -> hydrateFlashCards(session, flashCards);
+            case OX_PROBLEM    -> hydrateOxProblems(session, oxProblems);
+            case FIVE_CHOICE   -> hydrateFiveChoice(session, fiveChoiceProblems);
+            case SHORT_ANSWER  -> hydrateShortAnswers(session, shortAnswerProblems);
+            case DEBATE        -> { /* no-op: 현재 generateExam 이 debateTopics = List.of() 로 두어 hydrate 할 데이터가 없다 */ }
+        }
+    }
+
+    private void hydrateFlashCards(ExamSession session, List<FlashCardDto> cards) {
+        if (cards == null || cards.isEmpty()) return;
+        int order = 1;
+        List<ExamQuestion> rows = new java.util.ArrayList<>();
+        for (FlashCardDto card : cards) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("backContent", card.getBackContent());
+            metadata.put("categoryTag", card.getCategoryTag());
+            metadata.put("complexityLevel", card.getComplexityLevel());
+            rows.add(ExamQuestion.builder()
+                    .assessment(null)
+                    .examSession(session)
+                    .examType(ExamType.FLASH_CARD)
+                    .questionOrder(order++)
+                    .questionContent(card.getFrontContent())
+                    .questionMetadata(metadata)
+                    .createdBy(CreatedBy.AI)
+                    .build());
+        }
+        examQuestionRepository.saveAll(rows);
+    }
+
+    private void hydrateOxProblems(ExamSession session, List<OxProblemDto> problems) {
+        if (problems == null || problems.isEmpty()) return;
+        int order = 1;
+        List<ExamQuestion> rows = new java.util.ArrayList<>();
+        for (OxProblemDto p : problems) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("correctAnswer", p.getCorrectAnswer());
+            metadata.put("explanation", p.getExplanation());
+            metadata.put("intentType", p.getIntentType());
+            rows.add(ExamQuestion.builder()
+                    .assessment(null)
+                    .examSession(session)
+                    .examType(ExamType.OX_PROBLEM)
+                    .questionOrder(order++)
+                    .questionContent(p.getQuestionContent())
+                    .questionMetadata(metadata)
+                    .createdBy(CreatedBy.AI)
+                    .build());
+        }
+        examQuestionRepository.saveAll(rows);
+    }
+
+    private void hydrateFiveChoice(ExamSession session, List<FiveChoiceProblemDto> problems) {
+        if (problems == null || problems.isEmpty()) return;
+        int order = 1;
+        List<ExamQuestion> rows = new java.util.ArrayList<>();
+        for (FiveChoiceProblemDto p : problems) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("correctAnswer", p.getCorrectAnswer());
+            metadata.put("intentDiagnosis", p.getIntentDiagnosis());
+            // 옵션은 원본 id("1"~"5") + content + intent + isCorrect 를 그대로 보존
+            List<Map<String, Object>> optionMaps = new java.util.ArrayList<>();
+            if (p.getOptions() != null) {
+                for (FiveChoiceOptionDto opt : p.getOptions()) {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("id", opt.getId());
+                    m.put("content", opt.getContent());
+                    m.put("intent", opt.getIntent());
+                    m.put("isCorrect", opt.getIsCorrect());
+                    optionMaps.add(m);
+                }
+            }
+            metadata.put("options", optionMaps);
+            rows.add(ExamQuestion.builder()
+                    .assessment(null)
+                    .examSession(session)
+                    .examType(ExamType.FIVE_CHOICE)
+                    .questionOrder(order++)
+                    .questionContent(p.getQuestionContent())
+                    .questionMetadata(metadata)
+                    .createdBy(CreatedBy.AI)
+                    .build());
+        }
+        examQuestionRepository.saveAll(rows);
+    }
+
+    private void hydrateShortAnswers(ExamSession session, List<ShortAnswerProblemDto> problems) {
+        if (problems == null || problems.isEmpty()) return;
+        int order = 1;
+        List<ExamQuestion> rows = new java.util.ArrayList<>();
+        for (ShortAnswerProblemDto p : problems) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("bestAnswer", p.getBestAnswer());
+            metadata.put("evaluationCriteria", p.getEvaluationCriteria());
+            metadata.put("relatedKeywords", p.getRelatedKeywords());
+            rows.add(ExamQuestion.builder()
+                    .assessment(null)
+                    .examSession(session)
+                    .examType(ExamType.SHORT_ANSWER)
+                    .questionOrder(order++)
+                    .questionContent(p.getQuestionContent())
+                    .questionMetadata(metadata)
+                    .createdBy(CreatedBy.AI)
+                    .build());
+        }
+        examQuestionRepository.saveAll(rows);
+    }
+
+    // ============================================================
+    // 학생용 시험 상세 조회 (정답 필드 제거된 화이트리스트 DTO 반환)
+    // ============================================================
+
+    /**
+     * 학생용 시험 세션 상세 조회.
+     *
+     * <p>권한: 컨트롤러에서 STUDENT 로 1차 차단 + 본 메서드에서 해당 강의 Course 의 ACTIVE 수강생인지
+     * {@link CourseAccessService#loadCourseAsParticipant(Long)} 으로 검증.
+     *
+     * <p>READY 상태가 아닌 세션(생성 중/실패) 은 학생에 노출하지 않는다.
+     *
+     * <p>응답은 ExamQuestion 행 + questionMetadata 에서 학생 공개 필드만 화이트리스트로 추출한다.
+     * 정답·해설·평가 기준 등은 DTO 매핑 단계에서 구조적으로 제외 — 새 DTO 만 사용해 누출 방지.
+     */
+    @Transactional(readOnly = true)
+    public StudentExamDetailDto getStudentExamSession(Long examSessionId) {
+        ExamSession session = examSessionRepository.findById(examSessionId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        if (session.getStatus() != ExamStatus.READY) {
+            throw new BusinessException(
+                    CommonErrorCode.INVALID_PHASE,
+                    "시험이 아직 준비되지 않았습니다. 상태: " + session.getStatus()
+            );
+        }
+
+        Long courseId = session.getLecture().getCourse().getId();
+        courseAccessService.loadCourseAsParticipant(courseId);
+
+        List<ExamQuestion> questions =
+                examQuestionRepository.findByExamSessionIdOrderByQuestionOrder(session.getId());
+
+        StudentExamDetailDto.StudentExamDetailDtoBuilder builder = StudentExamDetailDto.builder()
+                .examSessionId(session.getId())
+                .materialId(session.getMaterial() != null ? session.getMaterial().getId() : null)
+                .examType(session.getExamType())
+                .displayName(session.getDisplayName())
+                .totalCount(questions.size());
+
+        switch (session.getExamType()) {
+            case FLASH_CARD -> builder.flashCards(questions.stream()
+                    .map(this::toStudentFlashCard).toList());
+            case OX_PROBLEM -> builder.oxProblems(questions.stream()
+                    .map(this::toStudentOxProblem).toList());
+            case FIVE_CHOICE -> builder.fiveChoiceProblems(questions.stream()
+                    .map(this::toStudentFiveChoice).toList());
+            case SHORT_ANSWER -> builder.shortAnswerProblems(questions.stream()
+                    .map(this::toStudentShortAnswer).toList());
+            case DEBATE -> builder.debateTopics(List.of());  // 현재 generateExam 이 채우지 않음
+        }
+
+        return builder.build();
+    }
+
+    private StudentFlashCardDto toStudentFlashCard(ExamQuestion q) {
+        Map<String, Object> m = q.getQuestionMetadata() != null ? q.getQuestionMetadata() : Map.of();
+        return StudentFlashCardDto.builder()
+                .id(q.getId())
+                .frontContent(q.getQuestionContent())
+                .categoryTag(asString(m.get("categoryTag")))
+                .complexityLevel(asString(m.get("complexityLevel")))
+                .build();
+    }
+
+    private StudentOxProblemDto toStudentOxProblem(ExamQuestion q) {
+        return StudentOxProblemDto.builder()
+                .id(q.getId())
+                .questionContent(q.getQuestionContent())
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private StudentFiveChoiceProblemDto toStudentFiveChoice(ExamQuestion q) {
+        Map<String, Object> m = q.getQuestionMetadata() != null ? q.getQuestionMetadata() : Map.of();
+        List<Map<String, Object>> rawOpts = (List<Map<String, Object>>) m.getOrDefault("options", List.of());
+        List<StudentFiveChoiceProblemDto.Option> options = rawOpts.stream()
+                .map(o -> StudentFiveChoiceProblemDto.Option.builder()
+                        .id(asString(o.get("id")))
+                        .content(asString(o.get("content")))
+                        .build())
+                .toList();
+        return StudentFiveChoiceProblemDto.builder()
+                .id(q.getId())
+                .questionContent(q.getQuestionContent())
+                .options(options)
+                .build();
+    }
+
+    private StudentShortAnswerProblemDto toStudentShortAnswer(ExamQuestion q) {
+        return StudentShortAnswerProblemDto.builder()
+                .id(q.getId())
+                .questionContent(q.getQuestionContent())
+                .build();
+    }
+
+    private String asString(Object v) {
+        return v == null ? null : String.valueOf(v);
     }
 }
