@@ -102,6 +102,9 @@ class OrchestrationEngine:
                 elif ndjson_event.type == NdjsonEventType.AGENT_DELTA:
                     if ndjson_event.channel == "thought":
                         yield ndjson_event
+                elif ndjson_event.type == NdjsonEventType.ERROR:
+                    yield ndjson_event
+                    return
                 else:
                     yield ndjson_event
 

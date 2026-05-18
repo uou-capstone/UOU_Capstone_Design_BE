@@ -95,6 +95,23 @@ def test_plan_verifier_injects_repair_for_active_intervention_user_turn():
     assert result.warnings[-1]["code"] == "REPAIR_MISCONCEPTION_INJECTED"
 
 
+def test_plan_verifier_drops_non_planner_tool_from_llm_plan():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.WRITE_FEEDBACK_ENTRY,
+            params={"feedback": "internal note"},
+        ),
+        OrchestratorAction(type=ActionType.CALL_TOOL, tool=ToolName.EXPLAIN_PAGE),
+    ])
+
+    result = PlanVerifier().verify(plan, state)
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.EXPLAIN_PAGE]
+    assert result.warnings[0]["code"] == "UNALLOWED_TOOL_DROPPED"
+
+
 @pytest.mark.asyncio
 async def test_tool_dispatcher_runs_verified_plan(monkeypatch):
     dispatcher = ToolDispatcher(bridge=None)  # type: ignore[arg-type]
@@ -241,6 +258,88 @@ def test_orchestrator_prompt_consumes_pending_assessment_artifact():
     assert state.quiz_assessments[0]["status"] == "CONSUMED"
 
 
+def test_orchestrator_prompt_uses_json_literals_without_enum_prefixes():
+    state = SessionState(session_id=1, lecture_id=1)
+
+    prompt = Orchestrator(None)._build_prompt(  # type: ignore[arg-type]
+        AppEvent(type=AppEventType.SESSION_ENTERED, payload={}),
+        state,
+    )
+
+    assert "ActionType." not in prompt
+    assert "ToolName." not in prompt
+    assert "PedagogyMode." not in prompt
+    assert '"CALL_TOOL"' in prompt
+    assert '"EXPLAIN_PAGE"' in prompt
+
+
+def test_orchestrator_plan_normalizes_exact_enum_prefixes_only():
+    plan = OrchestratorPlan.model_validate({
+        "actions": [
+            {
+                "type": "ActionType.CALL_TOOL",
+                "tool": "ToolName.EXPLAIN_PAGE",
+                "params": {"detail": "NORMAL"},
+            },
+            {
+                "type": "ActionType.SET_UI_STATE",
+                "ui_state": {"widget": "QUIZ_DECISION"},
+            },
+        ],
+        "pedagogy_policy": {"mode": "PedagogyMode.ADVANCE"},
+    })
+
+    assert plan.actions[0].type == ActionType.CALL_TOOL
+    assert plan.actions[0].tool == ToolName.EXPLAIN_PAGE
+    assert plan.actions[1].type == ActionType.SET_UI_STATE
+    assert plan.pedagogy_policy.mode.value == "ADVANCE"
+
+    with pytest.raises(Exception):
+        OrchestratorPlan.model_validate({
+            "actions": [{"type": "Bad.CALL_TOOL", "tool": "ToolName.EXPLAIN_PAGE"}],
+        })
+    with pytest.raises(Exception):
+        OrchestratorPlan.model_validate({
+            "actions": [{"type": "ActionType.CALL_TOOL.extra", "tool": "ToolName.EXPLAIN_PAGE"}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_sanitizes_invalid_plan_error_and_keeps_thought():
+    class FakeBridge:
+        async def stream(self, contents, config, agent: str):
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent=agent,
+                channel="thought",
+                delta="Analyzing the plan.",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent=agent,
+                channel="main",
+                delta=json.dumps({"actions": [{"type": "Bad.CALL_TOOL", "tool": "EXPLAIN_PAGE"}]}),
+            )
+            yield NdjsonEvent(type=NdjsonEventType.DONE, agent=agent, final=True)
+
+    state = SessionState(session_id=1, lecture_id=1)
+    events = [
+        event async for event in Orchestrator(FakeBridge()).run_stream(  # type: ignore[arg-type]
+            AppEvent(type=AppEventType.SESSION_ENTERED, payload={}),
+            state,
+        )
+    ]
+
+    assert events[0].channel == "thought"
+    assert events[0].delta == "Analyzing the plan."
+    error = events[-1]
+    assert error.type == NdjsonEventType.ERROR
+    assert error.code == "ORCHESTRATOR_PLAN_INVALID"
+    assert "Pydantic" not in error.message
+    assert "Input should" not in error.message
+    assert "Bad.CALL_TOOL" not in error.message
+
+
 @pytest.mark.asyncio
 async def test_orchestration_engine_fast_paths_mcq_ox_grading_without_planner():
     class FakeStore:
@@ -283,6 +382,58 @@ async def test_orchestration_engine_fast_paths_mcq_ox_grading_without_planner():
     assert done.data["grading"]["total_score"] == 0.5
     assert done.data["passed"] is False
     assert done.data["activeIntervention"]["status"] == "AWAITING_USER_RESPONSE"
+    assert store.saved is state
+
+
+@pytest.mark.asyncio
+async def test_orchestration_engine_stops_after_planner_error_without_no_actions():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+            self.saved = None
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.saved = state
+
+    class FakeBridge:
+        pass
+
+    class ErrorPlanner:
+        async def run_stream(self, event, state):
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="orchestrator",
+                channel="thought",
+                delta="Checking the plan.",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.ERROR,
+                agent="orchestrator",
+                code="ORCHESTRATOR_PLAN_INVALID",
+                message="학습 계획을 생성하지 못했습니다. 다시 시도해 주세요.",
+            )
+
+    state = SessionState(session_id=1, lecture_id=1)
+    store = FakeStore(state)
+    engine = OrchestrationEngine(store, bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = ErrorPlanner()  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.SESSION_ENTERED, payload={}),
+        )
+    ]
+
+    assert [event.type for event in events] == [
+        NdjsonEventType.AGENT_DELTA,
+        NdjsonEventType.ERROR,
+    ]
+    assert all(event.delta != "No actions to process." for event in events)
     assert store.saved is state
 
 
