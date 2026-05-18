@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -172,12 +172,33 @@ class ToolName(str, Enum):
     WRITE_FEEDBACK_ENTRY = "WRITE_FEEDBACK_ENTRY"
 
 
+def _strip_exact_enum_prefix(value: Any, prefix: str) -> Any:
+    if not isinstance(value, str):
+        return value
+    if not value.startswith(prefix):
+        return value
+    suffix = value[len(prefix):]
+    if not suffix or "." in suffix:
+        return value
+    return suffix
+
+
 class OrchestratorAction(BaseModel):
     type: ActionType
     tool: Optional[ToolName] = None
     params: Dict[str, Any] = Field(default_factory=dict)
     message: Optional[str] = None
     ui_state: Optional[Dict[str, Any]] = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_action_type_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "ActionType.")
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool_name_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "ToolName.")
 
 
 class PedagogyMode(str, Enum):
@@ -197,6 +218,11 @@ class PedagogyPolicy(BaseModel):
     allow_direct_answer: bool = True
     hint_depth: int = 0
     intervention_budget: int = 2
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "PedagogyMode.")
 
 
 class OrchestratorPlan(BaseModel):

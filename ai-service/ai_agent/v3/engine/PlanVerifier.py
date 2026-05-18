@@ -16,6 +16,18 @@ from ai_agent.types.domain import (
 
 ACTION_HARD_CAP = 8
 
+_PLANNER_ALLOWED_TOOLS = {
+    ToolName.EXPLAIN_PAGE,
+    ToolName.ANSWER_QUESTION,
+    ToolName.GENERATE_QUIZ_FIVE_CHOICE,
+    ToolName.GENERATE_QUIZ_OX,
+    ToolName.GENERATE_QUIZ_SHORT,
+    ToolName.GENERATE_QUIZ_FLASH,
+    ToolName.AUTO_GRADE_MCQ_OX,
+    ToolName.GRADE_SHORT_OR_ESSAY,
+    ToolName.REPAIR_MISCONCEPTION,
+}
+
 _INTERVENTION_TOOLS = {
     ToolName.EXPLAIN_PAGE,
     ToolName.GENERATE_QUIZ_FIVE_CHOICE,
@@ -84,6 +96,14 @@ class PlanVerifier:
                         "MISSING_TOOL_DROPPED",
                         "CALL_TOOL action without a tool was dropped.",
                         action_index=index,
+                    ))
+                    continue
+                if action.tool not in _PLANNER_ALLOWED_TOOLS:
+                    warnings.append(self._warning(
+                        "UNALLOWED_TOOL_DROPPED",
+                        "CALL_TOOL action with a non-planner tool was dropped.",
+                        action_index=index,
+                        tool=action.tool.value,
                     ))
                     continue
                 if action.tool in _INTERVENTION_TOOLS:

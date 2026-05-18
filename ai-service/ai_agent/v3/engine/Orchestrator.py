@@ -8,6 +8,7 @@ Orchestrator
 from __future__ import annotations
 
 import json
+import logging
 from typing import AsyncGenerator
 
 from google.genai import types
@@ -22,6 +23,9 @@ from ai_agent.types.domain import (
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
 from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
+
+
+logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -109,7 +113,15 @@ class Orchestrator:
 [활성 오개념 교정 상태]
 {active_intervention}
 
-[사용 가능한 도구 (ActionType.CALL_TOOL 할당)]
+[도구 호출 action]
+도구를 실행하려면 반드시 다음 JSON literal 형식을 사용하세요:
+{{"type": "CALL_TOOL", "tool": "EXPLAIN_PAGE", "params": {{"detail": "NORMAL"}}}}
+
+`type` 허용값은 문자열 literal `"CALL_TOOL"`, `"SET_UI_STATE"`, `"SEND_MESSAGE"` 뿐입니다.
+`tool` 허용값은 아래 도구 이름 문자열 literal 뿐입니다.
+절대 enum class prefix나 클래스명과 점(.)을 붙인 형태를 쓰지 마세요.
+
+[사용 가능한 도구]
 - EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED"}}) -> 강의 설명이 필요할 경우 호출.
 - ANSWER_QUESTION: 질문에 대한 답변 (매개변수: {{"question": "..."}}) -> 사용자가 메시지로 질문한 내용의 답변 호출.
 - GENERATE_QUIZ_FIVE_CHOICE: 객관식 퀴즈 (매개변수: {{"quiz_type": "Five_Choice"}})
@@ -118,18 +130,21 @@ class Orchestrator:
 - GRADE_SHORT_OR_ESSAY: 주관식 채점 (매개변수: {{"quiz_type": "..."}})
 - REPAIR_MISCONCEPTION: 활성 오개념 교정 상태가 있을 때 학생 답변 기반으로 짧은 교정 설명을 생성 (매개변수: {{"student_message": "..."}})
 
-UI 조절 도구 (ActionType.SET_UI_STATE 할당): 
+UI 상태 action:
+  반드시 {{"type": "SET_UI_STATE", "ui_state": {{"widget": "QUIZ_DECISION"}}}} 형식을 사용하세요.
   ui_state 필드에 넘길 수 있는 예시: {{"modal": "QUIZ_TYPE_PICKER"}}, {{"widget": "START_EXPLANATION_DECISION"}}, {{"widget": "NEXT_PAGE_DECISION"}}, {{"widget": "QUIZ_DECISION"}}
 
-단순 UI 통지 메시지 표시 (ActionType.SEND_MESSAGE 할당): message 필드에 사용자에게 보여줄 안내문 작성.
+단순 UI 통지 메시지 action:
+  반드시 {{"type": "SEND_MESSAGE", "message": "..."}} 형식을 사용하세요.
 
 [판단 지시 사항]
 1. `thinking` 블록을 자유롭게 활용해서 상황을 파악하세요.
-2. 당신의 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
-3. 일반 질문/답변의 경우 `ANSWER_QUESTION` 툴을 부릅니다.
-4. 설명 직후에는 퀴즈 풀이를 제안하는 위젯(`QUIZ_DECISION`)을 노출시키거나, 이전 점수가 좋지 않다면 바로 해당 페이지 기반의 퀴즈를 생성하세요.
-5. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
-6. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
+2. 최종 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
+3. 최종 JSON에는 `thinking`, `thought`, `reasoning` 필드를 넣지 마세요. 사고 흐름은 스트리밍 thought 채널에서만 사용합니다.
+4. 일반 질문/답변의 경우 `ANSWER_QUESTION` 툴을 부릅니다.
+5. 설명 직후에는 퀴즈 풀이를 제안하는 위젯(`QUIZ_DECISION`)을 노출시키거나, 이전 점수가 좋지 않다면 바로 해당 페이지 기반의 퀴즈를 생성하세요.
+6. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
+7. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
 """
         return prompt
 
@@ -172,10 +187,17 @@ UI 조절 도구 (ActionType.SET_UI_STATE 할당):
                     ev.final = True
                     yield ev
                 except Exception as e:
+                    logger.warning(
+                        "Orchestrator plan validation failed: error_type=%s raw_length=%d",
+                        type(e).__name__,
+                        len("".join(json_buffer)),
+                    )
                     yield NdjsonEvent(
                         type=NdjsonEventType.ERROR, 
                         agent="orchestrator", 
-                        message=f"JSON 파싱 오류: {e}"
+                        code="ORCHESTRATOR_PLAN_INVALID",
+                        message="학습 계획을 생성하지 못했습니다. 다시 시도해 주세요.",
+                        details=[{"errorType": "VALIDATION_ERROR"}],
                     )
             else:
                 # 하트비트 포워딩
