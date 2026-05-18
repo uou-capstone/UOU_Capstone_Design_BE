@@ -24,6 +24,8 @@ DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-/etc/uou-capstone/deploy.env}"
 echo "[deploy] 브랜치: ${TARGET_BRANCH}"
 echo "[deploy] 저장소 디렉토리: ${REPO_DIR}"
 
+git config --global --add safe.directory "$REPO_DIR"
+
 # ── 저장소 최신화 ─────────────────────────────────────────────
 # git pull 대신 fetch + checkout + reset 사용.
 # pull은 현재 체크아웃된 브랜치에 merge하므로, main/develop 두 환경이
