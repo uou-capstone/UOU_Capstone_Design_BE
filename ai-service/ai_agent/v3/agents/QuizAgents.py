@@ -35,6 +35,7 @@ _PROBLEM_KEYS_BY_TYPE: Dict[str, str] = {
     "OX_Problem": "ox_problems",
     "Flash_Card": "flash_cards",
     "Short_Answer": "short_answer_problems",
+    "Essay": "short_answer_problems",
 }
 
 
@@ -218,7 +219,7 @@ class QuizAgents:
         Quiz generation stream.
 
         Args:
-            quiz_type: "Five_Choice" | "OX_Problem" | "Flash_Card" | "Short_Answer" | "Debate"
+            quiz_type: "Five_Choice" | "OX_Problem" | "Flash_Card" | "Short_Answer" | "Essay" | "Debate"
             lecture_content: 강의 자료 텍스트
             profile: 유저 프로필 딕셔너리 (None/partial 모두 허용 — 기본값으로 보완됨)
             learner_hint: SessionState.learner.model_dump() 결과 (proficiency, 취약점 보강용)
@@ -283,6 +284,7 @@ class QuizAgents:
             "OX_Problem": ExamType.OX_PROBLEM,
             "Flash_Card": ExamType.FLASH_CARD,
             "Short_Answer": ExamType.SHORT_ANSWER,
+            "Essay": ExamType.SHORT_ANSWER,
             "Debate": ExamType.DEBATE,
         }
         qt = normalize_exam_type_string(quiz_type)

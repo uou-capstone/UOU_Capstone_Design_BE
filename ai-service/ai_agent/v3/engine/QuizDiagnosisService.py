@@ -79,6 +79,7 @@ class QuizDiagnosisService:
         intervention = state.active_intervention
         if not intervention:
             return None
+        self._mark_source_assessment_status(state, intervention, "REPAIR_IN_PROGRESS")
         intervention["status"] = "IN_PROGRESS"
         intervention["attempts"] = int(intervention.get("attempts") or 0) + 1
         intervention["lastStudentMessage"] = _text(student_message, 1000)
@@ -92,6 +93,7 @@ class QuizDiagnosisService:
         intervention["status"] = "COMPLETED"
         intervention["repairSummary"] = _text(repair_summary, 1200)
         intervention["completedAt"] = _now()
+        self._mark_source_assessment_status(state, intervention, "REPAIR_COMPLETED")
         return intervention
 
     def consume_pending_assessment_digest(
@@ -134,7 +136,23 @@ class QuizDiagnosisService:
         if int(state.active_intervention.get("pageNumber") or 0) == page_number:
             state.active_intervention["status"] = "RESOLVED_BY_RETEST"
             state.active_intervention["resolvedAt"] = _now()
+            self._mark_source_assessment_status(state, state.active_intervention, "RESOLVED_BY_RETEST")
             state.active_intervention = None
+
+    @staticmethod
+    def _mark_source_assessment_status(
+        state: SessionState,
+        intervention: dict[str, Any],
+        status: str,
+    ) -> None:
+        source_artifact_id = intervention.get("sourceArtifactId")
+        if not source_artifact_id:
+            return
+        for item in state.quiz_assessments:
+            if item.get("artifactId") == source_artifact_id:
+                item["status"] = status
+                item["updatedAt"] = _now()
+                return
 
     @staticmethod
     def _score(grading: dict[str, Any]) -> float:

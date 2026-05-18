@@ -108,15 +108,22 @@ class OrchestrationEngine:
                 else:
                     yield ndjson_event
 
-            if not plan:
+            if plan is None:
+                plan = self._fallback_plan_for_empty_actions(event, state)
+
+            if plan is None:
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="system",
                     channel="main",
-                    delta="No actions to process.",
+                    delta="다음 학습 동작을 결정하지 못했습니다. 다시 시도해 주세요.",
                 )
                 yield NdjsonEvent(type=NdjsonEventType.DONE, agent="system", final=True, data={})
                 return
+            if not plan.actions:
+                fallback_plan = self._fallback_plan_for_empty_actions(event, state)
+                if fallback_plan is not None:
+                    plan = fallback_plan
 
             # 4. Execute actions (ToolDispatcher)
             dispatched = False
@@ -133,7 +140,7 @@ class OrchestrationEngine:
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="system",
                     channel="main",
-                    delta="No actions to process.",
+                    delta="다음 학습 동작을 결정하지 못했습니다. 다시 시도해 주세요.",
                 )
                 yield NdjsonEvent(type=NdjsonEventType.DONE, agent="system", final=True, data={})
 
@@ -193,7 +200,7 @@ class OrchestrationEngine:
         latest = self._latest_page_quiz(state)
         if not latest:
             return None
-        quiz_type = normalize_exam_type_string(
+        quiz_type = _normalize_quiz_type_text(
             event.get("quiz_type", event.get("quizType", event.get("exam_type", latest.quiz_type)))
         )
         if quiz_type not in {"Five_Choice", "OX_Problem"}:
@@ -208,9 +215,139 @@ class OrchestrationEngine:
             )
         ])
 
+    def _fallback_plan_for_empty_actions(self, event: AppEvent, state: SessionState) -> OrchestratorPlan | None:
+        if event.type == AppEventType.SESSION_ENTERED:
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.SET_UI_STATE,
+                    ui_state={"widget": "START_EXPLANATION_DECISION"},
+                )
+            ])
+        if event.type == AppEventType.START_EXPLANATION_DECISION and _event_accepts(event):
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.EXPLAIN_PAGE,
+                    params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                )
+            ])
+        if event.type == AppEventType.PAGE_CHANGED:
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.EXPLAIN_PAGE,
+                    params={"detail": "NORMAL", "next_widget": "QUIZ_DECISION"},
+                )
+            ])
+        if event.type == AppEventType.USER_MESSAGE:
+            question = str(event.get("question", event.get("text", ""))).strip()
+            if question and not state.active_intervention:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=ToolName.ANSWER_QUESTION,
+                        params={"question": question},
+                    )
+                ])
+        if event.type == AppEventType.NEXT_PAGE_DECISION and _event_accepts(event):
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.EXPLAIN_PAGE,
+                    params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                )
+            ])
+        if event.type == AppEventType.QUIZ_DECISION and _event_accepts(event):
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.SET_UI_STATE,
+                    ui_state={"modal": "QUIZ_TYPE_PICKER"},
+                )
+            ])
+        if event.type == AppEventType.RETEST_DECISION and _event_accepts(event):
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.SET_UI_STATE,
+                    ui_state={"modal": "QUIZ_TYPE_PICKER", "mode": "RETEST"},
+                )
+            ])
+        if event.type == AppEventType.QUIZ_TYPE_SELECTED:
+            quiz_type = _event_quiz_type(event)
+            tool = _quiz_generation_tool(quiz_type)
+            if tool:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=tool,
+                        params={"quiz_type": quiz_type},
+                    )
+                ])
+        if event.type == AppEventType.QUIZ_SUBMITTED:
+            quiz_type = _event_or_latest_quiz_type(event, state)
+            if quiz_type in {"Short_Answer", "Essay"}:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=ToolName.GRADE_SHORT_OR_ESSAY,
+                        params={"quiz_type": quiz_type},
+                    )
+                ])
+        return None
+
     @staticmethod
     def _latest_page_quiz(state: SessionState):
         for record in reversed(state.quiz_history):
             if record.page_number == state.current_page:
                 return record
         return None
+
+
+def _event_accepts(event: AppEvent) -> bool:
+    if not event.payload:
+        return True
+    value = event.get("accept", event.get("accepted", event.get("decision", event.get("start", True))))
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "start", "next"}
+    return bool(value)
+
+
+def _event_quiz_type(event: AppEvent) -> str:
+    raw = event.get(
+        "quiz_type",
+        event.get(
+            "quizType",
+            event.get("exam_type", event.get("examType", event.get("selectedType", ""))),
+        ),
+    )
+    return _normalize_quiz_type_text(raw)
+
+
+def _event_or_latest_quiz_type(event: AppEvent, state: SessionState) -> str:
+    latest = OrchestrationEngine._latest_page_quiz(state)
+    raw = event.get(
+        "quiz_type",
+        event.get(
+            "quizType",
+            event.get("exam_type", event.get("examType", latest.quiz_type if latest else "")),
+        ),
+    )
+    quiz_type = _normalize_quiz_type_text(raw)
+    if quiz_type:
+        return quiz_type
+    return latest.quiz_type if latest else ""
+
+
+def _normalize_quiz_type_text(raw: object) -> str:
+    return normalize_exam_type_string(str(raw or "").strip())
+
+
+def _quiz_generation_tool(quiz_type: str) -> ToolName | None:
+    if quiz_type == "Five_Choice":
+        return ToolName.GENERATE_QUIZ_FIVE_CHOICE
+    if quiz_type == "OX_Problem":
+        return ToolName.GENERATE_QUIZ_OX
+    if quiz_type == "Short_Answer":
+        return ToolName.GENERATE_QUIZ_SHORT
+    if quiz_type == "Essay":
+        return ToolName.GENERATE_QUIZ_ESSAY
+    return None

@@ -38,6 +38,8 @@ class StateReducer:
                 self._on_page_changed(state, event)
             case AppEventType.USER_MESSAGE:
                 self._on_user_message(state, event)
+            case AppEventType.QUIZ_DECISION:
+                self._on_quiz_decision(state, event)
             case AppEventType.QUIZ_TYPE_SELECTED:
                 self._on_quiz_type_selected(state, event)
             case AppEventType.QUIZ_SUBMITTED:
@@ -75,6 +77,10 @@ class StateReducer:
     def _on_user_message(self, state: SessionState, event: AppEvent) -> None:
         text = event.get("text", "")
         state.append_message("user", text)
+
+    def _on_quiz_decision(self, state: SessionState, event: AppEvent) -> None:
+        page_state = state.get_current_page_state()
+        page_state.status = PageStatus.QUIZ_TYPE_PENDING if _event_accepts(event) else PageStatus.DONE
 
     def _on_quiz_type_selected(self, state: SessionState, event: AppEvent) -> None:
         page_state = state.get_current_page_state()
