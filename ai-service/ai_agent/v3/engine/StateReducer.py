@@ -31,6 +31,9 @@ class StateReducer:
         now = datetime.now(timezone.utc).isoformat()
         state.updated_at = now
 
+        if event.type not in {AppEventType.SESSION_ENTERED, AppEventType.NEXT_PAGE_DECISION}:
+            _sync_current_page_from_event(state, event)
+
         match event.type:
             case AppEventType.SESSION_ENTERED:
                 self._on_session_entered(state, event)
@@ -63,19 +66,10 @@ class StateReducer:
         state.get_current_page_state()
 
     def _on_page_changed(self, state: SessionState, event: AppEvent) -> None:
-        raw_page = event.get("page", state.current_page)
-        try:
-            new_page = int(raw_page)
-            if new_page < 1:
-                raise ValueError("페이지 번호는 1부터 시작")
-        except (ValueError, TypeError):
-            return  # 잘못된 페이지 번호는 무시, 현재 페이지 유지
-        state.current_page = new_page
-        if state.current_page not in state.pages:
-            state.pages[state.current_page] = PageState(page_number=state.current_page)
+        _sync_current_page_from_event(state, event)
 
     def _on_user_message(self, state: SessionState, event: AppEvent) -> None:
-        text = event.get("text", "")
+        text = event.get("text", event.get("message", event.get("question", "")))
         state.append_message("user", text)
 
     def _on_quiz_decision(self, state: SessionState, event: AppEvent) -> None:
@@ -101,6 +95,7 @@ class StateReducer:
     def _on_next_page_decision(self, state: SessionState, event: AppEvent) -> None:
         if not _event_accepts(event):
             return
+        _sync_current_page_from_event(state, event, keys=("fromPage", "from_page"))
         current_page_state = state.get_current_page_state()
         current_page_state.status = PageStatus.DONE
         state.current_page = max(state.current_page, 1) + 1
@@ -113,3 +108,31 @@ def _event_accepts(event: AppEvent) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "next"}
     return bool(value)
+
+
+def _sync_current_page_from_event(
+    state: SessionState,
+    event: AppEvent,
+    *,
+    keys: tuple[str, ...] = ("page", "pageNumber", "page_number", "currentPage", "current_page"),
+) -> None:
+    page = _page_number_from_event(event, keys=keys)
+    if page is None:
+        return
+    state.current_page = page
+    if state.current_page not in state.pages:
+        state.pages[state.current_page] = PageState(page_number=state.current_page)
+
+
+def _page_number_from_event(event: AppEvent, *, keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        raw_page = event.get(key)
+        if raw_page is None:
+            continue
+        try:
+            page = int(raw_page)
+        except (ValueError, TypeError):
+            continue
+        if page >= 1:
+            return page
+    return None

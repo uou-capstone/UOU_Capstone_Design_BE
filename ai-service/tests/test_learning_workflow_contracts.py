@@ -55,6 +55,33 @@ def test_state_reducer_uses_one_based_pages_and_next_page_decision():
     assert state.pages[2].page_number == 2
 
 
+def test_state_reducer_syncs_visible_page_from_non_page_events():
+    reducer = StateReducer()
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "3페이지 ㄱㄱㄹ", "pageNumber": 3}),
+    )
+    assert state.current_page == 3
+    assert state.pages[3].page_number == 3
+    assert state.messages[-1]["content"] == "3페이지 ㄱㄱㄹ"
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.QUIZ_SUBMITTED, payload={"answers": [], "currentPage": 4}),
+    )
+    assert state.current_page == 4
+    assert state.pages[4].status.value == "QUIZ_GRADED"
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.NEXT_PAGE_DECISION, payload={"accept": True, "fromPage": 6}),
+    )
+    assert state.current_page == 7
+    assert state.pages[6].status.value == "DONE"
+
+
 def test_grader_auto_accepts_reference_answer_shapes():
     grader = GraderAgent(None)  # type: ignore[arg-type]
 
