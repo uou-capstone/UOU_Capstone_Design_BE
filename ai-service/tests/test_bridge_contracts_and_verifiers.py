@@ -725,6 +725,79 @@ async def test_question_then_next_page_sequence_matches_reference_flow():
 
 
 @pytest.mark.asyncio
+async def test_user_message_page_number_updates_explanation_context_before_planning():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PageExplainPlanner:
+        def __init__(self):
+            self.seen_pages = []
+
+        async def run_stream(self, event, state):
+            self.seen_pages.append(state.current_page)
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="orchestrator",
+                final=True,
+                data={
+                    "plan": OrchestratorPlan(actions=[
+                        OrchestratorAction(
+                            type=ActionType.CALL_TOOL,
+                            tool=ToolName.EXPLAIN_PAGE,
+                            params={"detail": "NORMAL"},
+                        )
+                    ]).model_dump()
+                },
+            )
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, state.current_page, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="explainer",
+                tool="EXPLAIN_PAGE",
+                channel="main",
+                delta=f"{state.current_page}페이지 설명",
+            )
+            yield NdjsonEvent(type=NdjsonEventType.DONE, agent="system", final=True, data={})
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    planner = PageExplainPlanner()
+    engine._orchestrator = planner  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "3페이지 ㄱㄱㄹ", "pageNumber": 3}),
+        )
+    ]
+
+    assert state.current_page == 3
+    assert planner.seen_pages == [3]
+    assert dispatcher.calls[0][1] == 3
+    assert any(event.delta == "3페이지 설명" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_quiz_generation_and_mcq_ox_grading_sequence_matches_reference_flow():
     class FakeStore:
         def __init__(self, state):
