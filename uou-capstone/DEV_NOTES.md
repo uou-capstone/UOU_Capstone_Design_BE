@@ -1640,3 +1640,32 @@ Spring Boot 3.4 BOM 이 버전 관리하므로 명시 불필요.
 - PR
   - `feat/flyway-baseline → feat/v3-springboot` (2026-05-08, commit `5f0b702`)
 
+
+---
+
+## [2026-05-20] Attendance session time schema fixed to string contract
+
+### Background
+
+FE reported `POST /api/courses/{courseId}/attendance/sessions` returning 400 with `Content-Type: application/json` when `startTime` / `endTime` were sent as Swagger-style objects such as `{ "hour": 10, "minute": 0, "second": 0, "nano": 0 }`.
+
+The BE DTO fields are `LocalTime`, so Jackson expects an ISO-like string value. Object-shaped time values fail during request body deserialization before the controller/service layer and are mapped by `GlobalExceptionHandler` to the generic JSON parse error response.
+
+### Decision
+
+Keep the public API contract as a string time:
+
+```json
+{
+  "startTime": "10:00:00",
+  "endTime": "12:00:00"
+}
+```
+
+This matches the existing FE handoff document and avoids introducing a second request shape.
+
+### Changes
+
+- Added explicit `@JsonFormat(shape = STRING, pattern = "HH:mm:ss")` to attendance session request/response time fields.
+- Added explicit Swagger `@Schema(type = "string", format = "time", example = "...")` so Swagger UI no longer suggests the `{hour, minute, second, nano}` object shape.
+- Added `AttendanceSessionTimeFormatTest` to verify string input succeeds, output stays `HH:mm:ss`, and object-shaped time input is rejected.

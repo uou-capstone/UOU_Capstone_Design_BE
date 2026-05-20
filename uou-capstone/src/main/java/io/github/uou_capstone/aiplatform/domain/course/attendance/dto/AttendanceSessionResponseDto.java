@@ -1,6 +1,8 @@
 package io.github.uou_capstone.aiplatform.domain.course.attendance.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.github.uou_capstone.aiplatform.domain.course.attendance.entity.AttendanceSession;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 
 import java.time.LocalDate;
@@ -15,7 +17,15 @@ public class AttendanceSessionResponseDto {
     private final Long lectureId;
     private final String title;
     private final LocalDate sessionDate;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "HH:mm:ss")
+    @Schema(type = "string", format = "time", example = "10:00:00",
+            description = "출석 회차 시작 시간 (HH:mm:ss)")
     private final LocalTime startTime;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "HH:mm:ss")
+    @Schema(type = "string", format = "time", example = "12:00:00",
+            description = "출석 회차 종료 시간 (HH:mm:ss)")
     private final LocalTime endTime;
     private final Long createdByTeacherId;
     private final LocalDateTime createdAt;
