@@ -1,5 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.course.dto;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
@@ -14,6 +18,29 @@ class CourseResponseDtoTest {
 
     @Test
     void mapsCreatedAtFromCourse() {
+        Course course = courseWithCreatedAt(LocalDateTime.of(2026, 5, 20, 10, 30, 15));
+
+        CourseResponseDto response = new CourseResponseDto(course);
+
+        assertThat(response.getCreatedAt()).isEqualTo(LocalDateTime.of(2026, 5, 20, 10, 30, 15));
+    }
+
+    @Test
+    void serializesCreatedAtAsCamelCase() throws Exception {
+        Course course = courseWithCreatedAt(LocalDateTime.of(2026, 5, 20, 10, 30, 15));
+        CourseResponseDto response = new CourseResponseDto(course);
+        ObjectMapper objectMapper = JsonMapper.builder()
+                .addModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .build();
+
+        String json = objectMapper.writeValueAsString(response);
+
+        assertThat(json).contains("\"createdAt\":\"2026-05-20T10:30:15\"");
+        assertThat(json).doesNotContain("created_at");
+    }
+
+    private Course courseWithCreatedAt(LocalDateTime createdAt) {
         User teacherUser = User.builder()
                 .email("teacher@example.com")
                 .password("password")
@@ -30,11 +57,7 @@ class CourseResponseDtoTest {
                 .description("description")
                 .invitationCode("invite-code")
                 .build();
-        LocalDateTime createdAt = LocalDateTime.of(2026, 5, 20, 10, 30, 15);
         ReflectionTestUtils.setField(course, "createdAt", createdAt);
-
-        CourseResponseDto response = new CourseResponseDto(course);
-
-        assertThat(response.getCreatedAt()).isEqualTo(createdAt);
+        return course;
     }
 }
