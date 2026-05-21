@@ -1669,3 +1669,38 @@ This matches the existing FE handoff document and avoids introducing a second re
 - Added explicit `@JsonFormat(shape = STRING, pattern = "HH:mm:ss")` to attendance session request/response time fields.
 - Added explicit Swagger `@Schema(type = "string", format = "time", example = "...")` so Swagger UI no longer suggests the `{hour, minute, second, nano}` object shape.
 - Added `AttendanceSessionTimeFormatTest` to verify string input succeeds, output stays `HH:mm:ss`, and object-shaped time input is rejected.
+
+---
+
+## [2026-05-21] Course createdAt response contract stabilized
+
+### Background
+
+FE asked whether course create/detail responses reliably include a creation date and whether the JSON field name is `createdAt` or `created_at`.
+
+`POST /api/courses` and `GET /api/courses/{courseId}` both return `CourseResponseDto`, and the DTO already exposes `createdAt`. However, `BaseTimeEntity` relies on Spring Data JPA auditing through `@CreatedDate` / `@LastModifiedDate`, while JPA auditing was not enabled in application configuration. This meant the response field existed but could be `null` after persistence.
+
+### Decision
+
+The public response contract is camelCase:
+
+```json
+{
+  "createdAt": "2026-05-20T10:30:15"
+}
+```
+
+Do not use `created_at` for the Spring API response.
+
+### Changes
+
+- Added `JpaAuditingConfig` with `@EnableJpaAuditing` so `Course.createdAt` / `updatedAt` are populated on persist.
+- Extended `CourseResponseDtoTest` to verify DTO mapping and JSON serialization as `createdAt`, not `created_at`.
+- Added `CourseAuditingTest` to verify persisted `Course` rows receive non-null audit timestamps.
+
+### Verification
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.repository.CourseAuditingTest --no-daemon
+.\gradlew.bat test --tests io.github.uou_capstone.UouCapstoneApplicationTests --no-daemon
+```
