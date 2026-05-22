@@ -1704,3 +1704,39 @@ Do not use `created_at` for the Spring API response.
 .\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.repository.CourseAuditingTest --no-daemon
 .\gradlew.bat test --tests io.github.uou_capstone.UouCapstoneApplicationTests --no-daemon
 ```
+
+---
+
+## [2026-05-22] FE 확인 항목: 시험 노출/알림 시간/수강 등록시간 계약 정리
+
+### 배경
+
+FE에서 다음 세 가지 확인을 요청했다.
+
+- 학생 계정의 `GET /api/courses/{courseId}/contents` 응답에 교사가 생성한 시험 세션이 `lectures[].examSessions`로 내려오는지.
+- `GET /api/notifications`와 `/api/notifications/stream` 알림 항목에 화면 표시 가능한 `createdAt` 시간이 포함되는지.
+- `GET /api/courses/{courseId}/students` 응답에서 보장되는 등록시간 필드가 무엇인지.
+
+### 결정
+
+- 시험 세션 목록은 별도 공개/비공개 필드를 추가하지 않고, 강의실 참가자 권한(담당 교사 또는 ACTIVE 수강생)으로 조회 가능하게 한다. 학생이 실제 시험 상세를 열 수 있는 조건은 기존처럼 `status=READY`다.
+- 알림 시간은 REST/SSE 모두 `createdAt` camelCase, ISO offset date-time UTC 형식으로 고정한다.
+- 학생 목록 등록시간 공식 필드는 `enrolledAt` camelCase, ISO offset date-time UTC 형식으로 고정한다.
+
+### 변경
+
+- `CourseService.getCourseContents` 권한 검사를 `CourseAccessService.loadCourseAsParticipant`로 통일해 학생은 ACTIVE 수강생일 때만 시험 세션 목록을 받도록 했다.
+- `NotificationItemDto.createdAt`을 `OffsetDateTime` UTC로 변경하고, SSE payload도 같은 값을 사용하도록 했다. 감사 시간이 아직 비어 있는 객체에서도 null이 내려가지 않도록 fallback을 둔다.
+- `CourseStudentItemDto.enrolledAt`에 Swagger `date-time` 스키마를 명시해 FE 계약을 문서화했다.
+- 테스트 추가/보강:
+  - `CourseServiceContentsTest`
+  - `NotificationItemDtoTest`
+  - `CourseStudentItemDtoTest`
+  - `NotificationServiceTest`의 stream push DTO `createdAt` 검증
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.service.CourseServiceContentsTest --tests io.github.uou_capstone.aiplatform.domain.notification.dto.NotificationItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseStudentItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.notification.service.NotificationServiceTest --no-daemon
+.\gradlew.bat test --no-daemon
+```

@@ -2,9 +2,12 @@ package io.github.uou_capstone.aiplatform.domain.notification.dto;
 
 import io.github.uou_capstone.aiplatform.domain.notification.entity.Notification;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -18,7 +21,8 @@ public class NotificationItemDto {
     private final String resourceType;
     private final Long resourceId;
     private final boolean read;
-    private final LocalDateTime createdAt;
+    @Schema(type = "string", format = "date-time", example = "2026-05-22T12:34:56Z")
+    private final OffsetDateTime createdAt;
 
     public NotificationItemDto(Notification n) {
         this.notificationId = n.getId();
@@ -28,7 +32,7 @@ public class NotificationItemDto {
         this.resourceType = n.getResourceType();
         this.resourceId = n.getResourceId();
         this.read = n.isRead();
-        this.createdAt = n.getCreatedAt();
+        this.createdAt = toUtcOffset(n.getCreatedAt());
     }
 
     /**
@@ -45,5 +49,10 @@ public class NotificationItemDto {
         m.put("read", read);
         m.put("createdAt", createdAt);
         return m;
+    }
+
+    private static OffsetDateTime toUtcOffset(LocalDateTime value) {
+        return (value != null ? value : LocalDateTime.now(ZoneOffset.UTC))
+                .atOffset(ZoneOffset.UTC);
     }
 }
