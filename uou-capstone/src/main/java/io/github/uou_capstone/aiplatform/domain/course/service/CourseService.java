@@ -61,6 +61,7 @@ public class CourseService {
     private final MaterialService materialService;
     private final ExamGenerationService examGenerationService;
     private final MaterialGenerationService materialGenerationService;
+    private final CourseAccessService courseAccessService;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
@@ -148,24 +149,9 @@ public class CourseService {
      */
     @Transactional(readOnly = true)
     public CourseContentsResponseDto getCourseContents(Long courseId) {
-        Course course = courseRepository.findByIdWithLectures(courseId)
+        Course permittedCourse = courseAccessService.loadCourseAsParticipant(courseId);
+        Course course = courseRepository.findByIdWithLectures(permittedCourse.getId())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
-
-        User currentUser = currentUserResolver.getUser();
-
-        if (currentUser.getRole() == Role.TEACHER) {
-            Teacher currentTeacher = currentUserResolver.getTeacher();
-            if (!course.getTeacher().getId().equals(currentTeacher.getId())) {
-                throw new BusinessException(CommonErrorCode.FORBIDDEN);
-            }
-        } else if (currentUser.getRole() == Role.STUDENT) {
-            Student student = currentUserResolver.getStudent();
-            if (!enrollmentRepository.existsByStudentAndCourse(student, course)) {
-                throw new BusinessException(CommonErrorCode.FORBIDDEN);
-            }
-        } else {
-            throw new BusinessException(CommonErrorCode.FORBIDDEN);
-        }
 
         List<Lecture> orderedLectures = course.getLectures().stream()
                 .sorted(Comparator.comparingInt(Lecture::getWeekNumber))

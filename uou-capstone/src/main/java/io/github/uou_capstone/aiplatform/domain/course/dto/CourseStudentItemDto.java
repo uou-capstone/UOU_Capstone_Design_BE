@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.dto;
 
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 
 import java.time.LocalDateTime;
@@ -14,6 +15,7 @@ public class CourseStudentItemDto {
     private final Long studentId;
     private final String studentName;
     private final String studentEmail;
+    @Schema(type = "string", format = "date-time", example = "2026-05-22T12:34:56Z")
     private final OffsetDateTime enrolledAt;
 
     public CourseStudentItemDto(Enrollment enrollment) {
