@@ -7,23 +7,32 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.publisher.Flux;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,12 +56,20 @@ class LearningSessionAuthorizationTest {
     @Mock
     private CurrentUserResolver currentUserResolver;
 
+    @Mock
+    private LearningChatPersistenceService chatPersistenceService;
+
     @InjectMocks
     private LearningSessionService learningSessionService;
 
     private static final Long LECTURE_ID = 100L;
     private static final Long COURSE_OWNER_TEACHER_ID = 10L;
     private static final Long OTHER_TEACHER_ID = 11L;
+
+    @BeforeEach
+    void setUpObjectMapper() {
+        ReflectionTestUtils.setField(learningSessionService, "objectMapper", new ObjectMapper());
+    }
 
     @Test
     void teacherWhoOwnsCourse_passes() {
@@ -122,6 +139,39 @@ class LearningSessionAuthorizationTest {
         assertThatThrownBy(() -> learningSessionService.validateLectureAccess(LECTURE_ID))
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(CommonErrorCode.LECTURE_NOT_FOUND));
+    }
+
+    @Test
+    void streamUserMessage_savesUserQuestionAndAssistantMainDelta() {
+        Long sessionId = 5L;
+        Teacher courseOwner = teacher(COURSE_OWNER_TEACHER_ID);
+        Course course = courseOwnedBy(courseOwner);
+        Lecture lecture = lectureOf(course);
+        User currentUser = userWith(courseOwner, null);
+        ReflectionTestUtils.setField(currentUser, "id", 77L);
+
+        SessionEventRequest request = new SessionEventRequest();
+        request.setType("USER_MESSAGE");
+        request.setExtra("question", "hello");
+
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(currentUserResolver.getUser()).thenReturn(currentUser);
+        when(chatPersistenceService.getOwnedSession(sessionId, 77L, LECTURE_ID))
+                .thenReturn(LearningChatSession.builder().lecture(lecture).user(currentUser).build());
+        when(fastApiSessionClient.streamEvent(eq(sessionId), anyMap())).thenReturn(Flux.just(
+                "{\"type\":\"agent_delta\",\"channel\":\"thought\",\"delta\":\"hidden\"}",
+                "{\"type\":\"agent_delta\",\"channel\":\"main\",\"delta\":\"answer\"}",
+                "{\"type\":\"done\",\"final\":true}"
+        ));
+
+        Flux<ServerSentEvent<String>> result = learningSessionService.streamSessionEvent(
+                LECTURE_ID, sessionId, request, 2, null, null);
+
+        List<ServerSentEvent<String>> events = result.collectList().block();
+        assertThat(events).hasSize(4);
+
+        verify(chatPersistenceService).saveUserMessage(sessionId, 77L, LECTURE_ID, "hello", 2);
+        verify(chatPersistenceService).saveAssistantMessage(sessionId, 77L, LECTURE_ID, "answer", 2);
     }
 
     private static Teacher teacher(Long id) {

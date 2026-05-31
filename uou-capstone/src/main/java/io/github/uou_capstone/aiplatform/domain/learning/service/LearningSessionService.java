@@ -1,13 +1,18 @@
 package io.github.uou_capstone.aiplatform.domain.learning.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.dto.LearningChatMessageResponse;
+import io.github.uou_capstone.aiplatform.domain.learning.dto.LearningChatSessionResponse;
 import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
@@ -17,14 +22,17 @@ import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -49,6 +57,7 @@ public class LearningSessionService {
     private final LectureRepository lectureRepository;
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
+    private final LearningChatPersistenceService chatPersistenceService;
 
     /**
      * 강의 ID로 학습 세션 조회 또는 신규 생성.
@@ -65,6 +74,15 @@ public class LearningSessionService {
         }
 
         validateLectureAccess(lectureId);
+        User currentUser = currentUserResolver.getUser();
+
+        Long effectiveSessionId = sessionId;
+        if (effectiveSessionId == null) {
+            LearningChatSession chatSession = chatPersistenceService.createSession(lectureId, currentUser);
+            effectiveSessionId = chatSession.getId();
+        } else {
+            chatPersistenceService.getOwnedSession(effectiveSessionId, currentUser.getId(), lectureId);
+        }
 
         // pdfPath가 없으면 강의에 업로드된 최신 PDF 자료 경로를 자동으로 조회
         String effectivePdfPath = pdfPath;
@@ -82,8 +100,14 @@ public class LearningSessionService {
                 lectureId, StringUtils.hasText(effectivePdfPath), sessionId);
 
         final String finalPdfPath = effectivePdfPath;
-        return fastApiSessionClient.getOrCreateByLecture(lectureId, finalPdfPath, sessionId)
+        final Long chatSessionId = effectiveSessionId;
+        return fastApiSessionClient.getOrCreateByLecture(lectureId, finalPdfPath, chatSessionId)
                 .doOnNext(body -> BridgeResponseLogger.debugMapSummary(log, "GET /api/v3/session/by-lecture", body))
+                .map(body -> {
+                    Map<String, Object> response = new LinkedHashMap<>(body);
+                    response.put("chatSessionId", chatSessionId);
+                    return response;
+                })
                 .onErrorMap(Exception.class, e -> {
                     if (e instanceof BusinessException) return e;
                     log.error("FastAPI 세션 생성 중 알 수 없는 오류: lectureId={}", lectureId, e);
@@ -127,19 +151,35 @@ public class LearningSessionService {
         }
 
         validateLectureAccess(lectureId);
+        User currentUser = currentUserResolver.getUser();
+        chatPersistenceService.getOwnedSession(sessionId, currentUser.getId(), lectureId);
 
         Integer viewerPage = firstNonNullPositive(currentPage, pageNumber, page);
         log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}, viewerPage={}",
                 lectureId, sessionId, eventRequest.getType(), viewerPage);
 
         Map<String, Object> payload = buildPayloadForFastApi(eventRequest, viewerPage);
+        if ("USER_MESSAGE".equals(eventRequest.getType())) {
+            chatPersistenceService.saveUserMessage(sessionId, currentUser.getId(), lectureId,
+                    stringValue(payload.get("question")), viewerPage);
+        } else if ("SAVE_AND_EXIT".equals(eventRequest.getType())) {
+            chatPersistenceService.markEnded(sessionId, currentUser.getId(), lectureId);
+        }
 
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("type", eventRequest.getType());
         requestBody.put("lecture_id", lectureId);
         requestBody.put("payload", payload);
 
-        Flux<String> upstream = fastApiSessionClient.streamEvent(sessionId, requestBody);
+        AssistantMessageRecorder recorder = new AssistantMessageRecorder(objectMapper);
+        Flux<String> upstream = fastApiSessionClient.streamEvent(sessionId, requestBody)
+                .doOnNext(recorder::accept)
+                .doOnComplete(() -> {
+                    if (recorder.shouldSave()) {
+                        chatPersistenceService.saveAssistantMessage(sessionId, currentUser.getId(), lectureId,
+                                recorder.content(), viewerPage);
+                    }
+                });
         return SseStreamSupport.wrapNdjson(upstream, objectMapper, SseStreamPolicy.defaults(), e -> {
             if (e instanceof WebClientResponseException ex) {
                 log.error("FastAPI 이벤트 스트림 오류: sessionId={}, status={}", sessionId, ex.getStatusCode());
@@ -151,6 +191,21 @@ public class LearningSessionService {
             String safeMsg = e.getMessage() != null ? e.getMessage().replace("\"", "'") : "알 수 없는 오류";
             return String.format("{\"type\":\"error\",\"message\":\"%s\"}", safeMsg);
         });
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<LearningChatSessionResponse> getChatSessions(Long lectureId, Pageable pageable) {
+        validateLectureAccess(lectureId);
+        Long userId = currentUserResolver.getUser().getId();
+        return chatPersistenceService.getSessions(lectureId, userId, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<LearningChatMessageResponse> getChatMessages(Long sessionId) {
+        Long userId = currentUserResolver.getUser().getId();
+        LearningChatSession session = chatPersistenceService.getOwnedSession(sessionId, userId);
+        validateLectureAccess(session.getLecture().getId());
+        return chatPersistenceService.getMessages(sessionId, userId);
     }
 
     /**
@@ -219,5 +274,44 @@ public class LearningSessionService {
             payload.put("pageNumber", viewerPage);
         }
         return payload;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    static class AssistantMessageRecorder {
+        private final ObjectMapper objectMapper;
+        private final StringBuilder content = new StringBuilder();
+        private boolean done;
+
+        AssistantMessageRecorder(ObjectMapper objectMapper) {
+            this.objectMapper = objectMapper;
+        }
+
+        void accept(String line) {
+            try {
+                Map<String, Object> payload = objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {});
+                Object type = payload.get("type");
+                if ("agent_delta".equals(type) && "main".equals(payload.get("channel"))) {
+                    Object delta = payload.get("delta");
+                    if (delta != null) {
+                        content.append(delta);
+                    }
+                } else if ("done".equals(type)) {
+                    done = true;
+                }
+            } catch (Exception ignored) {
+                log.debug("AI stream line skipped for chat persistence: {}", line);
+            }
+        }
+
+        boolean shouldSave() {
+            return done && StringUtils.hasText(content);
+        }
+
+        String content() {
+            return content.toString();
+        }
     }
 }

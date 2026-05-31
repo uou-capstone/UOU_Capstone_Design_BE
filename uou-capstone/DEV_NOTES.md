@@ -1643,6 +1643,30 @@ Spring Boot 3.4 BOM 이 버전 관리하므로 명시 불필요.
 
 ---
 
+## [2026-05-31] 강의학습 에이전트 채팅 저장
+
+### 증상
+
+FE에서 강의학습 화면의 사용자-에이전트 채팅을 새로고침/재진입 후 복원할 수 있는 저장 기능을 요구했다. 기존 v3 학습 세션은 Spring이 FastAPI 세션/SSE를 프록시하는 구조라 Spring DB에는 채팅 세션이나 메시지가 남지 않았다.
+
+### 원인
+
+통합 학습 세션 상태는 FastAPI Redis 세션에 임시로 유지되고, Spring `LearningSessionService`는 `USER_MESSAGE` 요청과 `agent_delta` 응답을 저장하지 않고 그대로 전달만 했다. FastAPI의 `SAVE_AND_EXIT`도 Spring 영속 저장과 연결되어 있지 않아 FE가 신뢰할 장기 조회 API가 없었다.
+
+### 조치
+
+Spring DB에 `learning_chat_sessions` / `learning_chat_messages`를 추가하고, 강의학습 세션 생성 시 채팅 세션을 생성하도록 연결했다. `USER_MESSAGE`는 사용자 메시지로 저장하고, SSE 응답 중 `agent_delta.channel="main"`만 모아 `done` 완료 시 에이전트 메시지로 저장한다. FE 조회용으로 강의별 채팅 세션 목록과 세션별 메시지 조회 API도 추가했다.
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/controller/LearningSessionController.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `uou-capstone/src/main/resources/db/migration/V6__learning_chat_history.sql`
+- `uou-capstone/FRONTEND_V2_V3_API.md`
+
+---
+
 ## [2026-05-20] Attendance session time schema fixed to string contract
 
 ### Background
