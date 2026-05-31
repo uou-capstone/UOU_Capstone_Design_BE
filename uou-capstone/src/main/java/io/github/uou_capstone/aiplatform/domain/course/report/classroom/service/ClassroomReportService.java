@@ -106,8 +106,8 @@ public class ClassroomReportService {
 
     private Map<String, Object> preparePayload(Long courseId) {
         Course course = courseAccessService.loadCourseAsTeacher(courseId);
-        PageResponse<StudentReportListItem> page = courseStudentReportService.getStudentReportList(
-                courseId, null, null, PageRequest.of(0, MAX_STUDENT_PAGE_SIZE));
+        PageResponse<StudentReportListItem> page = courseStudentReportService.getStudentReportListForClassroomAnalysis(
+                courseId, PageRequest.of(0, MAX_STUDENT_PAGE_SIZE));
         List<CourseReportCriterion> criteria = criterionRepository.findByCourseOrderByIdAsc(course);
 
         if (page.getTotalElements() > MAX_STUDENT_PAGE_SIZE) {

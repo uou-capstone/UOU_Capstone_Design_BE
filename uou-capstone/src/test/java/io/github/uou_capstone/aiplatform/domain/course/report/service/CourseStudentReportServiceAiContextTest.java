@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.service;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
@@ -12,6 +13,7 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetenc
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceItemDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -98,6 +101,33 @@ class CourseStudentReportServiceAiContextTest {
         when(courseRepository.findById(COURSE_ID)).thenReturn(Optional.of(course));
         when(enrollmentRepository.findByCourseIdAndStudentIdWithUser(COURSE_ID, STUDENT_ID))
                 .thenReturn(Optional.of(enrollment));
+    }
+
+    private void primeOwner() {
+        when(currentUserResolver.getTeacher()).thenReturn(owner);
+        when(courseRepository.findById(COURSE_ID)).thenReturn(Optional.of(course));
+    }
+
+    @Test
+    void studentReportList_rejectsClientPageSizeOver100() {
+        primeOwner();
+
+        assertThatThrownBy(() -> service.getStudentReportList(COURSE_ID, null, null, PageRequest.of(0, 101)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_PARAMETER);
+    }
+
+    @Test
+    void classroomAnalysisList_allowsInternalPageSizeOver100() {
+        primeOwner();
+        when(enrollmentRepository.findByCourseIdWithStudentUser(COURSE_ID)).thenReturn(List.of());
+
+        PageResponse<StudentReportListItem> res =
+                service.getStudentReportListForClassroomAnalysis(COURSE_ID, PageRequest.of(0, 1000));
+
+        assertThat(res.getSize()).isEqualTo(1000);
+        assertThat(res.getContent()).isEmpty();
     }
 
     private ExamResult examResultWith(Long id, double scorePercent, Map<String, Object> feedbackJson, String overall) {

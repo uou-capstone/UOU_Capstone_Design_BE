@@ -1740,3 +1740,33 @@ FE에서 다음 세 가지 확인을 요청했다.
 .\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.service.CourseServiceContentsTest --tests io.github.uou_capstone.aiplatform.domain.notification.dto.NotificationItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseStudentItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.notification.service.NotificationServiceTest --no-daemon
 .\gradlew.bat test --no-daemon
 ```
+
+---
+
+## [2026-05-31] 강의실 종합분석 내부 Pageable 제한 분리
+
+### 증상
+
+FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/analyze`와 `POST /api/courses/{courseId}/reports/classroom/analyze/stream`을 body 없이 호출했다. 동기 분석은 `size 는 100 이하이어야 합니다.` 오류를 반환했고, 스트리밍 분석은 FastAPI 호출 전에 payload 생성 단계에서 실패해 SSE 요청이 500으로 종료될 수 있었다.
+
+### 원인
+
+분석 API 자체는 path parameter만 받지만, BE 내부 `ClassroomReportService.preparePayload`가 학생 리포트 목록을 재사용하면서 `PageRequest.of(0, 1000)`을 전달했다. 이 호출이 외부 학생 목록 API와 동일한 `CourseStudentReportService.getStudentReportList` 경로를 타면서 `PageableSupport.validate`의 클라이언트 요청용 `size <= 100` 검증에 걸렸다.
+
+### 조치
+
+- 외부 학생 리포트 목록 API는 기존 `size <= 100` 검증을 유지했다.
+- 강의실 종합분석 payload 수집 전용 `getStudentReportListForClassroomAnalysis`를 추가해 내부 `PageRequest.of(0, 1000)`은 클라이언트 pageable 검증을 타지 않도록 분리했다.
+- 두 경로가 동일한 집계 로직을 쓰도록 내부 공통 메서드로 학생 리포트 목록 생성 로직을 모았다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/classroom/service/ClassroomReportService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`

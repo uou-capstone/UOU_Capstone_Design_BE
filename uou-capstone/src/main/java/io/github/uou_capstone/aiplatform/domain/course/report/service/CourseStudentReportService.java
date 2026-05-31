@@ -114,7 +114,20 @@ public class CourseStudentReportService {
                                                                     Pageable rawPageable) {
         loadCourseAsOwner(courseId);
         Pageable pageable = PageableSupport.validate(rawPageable, REPORT_SORT_WHITELIST, REPORT_DEFAULT_SORT);
+        return getStudentReportListInternal(courseId, q, statusFilter, pageable);
+    }
 
+    @Transactional(readOnly = true)
+    public PageResponse<StudentReportListItem> getStudentReportListForClassroomAnalysis(Long courseId,
+                                                                                        Pageable pageable) {
+        loadCourseAsOwner(courseId);
+        return getStudentReportListInternal(courseId, null, null, pageable);
+    }
+
+    private PageResponse<StudentReportListItem> getStudentReportListInternal(Long courseId,
+                                                                            String q,
+                                                                            String statusFilter,
+                                                                            Pageable pageable) {
         List<Enrollment> enrollments = enrollmentRepository.findByCourseIdWithStudentUser(courseId);
         if (enrollments.isEmpty()) {
             return PageResponse.empty(pageable);
