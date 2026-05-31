@@ -1827,3 +1827,37 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseReportSupplementService.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatService.java`
 - `src/main/resources/db/migration/V7__student_report_chat_history.sql`
+
+---
+
+## [2026-06-01] 리포트 API FE 계약 값 안정화
+
+### 증상
+
+리포트 페이지 FE 연동 확인 과정에서 `criteriaStatus`와 `classroom/flow.riskLevel`이 임의 문자열처럼 보였고, `overallScorePercent` 산식과 `chat/history` 응답 규모 제어 방식이 API 계약에 명확히 고정되어 있지 않았다. FE는 배지/문구/복원 UI를 안정적으로 매핑하기 위해 값 목록과 정렬/페이지네이션 규칙이 필요했다.
+
+### 원인
+
+초기 보강 구현은 현재 화면에 필요한 데이터를 먼저 제공하는 데 집중해 `criteriaStatus`를 `DEFAULT/APPLIED`, `riskLevel`을 `NORMAL/WATCH`로 반환했다. 또한 학생 리포트 챗봇 기록은 전체 배열로 내려주고 있었고, 점수 필드는 기존 집계 로직을 재사용했지만 FE 문서에는 산식이 따로 적혀 있지 않았다.
+
+### 조치
+
+- `criteriaStatus` 고정 값 목록을 `NONE`, `ACTIVE`, `STALE`, `REFLECTING`으로 정리하고 현재 구현은 기준 없음 `NONE`, 기준 있음 `ACTIVE`를 반환하도록 변경했다.
+- `classroom/flow.riskLevel` 고정 값 목록을 `LOW`, `MEDIUM`, `HIGH`, `INSUFFICIENT_DATA`로 정리하고 `riskReasons`는 문자열 배열로 유지했다.
+- `chat/history`를 `PageResponse`로 변경하고 `page`, `size`, optional `sessionId` 필터를 지원하도록 했다. 기본 정렬은 FE 복원에 맞게 `createdAt ASC`, `id ASC`로 고정했다.
+- `overallScorePercent` 산식을 FE 문서에 명시했다. 현재 산식은 강의 내 유효한 시험 결과별 `totalScore / maxScore * 100`의 산술 평균이며, 제출률/질문/참여도/역량 점수는 아직 가중치에 포함하지 않는다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+.\gradlew.bat test --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/dto/CriteriaStatus.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/ClassroomFlowRiskLevel.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatPersistenceService.java`
+- `FRONTEND_V2_V3_API.md`

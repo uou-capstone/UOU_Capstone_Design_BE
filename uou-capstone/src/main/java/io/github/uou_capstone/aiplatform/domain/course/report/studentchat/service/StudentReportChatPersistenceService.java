@@ -1,7 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.common.web.PageableSupport;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.dto.StudentReportChatHistoryItem;
@@ -14,16 +16,23 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepo
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class StudentReportChatPersistenceService {
+
+    private static final Set<String> HISTORY_SORT_WHITELIST = Set.of("createdAt", "id");
+    private static final Sort HISTORY_DEFAULT_SORT = Sort.by(Sort.Direction.ASC, "createdAt")
+            .and(Sort.by(Sort.Direction.ASC, "id"));
 
     private final CourseAccessService courseAccessService;
     private final EnrollmentRepository enrollmentRepository;
@@ -59,15 +68,24 @@ public class StudentReportChatPersistenceService {
     }
 
     @Transactional(readOnly = true)
-    public List<StudentReportChatHistoryItem> getHistory(Long courseId, Long studentId) {
+    public PageResponse<StudentReportChatHistoryItem> getHistory(Long courseId,
+                                                                 Long studentId,
+                                                                 Long sessionId,
+                                                                 Pageable rawPageable) {
         courseAccessService.loadCourseAsTeacher(courseId);
         enrollmentRepository.findByCourseIdAndStudentIdWithUser(courseId, studentId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
-        return messageRepository
-                .findByChatSession_Course_IdAndChatSession_Student_IdOrderByCreatedAtAscIdAsc(courseId, studentId)
-                .stream()
-                .map(StudentReportChatHistoryItem::new)
-                .toList();
+        if (sessionId != null) {
+            sessionRepository.findByIdAndCourse_IdAndStudent_Id(sessionId, courseId, studentId)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+        }
+
+        Pageable pageable = PageableSupport.validate(rawPageable, HISTORY_SORT_WHITELIST, HISTORY_DEFAULT_SORT);
+        Page<StudentReportChatMessage> page = sessionId == null
+                ? messageRepository.findByChatSession_Course_IdAndChatSession_Student_Id(courseId, studentId, pageable)
+                : messageRepository.findByChatSession_Course_IdAndChatSession_Student_IdAndChatSession_Id(
+                        courseId, studentId, sessionId, pageable);
+        return PageResponse.of(page.map(StudentReportChatHistoryItem::new));
     }
 
     private void saveMessage(Long sessionId, StudentReportChatMessageRole role, String content) {

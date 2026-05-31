@@ -9,6 +9,7 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ClassroomFlowRiskLevel;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ClassroomLearningFlowResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportActivitySummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
@@ -183,15 +184,17 @@ public class CourseReportSupplementService {
         Double participation = studentCount == 0 ? null : round1(participants.size() * 100.0 / studentCount);
         Double learningProgress = studentCount == 0 ? null : round1(learningParticipantCount * 100.0 / studentCount);
         List<String> riskReasons = new ArrayList<>();
+        boolean hasActivity = !results.isEmpty() || questionCount > 0 || learningParticipantCount > 0;
         if (averageScore != null && averageScore < RISK_SCORE_THRESHOLD) {
             riskReasons.add("LOW_AVERAGE_SCORE");
         }
         if (participation != null && participation < LOW_PARTICIPATION_THRESHOLD) {
             riskReasons.add("LOW_PARTICIPATION");
         }
-        if (results.isEmpty() && questionCount == 0 && learningParticipantCount == 0) {
+        if (!hasActivity) {
             riskReasons.add("NO_ACTIVITY");
         }
+        ClassroomFlowRiskLevel riskLevel = resolveRiskLevel(studentCount, hasActivity, riskReasons);
 
         return ClassroomLearningFlowResponse.FlowItem.builder()
                 .lectureId(lecture.getId())
@@ -203,9 +206,22 @@ public class CourseReportSupplementService {
                 .questionCount(questionCount)
                 .quizCount(quizCount)
                 .participationRatePercent(participation)
-                .riskLevel(riskReasons.isEmpty() ? "NORMAL" : "WATCH")
+                .riskLevel(riskLevel.name())
                 .riskReasons(riskReasons)
                 .build();
+    }
+
+    private ClassroomFlowRiskLevel resolveRiskLevel(int studentCount, boolean hasActivity, List<String> riskReasons) {
+        if (studentCount == 0 || !hasActivity) {
+            return ClassroomFlowRiskLevel.INSUFFICIENT_DATA;
+        }
+        if (riskReasons.contains("LOW_AVERAGE_SCORE") && riskReasons.contains("LOW_PARTICIPATION")) {
+            return ClassroomFlowRiskLevel.HIGH;
+        }
+        if (!riskReasons.isEmpty()) {
+            return ClassroomFlowRiskLevel.MEDIUM;
+        }
+        return ClassroomFlowRiskLevel.LOW;
     }
 
     private Map<Long, Long> toLongCountMap(List<Object[]> rows) {

@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.course.report.criteria.service;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaStatus;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaSummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
@@ -48,7 +49,7 @@ public class CourseReportCriterionService {
                 .baseItemCount(BASE_REPORT_ITEM_COUNT)
                 .additionalItemCount(criteria.size())
                 .activeCriteriaCount(criteria.size())
-                .criteriaStatus(criteria.isEmpty() ? "DEFAULT" : "APPLIED")
+                .criteriaStatus(criteria.isEmpty() ? CriteriaStatus.NONE.name() : CriteriaStatus.ACTIVE.name())
                 .criteriaReflectedAt(reflectedAt)
                 .build();
     }

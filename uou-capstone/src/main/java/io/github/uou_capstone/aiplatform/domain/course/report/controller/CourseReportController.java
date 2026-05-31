@@ -35,7 +35,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
-import java.util.List;
 import java.util.Map;
 
 @Tag(name = "강의실 리포트(Course Report) API",
@@ -105,11 +104,14 @@ public class CourseReportController {
     @Operation(summary = "학생 리포트 챗봇 대화 기록 조회")
     @GetMapping("/students/{studentId}/chat/history")
     @PreAuthorize("hasAuthority('TEACHER')")
-    public ResponseEntity<List<StudentReportChatHistoryItem>> getStudentChatHistory(
+    public ResponseEntity<PageResponse<StudentReportChatHistoryItem>> getStudentChatHistory(
             @PathVariable Long courseId,
-            @PathVariable Long studentId
+            @PathVariable Long studentId,
+            @RequestParam(value = "sessionId", required = false) Long sessionId,
+            @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.ASC) Pageable pageable
     ) {
-        return ResponseEntity.ok(studentReportChatPersistenceService.getHistory(courseId, studentId));
+        return ResponseEntity.ok(studentReportChatPersistenceService.getHistory(
+                courseId, studentId, sessionId, pageable));
     }
 
     @Operation(summary = "학생 AI 분석 Context",

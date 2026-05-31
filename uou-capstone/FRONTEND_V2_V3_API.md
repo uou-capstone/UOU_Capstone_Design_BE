@@ -369,12 +369,17 @@ Auth: `TEACHER`
 ### Criteria summary
 - `GET /criteria/summary`
 - Response fields: `baseItemCount`, `additionalItemCount`, `activeCriteriaCount`, `criteriaStatus`, `criteriaReflectedAt`
-- `criteriaStatus`: `DEFAULT` when no custom criteria exist, otherwise `APPLIED`
+- `criteriaStatus` fixed values: `NONE`, `ACTIVE`, `STALE`, `REFLECTING`
+  - Current behavior: `NONE` when no custom criteria exist, otherwise `ACTIVE`
 
 ### Student report detail additions
 - `GET /students/{studentId}`
 - Existing response remains compatible.
 - Added fields: `overallScorePercent`, `headline`, `summaryBullets`, `strengths`, `improvementPoints`, `coachingInsights`, `recommendedActions`, `generatedAt`, `updatedAt`
+- `overallScorePercent` formula: average of completed exam result percentages in the course.
+  - Per result: `totalScore / maxScore * 100`
+  - Course student score: arithmetic average of valid result percentages
+  - Submissions, questions, participation, and competency buckets are not weighted into this field yet
 
 ### Student activity summary
 - `GET /students/{studentId}/activity-summary`
@@ -385,8 +390,13 @@ Auth: `TEACHER`
 - `GET /classroom/flow`
 - Response fields: `courseId`, `items`
 - Item fields: `lectureId`, `week`, `title`, `materialCount`, `learningProgressPercent`, `averageScorePercent`, `questionCount`, `quizCount`, `participationRatePercent`, `riskLevel`, `riskReasons`
+- `riskLevel` fixed values: `LOW`, `MEDIUM`, `HIGH`, `INSUFFICIENT_DATA`
+- `riskReasons` is a string array. Current reason values include `LOW_AVERAGE_SCORE`, `LOW_PARTICIPATION`, `NO_ACTIVITY`
 
 ### Student report chat history
-- `GET /students/{studentId}/chat/history`
+- `GET /students/{studentId}/chat/history?page=0&size=50&sessionId={sessionId}`
+- `sessionId` is optional. If omitted, all report chat messages for that student in the course are returned.
+- Response shape: `PageResponse`
 - Response item fields: `sessionId`, `role`, `message`, `createdAt`
+- Default sort: `createdAt ASC`, then `id ASC`; this is the recommended order for FE restore
 - `POST /students/{studentId}/chat/stream` accepts optional `sessionId`. If omitted, Spring creates a new report chat session and emits an initial `event: session` containing `sessionId`.
