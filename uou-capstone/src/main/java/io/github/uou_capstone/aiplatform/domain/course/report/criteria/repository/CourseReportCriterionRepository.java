@@ -12,4 +12,6 @@ public interface CourseReportCriterionRepository extends JpaRepository<CourseRep
     List<CourseReportCriterion> findByCourseOrderByIdAsc(Course course);
 
     Optional<CourseReportCriterion> findByIdAndCourse(Long id, Course course);
+
+    long countByCourse(Course course);
 }

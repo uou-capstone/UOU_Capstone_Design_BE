@@ -33,4 +33,12 @@ public interface SubmissionRepository extends JpaRepository<Submission, Long> {
             """)
     List<Submission> findByCourseIdAndStudentIdsWithAssessment(@Param("courseId") Long courseId,
                                                                @Param("studentIds") Collection<Long> studentIds);
+
+    @Query("""
+            SELECT s FROM Submission s
+            JOIN FETCH s.assessment a
+            JOIN FETCH s.student st
+            WHERE a.course.id = :courseId
+            """)
+    List<Submission> findByCourseIdWithAssessmentAndStudent(@Param("courseId") Long courseId);
 }

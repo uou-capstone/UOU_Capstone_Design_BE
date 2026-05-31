@@ -5,6 +5,7 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportD
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportService;
 import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.dto.StudentReportChatRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.entity.StudentReportChatSession;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,7 +33,9 @@ import static org.mockito.Mockito.when;
 class StudentReportChatServiceTest {
 
     @Mock private CourseStudentReportService courseStudentReportService;
+    @Mock private StudentReportChatPersistenceService chatPersistenceService;
     @Mock private FastApiBridgeClient fastApiBridgeClient;
+    @Mock private StudentReportChatSession chatSession;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -40,7 +43,10 @@ class StudentReportChatServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new StudentReportChatService(courseStudentReportService, fastApiBridgeClient, objectMapper);
+        service = new StudentReportChatService(
+                courseStudentReportService, chatPersistenceService, fastApiBridgeClient, objectMapper);
+        when(chatPersistenceService.getOrCreateSession(anyLong(), anyLong(), any())).thenReturn(chatSession);
+        when(chatSession.getId()).thenReturn(99L);
     }
 
     @Test

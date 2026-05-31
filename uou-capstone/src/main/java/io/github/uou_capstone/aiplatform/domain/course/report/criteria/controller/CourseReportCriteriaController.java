@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.criteria.controller;
 
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaSummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionUpdateRequest;
@@ -16,17 +17,21 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
 
-/**
- * Course Report Criteria — 교사가 강의실 평가 기준을 관리(CRUD)하고 AI 추천을 받는다.
- */
-@Tag(name = "강의실 리포트 평가 기준",
-        description = "교사가 강의실 단위 평가 기준(label/description/weight)을 관리하고 AI 추천을 받는다.")
+@Tag(name = "Course Report Criteria",
+        description = "Teacher-managed report criteria and AI suggestions for a course.")
 @RestController
 @RequestMapping("/api/courses/{courseId}/reports/criteria")
 @RequiredArgsConstructor
@@ -35,14 +40,21 @@ public class CourseReportCriteriaController {
     private final CourseReportCriterionService criterionService;
     private final CourseReportCriteriaAssistantService assistantService;
 
-    @Operation(summary = "평가 기준 목록")
+    @Operation(summary = "List report criteria")
     @GetMapping
     @PreAuthorize("hasAuthority('TEACHER')")
     public ResponseEntity<List<CriterionResponse>> list(@PathVariable Long courseId) {
         return ResponseEntity.ok(criterionService.list(courseId));
     }
 
-    @Operation(summary = "평가 기준 추가")
+    @Operation(summary = "Get report criteria summary")
+    @GetMapping("/summary")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<CriteriaSummaryResponse> summary(@PathVariable Long courseId) {
+        return ResponseEntity.ok(criterionService.summary(courseId));
+    }
+
+    @Operation(summary = "Create report criterion")
     @PostMapping
     @PreAuthorize("hasAuthority('TEACHER')")
     public ResponseEntity<CriterionResponse> create(
@@ -51,7 +63,7 @@ public class CourseReportCriteriaController {
         return ResponseEntity.status(HttpStatus.CREATED).body(criterionService.create(courseId, req));
     }
 
-    @Operation(summary = "평가 기준 수정")
+    @Operation(summary = "Update report criterion")
     @PatchMapping("/{criterionId}")
     @PreAuthorize("hasAuthority('TEACHER')")
     public ResponseEntity<CriterionResponse> update(
@@ -61,7 +73,7 @@ public class CourseReportCriteriaController {
         return ResponseEntity.ok(criterionService.update(courseId, criterionId, req));
     }
 
-    @Operation(summary = "평가 기준 삭제")
+    @Operation(summary = "Delete report criterion")
     @DeleteMapping("/{criterionId}")
     @PreAuthorize("hasAuthority('TEACHER')")
     public ResponseEntity<Void> delete(
@@ -71,8 +83,8 @@ public class CourseReportCriteriaController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "평가 기준 AI 추천 (SSE 스트림)",
-            description = "강의 컨텍스트와 기존 기준을 보고 AI 가 평가 기준 N개를 추천. 중간 이벤트 criterion_suggestion 으로 1개씩 도착.")
+    @Operation(summary = "Stream report criteria AI suggestions",
+            description = "Streams criterion_suggestion events based on course context and existing criteria.")
     @PostMapping(value = "/assistant/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAuthority('TEACHER')")
     public Flux<ServerSentEvent<Map<String, Object>>> streamAssistant(

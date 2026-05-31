@@ -359,3 +359,34 @@ const reader = res.body.getReader();
 8. 권한 에러(401/403) 공통 핸들러 적용.
 9. 강의실 입장: `POST /api/courses/{courseId}/enroll` 호출부 **즉시 제거** (404). `/join?code=`는 호환만 유지, 신규는 `/join-requests` 사용 (`docs/handoff/COURSE_JOIN_REQUEST_FE.md`).
 10. 경로/필드 추가 변경 시 Swagger 및 **`llm_multi_agent` Bridge·Session 문서** 기준으로 확인.
+---
+
+## Report API additions
+
+Base path: `/api/courses/{courseId}/reports`
+Auth: `TEACHER`
+
+### Criteria summary
+- `GET /criteria/summary`
+- Response fields: `baseItemCount`, `additionalItemCount`, `activeCriteriaCount`, `criteriaStatus`, `criteriaReflectedAt`
+- `criteriaStatus`: `DEFAULT` when no custom criteria exist, otherwise `APPLIED`
+
+### Student report detail additions
+- `GET /students/{studentId}`
+- Existing response remains compatible.
+- Added fields: `overallScorePercent`, `headline`, `summaryBullets`, `strengths`, `improvementPoints`, `coachingInsights`, `recommendedActions`, `generatedAt`, `updatedAt`
+
+### Student activity summary
+- `GET /students/{studentId}/activity-summary`
+- Response fields: `questionCount`, `examAttemptCount`, `submissionCount`, `missingSubmissionCount`, `lectureProgressPercent`, `pageCoverage`, `categoryCoverage`
+- `lectureProgressPercent` is based on lectures with stored learning chat sessions. If there are no lectures it is `null`.
+
+### Classroom learning flow
+- `GET /classroom/flow`
+- Response fields: `courseId`, `items`
+- Item fields: `lectureId`, `week`, `title`, `materialCount`, `learningProgressPercent`, `averageScorePercent`, `questionCount`, `quizCount`, `participationRatePercent`, `riskLevel`, `riskReasons`
+
+### Student report chat history
+- `GET /students/{studentId}/chat/history`
+- Response item fields: `sessionId`, `role`, `message`, `createdAt`
+- `POST /students/{studentId}/chat/stream` accepts optional `sessionId`. If omitted, Spring creates a new report chat session and emits an initial `event: session` containing `sessionId`.
