@@ -45,7 +45,21 @@
   - `pdfPath`: 세션 초기 연결 시 사용할 PDF 경로 (생략 시 서버가 강의의 최신 PDF 경로를 조회해 전달할 수 있음)
   - `sessionId`: 기존 세션 재사용 ID
 - 응답 예시 필드:
-  - `session_id`, `lecture_id`, `current_page`, `ai_status_connected`, `created_at`, `updated_at`
+  - `session_id`, `chatSessionId`, `lecture_id`, `current_page`, `ai_status_connected`, `created_at`, `updated_at`
+  - `chatSessionId`는 Spring DB에 저장되는 채팅 세션 ID이며, 이후 이벤트 전송/메시지 조회에 사용한다.
+
+### 저장된 채팅 조회
+- `GET /api/learning/sessions?lectureId={lectureId}`
+  - 권한: `STUDENT` 또는 `TEACHER`
+  - 응답: `PageResponse`
+  - 정렬 허용 필드: `lastMessageAt`, `createdAt`
+  - item 필드: `chatSessionId`, `lectureId`, `title`, `lastMessageAt`, `endedAt`, `createdAt`
+- `GET /api/learning/sessions/{chatSessionId}/messages`
+  - 권한: `STUDENT` 또는 `TEACHER`
+  - 응답: 오래된 순 배열
+  - item 필드: `messageId`, `role`(`USER`/`ASSISTANT`), `content`, `pageNumber`, `createdAt`
+
+저장 범위는 채팅 UI 복원용 대화 메시지로 한정한다. `USER_MESSAGE`의 사용자 질문과 에이전트 본문 응답(`agent_delta.channel="main"`)만 저장하며, thought/heartbeat/UI 위젯/퀴즈 payload는 채팅 메시지에 저장하지 않는다.
 
 ### 이벤트 전송 + SSE 스트리밍 (주 진입점)
 - `POST /api/learning/sessions/{sessionId}/event`
