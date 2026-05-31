@@ -5,7 +5,9 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportD
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportService;
 import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.dto.StudentReportChatRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.entity.StudentReportChatSession;
 import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClient;
+import io.github.uou_capstone.aiplatform.util.sse.SseEventNames;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamSupport;
 import lombok.RequiredArgsConstructor;
@@ -18,6 +20,7 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Student Report Chatbot 서비스 — FastAPI {@code /bridge/report/student_chat_stream} 호출.
@@ -42,12 +45,17 @@ public class StudentReportChatService {
     private static final Duration IDLE_TIMEOUT = Duration.ofSeconds(180);
 
     private final CourseStudentReportService courseStudentReportService;
+    private final StudentReportChatPersistenceService chatPersistenceService;
     private final FastApiBridgeClient fastApiBridgeClient;
     private final ObjectMapper objectMapper;
 
     public Flux<ServerSentEvent<Map<String, Object>>> streamChat(Long courseId,
                                                                   Long studentId,
                                                                   StudentReportChatRequest req) {
+        StudentReportChatSession chatSession = chatPersistenceService
+                .getOrCreateSession(courseId, studentId, req.getSessionId());
+        chatPersistenceService.saveUserMessage(chatSession.getId(), extractUserMessage(req));
+
         StudentAiReportContextResponse context = courseStudentReportService
                 .getStudentAiReportContext(courseId, studentId);
         StudentReportDetailResponse report = courseStudentReportService
@@ -75,7 +83,70 @@ public class StudentReportChatService {
                 .heartbeatPassthrough(true)
                 .appendDoneOnComplete(false)
                 .build();
-        return SseStreamSupport.wrapNdjsonByType(upstream, objectMapper, policy, this::mapError);
+        StringBuilder assistantBuffer = new StringBuilder();
+        AtomicBoolean saved = new AtomicBoolean(false);
+        Flux<ServerSentEvent<Map<String, Object>>> events = SseStreamSupport
+                .wrapNdjsonByType(upstream, objectMapper, policy, this::mapError)
+                .doOnNext(event -> captureAssistantText(event, assistantBuffer))
+                .doFinally(signalType -> {
+                    if (saved.compareAndSet(false, true) && !assistantBuffer.isEmpty()) {
+                        chatPersistenceService.saveAssistantMessage(chatSession.getId(), assistantBuffer.toString());
+                    }
+                });
+
+        Map<String, Object> sessionPayload = new LinkedHashMap<>();
+        sessionPayload.put("type", "session");
+        sessionPayload.put("sessionId", chatSession.getId());
+        return Flux.just(SseStreamSupport.sse("session", sessionPayload)).concatWith(events);
+    }
+
+    private String extractUserMessage(StudentReportChatRequest req) {
+        if (req.getQuestion() != null && !req.getQuestion().isBlank()) {
+            return req.getQuestion();
+        }
+        if (req.getMessages() == null || req.getMessages().isEmpty()) {
+            return null;
+        }
+        for (int i = req.getMessages().size() - 1; i >= 0; i--) {
+            Map<String, Object> message = req.getMessages().get(i);
+            Object role = message.get("role");
+            if (role != null && !"user".equalsIgnoreCase(String.valueOf(role))) {
+                continue;
+            }
+            String content = firstString(message, "content", "message", "text");
+            if (content != null && !content.isBlank()) {
+                return content;
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void captureAssistantText(ServerSentEvent<Map<String, Object>> event, StringBuilder buffer) {
+        Map<String, Object> data = event.data();
+        if (data == null || SseEventNames.ERROR.equals(event.event()) || SseEventNames.TIMEOUT.equals(event.event())) {
+            return;
+        }
+        if (SseEventNames.DONE.equals(event.event()) && !buffer.isEmpty()) {
+            return;
+        }
+        String text = firstString(data, "delta", "content", "message", "answer", "text");
+        if (text == null && data.get("data") instanceof Map<?, ?> nested) {
+            text = firstString((Map<String, Object>) nested, "answer", "content", "message", "text");
+        }
+        if (text != null && !text.isBlank()) {
+            buffer.append(text);
+        }
+    }
+
+    private String firstString(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value != null && !String.valueOf(value).isBlank()) {
+                return String.valueOf(value);
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> mapError(Throwable e) {

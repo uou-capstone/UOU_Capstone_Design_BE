@@ -1666,18 +1666,17 @@ Spring DB에 `learning_chat_sessions` / `learning_chat_messages`를 추가하고
 - `uou-capstone/FRONTEND_V2_V3_API.md`
 
 ---
+## [2026-05-20] 출석 세션 시간 스키마를 문자열 계약으로 고정
 
-## [2026-05-20] Attendance session time schema fixed to string contract
+### 배경
 
-### Background
+FE에서 `POST /api/courses/{courseId}/attendance/sessions` 호출 시 `Content-Type: application/json` 상태에서 `startTime` / `endTime`을 Swagger가 제안한 객체 형태(`{ "hour": 10, "minute": 0, "second": 0, "nano": 0 }`)로 보내면 400이 발생한다고 제보했다.
 
-FE reported `POST /api/courses/{courseId}/attendance/sessions` returning 400 with `Content-Type: application/json` when `startTime` / `endTime` were sent as Swagger-style objects such as `{ "hour": 10, "minute": 0, "second": 0, "nano": 0 }`.
+BE DTO 필드는 `LocalTime`이므로 Jackson은 ISO 계열 문자열 값을 기대한다. 객체 형태의 시간 값은 컨트롤러/서비스 계층에 진입하기 전 request body 역직렬화 단계에서 실패하고, `GlobalExceptionHandler`에 의해 일반 JSON 파싱 오류 응답으로 매핑된다.
 
-The BE DTO fields are `LocalTime`, so Jackson expects an ISO-like string value. Object-shaped time values fail during request body deserialization before the controller/service layer and are mapped by `GlobalExceptionHandler` to the generic JSON parse error response.
+### 결정
 
-### Decision
-
-Keep the public API contract as a string time:
+공개 API 계약은 문자열 시간 형식으로 유지한다.
 
 ```json
 {
@@ -1686,27 +1685,27 @@ Keep the public API contract as a string time:
 }
 ```
 
-This matches the existing FE handoff document and avoids introducing a second request shape.
+기존 FE 인수인계 문서와 동일한 계약이며, 두 번째 요청 형태를 추가하지 않는다.
 
-### Changes
+### 변경
 
-- Added explicit `@JsonFormat(shape = STRING, pattern = "HH:mm:ss")` to attendance session request/response time fields.
-- Added explicit Swagger `@Schema(type = "string", format = "time", example = "...")` so Swagger UI no longer suggests the `{hour, minute, second, nano}` object shape.
-- Added `AttendanceSessionTimeFormatTest` to verify string input succeeds, output stays `HH:mm:ss`, and object-shaped time input is rejected.
+- 출석 세션 요청/응답 시간 필드에 `@JsonFormat(shape = STRING, pattern = "HH:mm:ss")`를 명시했다.
+- Swagger UI가 `{hour, minute, second, nano}` 객체 형태를 제안하지 않도록 `@Schema(type = "string", format = "time", example = "...")`를 명시했다.
+- `AttendanceSessionTimeFormatTest`를 추가해 문자열 입력은 성공하고, 출력은 `HH:mm:ss`로 유지되며, 객체 형태 시간 입력은 거부되는지 검증했다.
 
 ---
 
-## [2026-05-21] Course createdAt response contract stabilized
+## [2026-05-21] 강의실 createdAt 응답 계약 안정화
 
-### Background
+### 배경
 
-FE asked whether course create/detail responses reliably include a creation date and whether the JSON field name is `createdAt` or `created_at`.
+FE에서 강의실 생성/상세 응답에 생성 일자가 안정적으로 포함되는지, JSON 필드명이 `createdAt`인지 `created_at`인지 확인을 요청했다.
 
-`POST /api/courses` and `GET /api/courses/{courseId}` both return `CourseResponseDto`, and the DTO already exposes `createdAt`. However, `BaseTimeEntity` relies on Spring Data JPA auditing through `@CreatedDate` / `@LastModifiedDate`, while JPA auditing was not enabled in application configuration. This meant the response field existed but could be `null` after persistence.
+`POST /api/courses`와 `GET /api/courses/{courseId}`는 모두 `CourseResponseDto`를 반환하며, DTO에는 이미 `createdAt` 필드가 노출되어 있었다. 다만 `BaseTimeEntity`의 `@CreatedDate` / `@LastModifiedDate`는 Spring Data JPA Auditing에 의존하는데, 애플리케이션 설정에서 JPA Auditing이 활성화되어 있지 않았다. 따라서 응답 필드는 존재하지만 저장 후 값이 `null`일 수 있었다.
 
-### Decision
+### 결정
 
-The public response contract is camelCase:
+공개 응답 계약은 camelCase로 고정한다.
 
 ```json
 {
@@ -1714,15 +1713,15 @@ The public response contract is camelCase:
 }
 ```
 
-Do not use `created_at` for the Spring API response.
+Spring API 응답에서는 `created_at`을 사용하지 않는다.
 
-### Changes
+### 변경
 
-- Added `JpaAuditingConfig` with `@EnableJpaAuditing` so `Course.createdAt` / `updatedAt` are populated on persist.
-- Extended `CourseResponseDtoTest` to verify DTO mapping and JSON serialization as `createdAt`, not `created_at`.
-- Added `CourseAuditingTest` to verify persisted `Course` rows receive non-null audit timestamps.
+- `@EnableJpaAuditing`을 가진 `JpaAuditingConfig`를 추가해 `Course.createdAt` / `updatedAt`이 persist 시점에 채워지도록 했다.
+- `CourseResponseDtoTest`를 확장해 DTO 매핑과 JSON 직렬화 필드명이 `created_at`이 아니라 `createdAt`인지 검증했다.
+- `CourseAuditingTest`를 추가해 저장된 `Course` row의 audit timestamp가 null이 아닌지 검증했다.
 
-### Verification
+### 검증
 
 ```powershell
 .\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.repository.CourseAuditingTest --no-daemon
@@ -1794,3 +1793,71 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/classroom/service/ClassroomReportService.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
+
+---
+
+## [2026-05-31] 리포트 화면 FE 연동 데이터 보강
+
+### 증상
+
+리포트 페이지 개편 후 FE 화면은 기존 학생 리포트 API만으로 기본 렌더링은 가능했지만, 상단 기준 적용 현황, 학생 활동 지표, 강의실 학습 흐름, 학생 리포트 챗봇 이전 대화 복원 영역은 임시값 또는 FE 가공값에 의존해야 했다.
+
+### 원인
+
+기존 BE 리포트 API는 학생 목록/상세 리포트와 강의실 AI 리포트 저장 조회 중심이었다. 기준 요약, 학생별 활동 요약, 강의별 flow 집계, report-chat 전용 history 저장/조회 계약이 분리되어 있지 않았고, 학생 상세 응답도 headline/bullet/코칭 인사이트처럼 FE 본문 카드가 직접 쓰는 필드를 별도로 노출하지 않았다.
+
+### 조치
+
+- `GET /api/courses/{courseId}/reports/criteria/summary`를 추가해 기본 항목 수, 추가 기준 수, 적용 상태, 기준 반영 시각을 반환한다.
+- `GET /api/courses/{courseId}/reports/students/{studentId}` 응답에 종합 점수, headline, summary bullets, 강점/보완/코칭/추천 액션, 생성/수정 시각 필드를 추가했다.
+- `GET /api/courses/{courseId}/reports/students/{studentId}/activity-summary`와 `GET /api/courses/{courseId}/reports/classroom/flow`를 추가해 기존 저장 데이터 기반 활동/flow 집계를 제공한다.
+- report-chat 전용 세션/메시지 테이블과 `GET /api/courses/{courseId}/reports/students/{studentId}/chat/history`를 추가하고, 기존 `chat/stream`은 optional `sessionId`를 받아 user/assistant 메시지를 저장하도록 보강했다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest
+.\gradlew.bat test --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/controller/CourseReportCriteriaController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseReportSupplementService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatService.java`
+- `src/main/resources/db/migration/V7__student_report_chat_history.sql`
+
+---
+
+## [2026-06-01] 리포트 API FE 계약 값 안정화
+
+### 증상
+
+리포트 페이지 FE 연동 확인 과정에서 `criteriaStatus`와 `classroom/flow.riskLevel`이 임의 문자열처럼 보였고, `overallScorePercent` 산식과 `chat/history` 응답 규모 제어 방식이 API 계약에 명확히 고정되어 있지 않았다. FE는 배지/문구/복원 UI를 안정적으로 매핑하기 위해 값 목록과 정렬/페이지네이션 규칙이 필요했다.
+
+### 원인
+
+초기 보강 구현은 현재 화면에 필요한 데이터를 먼저 제공하는 데 집중해 `criteriaStatus`를 `DEFAULT/APPLIED`, `riskLevel`을 `NORMAL/WATCH`로 반환했다. 또한 학생 리포트 챗봇 기록은 전체 배열로 내려주고 있었고, 점수 필드는 기존 집계 로직을 재사용했지만 FE 문서에는 산식이 따로 적혀 있지 않았다.
+
+### 조치
+
+- `criteriaStatus` 고정 값 목록을 `NONE`, `ACTIVE`, `STALE`, `REFLECTING`으로 정리하고 현재 구현은 기준 없음 `NONE`, 기준 있음 `ACTIVE`를 반환하도록 변경했다.
+- `classroom/flow.riskLevel` 고정 값 목록을 `LOW`, `MEDIUM`, `HIGH`, `INSUFFICIENT_DATA`로 정리하고 `riskReasons`는 문자열 배열로 유지했다.
+- `chat/history`를 `PageResponse`로 변경하고 `page`, `size`, optional `sessionId` 필터를 지원하도록 했다. 기본 정렬은 FE 복원에 맞게 `createdAt ASC`, `id ASC`로 고정했다.
+- `overallScorePercent` 산식을 FE 문서에 명시했다. 현재 산식은 강의 내 유효한 시험 결과별 `totalScore / maxScore * 100`의 산술 평균이며, 제출률/질문/참여도/역량 점수는 아직 가중치에 포함하지 않는다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+.\gradlew.bat test --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/dto/CriteriaStatus.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/ClassroomFlowRiskLevel.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatPersistenceService.java`
+- `FRONTEND_V2_V3_API.md`

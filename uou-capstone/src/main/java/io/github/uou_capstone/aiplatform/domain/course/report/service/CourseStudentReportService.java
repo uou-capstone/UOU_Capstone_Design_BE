@@ -189,6 +189,7 @@ public class CourseStudentReportService {
         List<EvidenceDto> evidence = buildEvidence(examResults, submissions);
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
+        LocalDateTime reportTimestamp = activitySummary.getLatestActivityAt();
 
         return StudentReportDetailResponse.builder()
                 .student(StudentInfoDto.builder()
@@ -207,6 +208,15 @@ public class CourseStudentReportService {
                 .submissionSummary(submissionSummary)
                 .evidence(evidence)
                 .narrativeReport(narrative)
+                .overallScorePercent(scoreSummary.getAverageScorePercent())
+                .headline(buildHeadline(scoreSummary, reportStatus))
+                .summaryBullets(buildSummaryBullets(activitySummary, scoreSummary, submissionSummary, reportStatus))
+                .strengths(narrative.getStrengths())
+                .improvementPoints(narrative.getImprovements())
+                .coachingInsights(buildCoachingInsights(competencies, submissionSummary, reportStatus))
+                .recommendedActions(narrative.getNextSteps())
+                .generatedAt(reportTimestamp)
+                .updatedAt(reportTimestamp)
                 .reportStatus(reportStatus.value())
                 .reportWarnings(warnings)
                 .build();
@@ -1065,6 +1075,61 @@ public class CourseStudentReportService {
                 .improvements(improvements)
                 .nextSteps(nextSteps.subList(0, Math.min(nextSteps.size(), NARRATIVE_LIST_SIZE)))
                 .build();
+    }
+
+    private String buildHeadline(ScoreSummaryDto scoreSummary, ReportStatus reportStatus) {
+        Double avg = scoreSummary.getAverageScorePercent();
+        if (reportStatus == ReportStatus.INSUFFICIENT_DATA) {
+            return "분석 가능한 학습 데이터가 더 필요합니다.";
+        }
+        if (reportStatus == ReportStatus.EXCELLING) {
+            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+        }
+        if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
+            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg == null ? 0.0 : avg);
+        }
+        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg == null ? 0.0 : avg);
+    }
+
+    private List<String> buildSummaryBullets(ActivitySummaryDto activitySummary,
+                                             ScoreSummaryDto scoreSummary,
+                                             SubmissionSummaryDto submissionSummary,
+                                             ReportStatus reportStatus) {
+        List<String> bullets = new ArrayList<>();
+        Double avg = scoreSummary.getAverageScorePercent();
+        if (avg != null) {
+            bullets.add(String.format("종합 점수 %.1f점", avg));
+        }
+        bullets.add(String.format("시험 응시 %d회, 제출 %d건",
+                activitySummary.getExamAttemptCount(), activitySummary.getSubmissionCount()));
+        if (submissionSummary.getMissingCount() > 0) {
+            bullets.add(String.format("미제출 %d건 확인", submissionSummary.getMissingCount()));
+        }
+        bullets.add("리포트 상태: " + reportStatus.value());
+        return bullets;
+    }
+
+    private List<String> buildCoachingInsights(List<CompetencyDto> competencies,
+                                               SubmissionSummaryDto submissionSummary,
+                                               ReportStatus reportStatus) {
+        List<String> insights = new ArrayList<>();
+        competencies.stream()
+                .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
+                .findFirst()
+                .ifPresent(c -> insights.add(c.getLabel() + " 영역을 우선 점검하세요."));
+        competencies.stream()
+                .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
+                .findFirst()
+                .ifPresent(c -> insights.add(c.getLabel() + " 강점을 심화 문제로 확장할 수 있습니다."));
+        if (submissionSummary.getMissingCount() > 0) {
+            insights.add("미제출 과제를 먼저 정리하면 리포트 신뢰도가 올라갑니다.");
+        }
+        if (insights.isEmpty()) {
+            insights.add(reportStatus == ReportStatus.INSUFFICIENT_DATA
+                    ? "응시와 제출 데이터를 확보한 뒤 세부 코칭을 제공할 수 있습니다."
+                    : "현재 흐름을 유지하면서 최근 오답 근거를 함께 확인하세요.");
+        }
+        return insights.stream().limit(3).toList();
     }
 
     // ===========================================================

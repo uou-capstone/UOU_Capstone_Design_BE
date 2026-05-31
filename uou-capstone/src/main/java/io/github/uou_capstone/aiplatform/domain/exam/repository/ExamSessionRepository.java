@@ -25,6 +25,8 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
     List<ExamSession> findByLecture(Lecture lecture);
 
     List<ExamSession> findByLecture_IdIn(java.util.Collection<Long> lectureIds);
+
+    List<ExamSession> findByLecture_Course_Id(Long courseId);
     
     List<ExamSession> findByLectureAndExamType(Lecture lecture, ExamType examType);
     

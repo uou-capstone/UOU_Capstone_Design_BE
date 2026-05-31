@@ -3,6 +3,8 @@ package io.github.uou_capstone.aiplatform.domain.course.report.criteria.service;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaStatus;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaSummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionUpdateRequest;
@@ -13,11 +15,15 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class CourseReportCriterionService {
+
+    private static final int BASE_REPORT_ITEM_COUNT = 4;
 
     private final CourseAccessService courseAccessService;
     private final CourseReportCriterionRepository repository;
@@ -28,6 +34,24 @@ public class CourseReportCriterionService {
         return repository.findByCourseOrderByIdAsc(course).stream()
                 .map(CriterionResponse::new)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public CriteriaSummaryResponse summary(Long courseId) {
+        Course course = courseAccessService.loadCourseAsTeacher(courseId);
+        List<CourseReportCriterion> criteria = repository.findByCourseOrderByIdAsc(course);
+        LocalDateTime reflectedAt = criteria.stream()
+                .map(c -> c.getUpdatedAt() != null ? c.getUpdatedAt() : c.getCreatedAt())
+                .max(Comparator.nullsLast(Comparator.naturalOrder()))
+                .orElse(null);
+
+        return CriteriaSummaryResponse.builder()
+                .baseItemCount(BASE_REPORT_ITEM_COUNT)
+                .additionalItemCount(criteria.size())
+                .activeCriteriaCount(criteria.size())
+                .criteriaStatus(criteria.isEmpty() ? CriteriaStatus.NONE.name() : CriteriaStatus.ACTIVE.name())
+                .criteriaReflectedAt(reflectedAt)
+                .build();
     }
 
     @Transactional

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Getter
@@ -18,6 +19,15 @@ public class StudentReportDetailResponse {
     private final SubmissionSummaryDto submissionSummary;
     private final List<EvidenceDto> evidence;
     private final NarrativeReportDto narrativeReport;
+    private final Double overallScorePercent;
+    private final String headline;
+    private final List<String> summaryBullets;
+    private final List<String> strengths;
+    private final List<String> improvementPoints;
+    private final List<String> coachingInsights;
+    private final List<String> recommendedActions;
+    private final LocalDateTime generatedAt;
+    private final LocalDateTime updatedAt;
     private final String reportStatus;
     private final List<String> reportWarnings;
 }

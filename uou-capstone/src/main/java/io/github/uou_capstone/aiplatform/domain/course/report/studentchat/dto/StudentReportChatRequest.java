@@ -33,6 +33,8 @@ public class StudentReportChatRequest {
     /** 모델 명시 (선택 — null이면 FastAPI 기본 모델). */
     private String model;
 
+    private Long sessionId;
+
     @JsonIgnore
     @AssertTrue(message = "question 또는 messages 중 하나는 필수입니다.")
     public boolean isQuestionOrMessagesPresent() {

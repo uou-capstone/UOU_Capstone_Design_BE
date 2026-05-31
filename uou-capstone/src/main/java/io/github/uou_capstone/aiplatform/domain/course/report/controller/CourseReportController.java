@@ -3,11 +3,16 @@ package io.github.uou_capstone.aiplatform.domain.course.report.controller;
 import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.classroom.dto.ClassroomReportResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.classroom.service.ClassroomReportService;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ClassroomLearningFlowResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportActivitySummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.service.CourseReportSupplementService;
 import io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportService;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.dto.StudentReportChatHistoryItem;
 import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.dto.StudentReportChatRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatPersistenceService;
 import io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -40,8 +45,10 @@ import java.util.Map;
 public class CourseReportController {
 
     private final CourseStudentReportService courseStudentReportService;
+    private final CourseReportSupplementService courseReportSupplementService;
     private final ClassroomReportService classroomReportService;
     private final StudentReportChatService studentReportChatService;
+    private final StudentReportChatPersistenceService studentReportChatPersistenceService;
 
     @Operation(summary = "강의실 학생 리포트 리스트",
             description = "강의실 학생 항목 목록을 페이지 단위로 조회합니다. 정렬 허용 필드: name / averageScore / latestActivity / reportStatus. 기본 정렬: name,asc. 이름 검색(q), 상태 필터(status) 지원.")
@@ -68,6 +75,16 @@ public class CourseReportController {
         return ResponseEntity.ok(courseStudentReportService.getStudentReportDetail(courseId, studentId));
     }
 
+    @Operation(summary = "학생 학습 활동 요약 조회")
+    @GetMapping("/students/{studentId}/activity-summary")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<StudentReportActivitySummaryResponse> getStudentActivitySummary(
+            @PathVariable Long courseId,
+            @PathVariable Long studentId
+    ) {
+        return ResponseEntity.ok(courseReportSupplementService.getStudentActivitySummary(courseId, studentId));
+    }
+
     @Operation(summary = "학생 리포트 Chatbot (SSE 스트림)",
             description = "교사가 특정 학생 리포트에 대해 follow-up 질문을 보낸다. " +
                     "Spring 이 학생 context + report 를 모아 FastAPI /bridge/report/student_chat_stream 으로 전달.")
@@ -82,6 +99,19 @@ public class CourseReportController {
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("X-Content-Type-Options", "nosniff");
         return studentReportChatService.streamChat(courseId, studentId, request);
+    }
+
+    @Operation(summary = "학생 리포트 챗봇 대화 기록 조회")
+    @GetMapping("/students/{studentId}/chat/history")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<PageResponse<StudentReportChatHistoryItem>> getStudentChatHistory(
+            @PathVariable Long courseId,
+            @PathVariable Long studentId,
+            @RequestParam(value = "sessionId", required = false) Long sessionId,
+            @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.ASC) Pageable pageable
+    ) {
+        return ResponseEntity.ok(studentReportChatPersistenceService.getHistory(
+                courseId, studentId, sessionId, pageable));
     }
 
     @Operation(summary = "학생 AI 분석 Context",
@@ -108,6 +138,13 @@ public class CourseReportController {
         return classroomReportService.get(courseId)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    @Operation(summary = "강의실 전체 학습 흐름 조회")
+    @GetMapping("/classroom/flow")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<ClassroomLearningFlowResponse> getClassroomFlow(@PathVariable Long courseId) {
+        return ResponseEntity.ok(courseReportSupplementService.getClassroomFlow(courseId));
     }
 
     @Operation(summary = "강의실 종합 리포트 분석 (동기)",
