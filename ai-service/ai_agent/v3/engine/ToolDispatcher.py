@@ -187,6 +187,8 @@ class ToolDispatcher:
             ):
                 if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)
+                if event.type == NdjsonEventType.DONE:
+                    continue
                 yield event
 
             full_text = "".join(answer_chunks)
@@ -225,6 +227,8 @@ class ToolDispatcher:
             ):
                 if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)
+                if event.type == NdjsonEventType.DONE:
+                    continue
                 yield event
             full_text = "".join(answer_chunks)
             if full_text:

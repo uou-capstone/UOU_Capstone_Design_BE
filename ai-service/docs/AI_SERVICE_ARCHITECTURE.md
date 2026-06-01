@@ -80,12 +80,14 @@ Spring 호출 기준:
 
 | 기능 | Endpoint |
 |---|---|
+| Notice AI Assistant | `POST /bridge/notice_assistant_stream` |
 | Discussion AI Assistant | `POST /bridge/discussion_assistant_stream` |
 | Exam Studio PDF Context | `POST /bridge/exam_studio/pdf_context` |
 | Exam Studio Chat | `POST /bridge/exam_studio/chat_stream` |
 | Teacher Exam Grade | `POST /bridge/exam/grade` |
 | Student Report Chatbot | `POST /bridge/report/student_chat_stream` |
 | Report Criteria AI 추천 | `POST /bridge/report/criteria_assistant_stream` |
+| Report Criteria AI Chat | `POST /bridge/report/criteria_assistant_chat_stream` |
 | Classroom 종합 리포트 | `POST /bridge/report/classroom_analyze` |
 | Classroom 종합 리포트 Stream | `POST /bridge/report/classroom_analyze_stream` |
 
@@ -342,6 +344,23 @@ v3 학습 세션 퀴즈도 동일한 context gate를 적용한다. 현재 페이
 
 Spring 연동 기준은 `/bridge/exam_studio/*`와 `/bridge/exam/grade`이다.
 
+### Notice Assistant
+
+파일:
+
+- `app/routers/bridge_agents.py`
+
+endpoint:
+
+- `POST /bridge/notice_assistant_stream`
+
+역할:
+
+- 교사용 공지사항 초안/수정/게시 제안을 생성한다.
+- 결과는 `operation.method` (`draftNotice`, `reviseNotice`, `createNotice`, `updateNotice`, `deleteNotice`, `messageOnly`)로 내려준다.
+- AI는 DB 저장/게시/삭제를 직접 수행하지 않는다. Spring/FE가 확인 UI 이후 실제 CRUD를 적용한다.
+- 공지 본문에서 AI 자기소개, 불필요한 인사말 등 게시글에 부적절한 표현을 후처리한다.
+
 ### Discussion Assistant
 
 파일:
@@ -368,6 +387,7 @@ endpoint:
 endpoint:
 
 - `POST /bridge/report/criteria_assistant_stream`
+- `POST /bridge/report/criteria_assistant_chat_stream`
 
 역할:
 
@@ -376,6 +396,9 @@ endpoint:
 - 기존 criteria label과 중복되는 추천은 제거한다.
 - 추천 weight는 최종 suggestions 합이 100이 되도록 재분배한다.
 - AI 추천이 부족하면 fallback 기준으로 채우고 각 suggestion에 `source`, `fallbackUsed`, `reason`, `confidence`, `warnings[]`를 붙인다.
+- chat endpoint는 레퍼런스처럼 `operation.method` (`draftCriterion`, `reviseCriterion`, `createCriterion`, `updateCriterion`, `deleteCriterion`, `messageOnly`)를 반환한다.
+- 기본 평가 항목 수정/삭제 요청은 `messageOnly`와 `BUILT_IN_CRITERION_IMMUTABLE` warning으로 막는다.
+- 실제 criteria CRUD는 Spring/FE의 확인 단계에서 수행한다.
 
 ### Classroom Report
 

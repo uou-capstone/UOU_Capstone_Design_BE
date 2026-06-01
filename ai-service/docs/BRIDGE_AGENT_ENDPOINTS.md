@@ -8,12 +8,14 @@ Spring Boot가 호출하는 최종 계약은 `/bridge/*`만 사용한다. `/api/
 
 | 기능 | Spring 호출 endpoint | 응답 |
 |---|---|---|
+| Notice AI Assistant | `POST /bridge/notice_assistant_stream` | NDJSON |
 | Discussion AI Assistant | `POST /bridge/discussion_assistant_stream` | NDJSON |
 | Exam Studio PDF Context | `POST /bridge/exam_studio/pdf_context` | JSON |
 | Exam Studio Chat | `POST /bridge/exam_studio/chat_stream` | NDJSON |
 | Teacher Exam Grade | `POST /bridge/exam/grade` | JSON |
 | Student Report Chatbot | `POST /bridge/report/student_chat_stream` | NDJSON |
 | Report Criteria AI 추천 | `POST /bridge/report/criteria_assistant_stream` | NDJSON |
+| Report Criteria AI Chat | `POST /bridge/report/criteria_assistant_chat_stream` | NDJSON |
 | Classroom 종합 리포트 | `POST /bridge/report/classroom_analyze` | JSON |
 | Classroom 종합 리포트 Stream | `POST /bridge/report/classroom_analyze_stream` | NDJSON |
 
@@ -125,8 +127,52 @@ Endpoint별 shortcut field:
 
 - `/bridge/exam_studio/chat_stream`: `message`
 - `/bridge/report/student_chat_stream`: `question`
+- `/bridge/report/criteria_assistant_chat_stream`: `message`
+- `/bridge/notice_assistant_stream`: `message`
 
 ## Endpoints
+
+### Notice AI Assistant
+
+`POST /bridge/notice_assistant_stream`
+
+요청:
+
+- `courseId`
+- `courseName`
+- `message` 또는 `messages[]`
+- `currentNotice`
+- `draft`
+- `recentNotices[]`
+- `model`
+- `responseJsonSchema` 선택
+
+`done.data`:
+
+- `replyMarkdown`
+- `title`
+- `contentMarkdown`
+- `operation`
+- `source`
+- `fallbackUsed`
+- `reason`
+- `confidence`
+- `warnings[]`
+
+`operation.method`:
+
+- `messageOnly`
+- `draftNotice`
+- `reviseNotice`
+- `createNotice`
+- `updateNotice`
+- `deleteNotice`
+
+정책:
+
+- AI는 실제 저장/게시/삭제를 수행하지 않는다.
+- `createNotice`, `updateNotice`, `deleteNotice`는 Spring/FE가 확인 카드 또는 별도 버튼으로 적용한다.
+- 수정/삭제 대상이 모호하면 `messageOnly`로 확인 질문을 반환한다.
 
 ### Discussion AI Assistant
 
@@ -329,6 +375,50 @@ operation 검증:
 - 기존 criteria label과 중복되는 추천은 제거된다.
 - 최종 `suggestions[].weight` 합은 100이 되도록 재분배된다.
 - AI 추천 수가 부족하면 deterministic fallback 기준으로 채운다.
+
+### Report Criteria Assistant Chat
+
+`POST /bridge/report/criteria_assistant_chat_stream`
+
+레퍼런스의 평가항목 도우미처럼 교사 채팅 요청을 `operation`으로 변환한다. 기존 추천형
+`/bridge/report/criteria_assistant_stream`은 유지한다.
+
+요청:
+
+- `courseId`
+- `courseName`
+- `message` 또는 `messages[]`
+- `history[]`
+- `builtInCriteria[]`
+- `additionalCriteria[]`
+- `currentProposal`
+- `model`
+- `responseJsonSchema` 선택
+
+`done.data`:
+
+- `replyMarkdown`
+- `operation`
+- `source`
+- `fallbackUsed`
+- `reason`
+- `confidence`
+- `warnings[]`
+
+`operation.method`:
+
+- `messageOnly`
+- `draftCriterion`
+- `reviseCriterion`
+- `createCriterion`
+- `updateCriterion`
+- `deleteCriterion`
+
+정책:
+
+- 기본 평가 항목은 수정/삭제하지 않는다. 요청되면 `messageOnly`와 `BUILT_IN_CRITERION_IMMUTABLE` warning을 반환한다.
+- `createCriterion`, `updateCriterion`, `deleteCriterion`은 실제 DB 반영이 아니라 Spring/FE가 적용할 제안이다.
+- `criterion.name`은 60자, `criterion.description`은 600자로 제한된다.
 
 ### Classroom Report
 
