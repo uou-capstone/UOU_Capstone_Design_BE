@@ -228,6 +228,32 @@ sequenceDiagram
 - repair stream 내부 `done`은 숨기고, UI patch가 포함된 최종 `done`만 클라이언트에 전달한다.
 - Spring DB 스키마나 bridge DTO 변경은 필요하지 않다. 이 상태는 v3 session state 내부에 저장된다.
 
+### Page Navigation Directive
+
+v3 session stream은 채팅 기반 페이지 이동 요청을 별도 `navigation` NDJSON 이벤트로 먼저 보낼 수 있다.
+Spring은 이 라인을 별도 변환 없이 SSE `message` data로 전달하고, FE가 `type`을 파싱해 PDF viewer를 이동한다.
+
+이벤트 예시:
+
+```json
+{
+  "type": "navigation",
+  "targetPage": 3,
+  "reason": "요구공학과 가장 관련 높은 페이지입니다.",
+  "confidence": 0.72,
+  "source": "page_index_search"
+}
+```
+
+계약:
+
+- `targetPage`는 1-based page number다.
+- `reason`은 사용자에게 보여줄 수 있는 짧은 한국어 문장이다.
+- `source`는 `page_command`, `explicit_page`, `page_index_search` 중 하나다.
+- `navigation` 뒤에는 이동된 페이지 기준 `EXPLAIN_PAGE` stream이 이어진다.
+- FE는 `navigation` 수신으로 PDF를 이동할 때 같은 target page에 대한 `PAGE_CHANGED` 이벤트를 즉시 중복 전송하지 않도록 suppress 또는 dedupe한다.
+- 의미 기반 이동은 FastAPI의 PDF page index 텍스트 검색으로 처리한다. 검색 실패 시 navigation을 emit하지 않고 기존 USER_MESSAGE 흐름으로 fallback한다.
+
 ### Gemini Bridge Client
 
 파일:

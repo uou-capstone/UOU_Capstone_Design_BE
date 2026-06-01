@@ -15,6 +15,7 @@ from ai_agent.types.domain import (
     PageStatus,
     SessionState,
 )
+from ai_agent.v3.engine.PageCommandIntent import get_page_command_intent
 
 
 class StateReducer:
@@ -71,6 +72,17 @@ class StateReducer:
     def _on_user_message(self, state: SessionState, event: AppEvent) -> None:
         text = event.get("text", event.get("message", event.get("question", "")))
         state.append_message("user", text)
+        intent = get_page_command_intent(text)
+        if intent == "NEXT":
+            current_page_state = state.get_current_page_state()
+            current_page_state.status = PageStatus.DONE
+            state.current_page = max(state.current_page, 1) + 1
+            if state.current_page not in state.pages:
+                state.pages[state.current_page] = PageState(page_number=state.current_page)
+        elif intent == "PREVIOUS":
+            state.current_page = max(1, state.current_page - 1)
+            if state.current_page not in state.pages:
+                state.pages[state.current_page] = PageState(page_number=state.current_page)
 
     def _on_quiz_decision(self, state: SessionState, event: AppEvent) -> None:
         page_state = state.get_current_page_state()

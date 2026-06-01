@@ -16,6 +16,10 @@ from __future__ import annotations
 import logging
 from typing import AsyncGenerator, Optional
 
+from ai_agent.v3.engine.NavigationIntentService import (
+    NavigationDirective,
+    navigation_intent_service,
+)
 from ai_agent.v3.engine.Orchestrator import Orchestrator
 from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
 from ai_agent.v3.engine.StateReducer import StateReducer
@@ -29,6 +33,8 @@ from ai_agent.types.domain import (
     NdjsonEventType,
     OrchestratorAction,
     OrchestratorPlan,
+    PageState,
+    PageStatus,
     SessionState,
     ToolName,
 )
@@ -76,6 +82,26 @@ class OrchestrationEngine:
         try:
             # 2. Apply state immediately (StateReducer)
             state = self._reducer.reduce(state, event)
+
+            navigation_directive = navigation_intent_service.resolve(event, state)
+            if navigation_directive:
+                self._apply_navigation_directive(state, navigation_directive)
+                yield NdjsonEvent(
+                    type=NdjsonEventType.NAVIGATION,
+                    targetPage=navigation_directive.target_page,
+                    reason=navigation_directive.reason,
+                    confidence=navigation_directive.confidence,
+                    source=navigation_directive.source,
+                )
+                navigation_plan = self._navigation_plan(navigation_directive)
+                async for ndjson_event in self._dispatcher.dispatch(
+                    navigation_plan,
+                    state,
+                    event.payload,
+                    event_type=event.type.value,
+                ):
+                    yield ndjson_event
+                return
 
             fast_path_plan = self._fast_path_plan(event, state)
             if fast_path_plan:
@@ -214,6 +240,28 @@ class OrchestrationEngine:
                 params={"quiz_type": quiz_type},
             )
         ])
+
+    def _navigation_plan(self, directive: NavigationDirective) -> OrchestratorPlan:
+        return OrchestratorPlan(actions=[
+            OrchestratorAction(
+                type=ActionType.CALL_TOOL,
+                tool=ToolName.EXPLAIN_PAGE,
+                params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+            )
+        ])
+
+    def _apply_navigation_directive(
+        self,
+        state: SessionState,
+        directive: NavigationDirective,
+    ) -> None:
+        target_page = max(1, int(directive.target_page))
+        if state.current_page != target_page:
+            current_page_state = state.get_current_page_state()
+            current_page_state.status = PageStatus.DONE
+        state.current_page = target_page
+        if state.current_page not in state.pages:
+            state.pages[state.current_page] = PageState(page_number=state.current_page)
 
     def _fallback_plan_for_empty_actions(self, event: AppEvent, state: SessionState) -> OrchestratorPlan | None:
         if event.type == AppEventType.SESSION_ENTERED:

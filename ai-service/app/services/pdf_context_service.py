@@ -61,6 +61,19 @@ class PdfContextService:
             page_count=len(pages),
         )
 
+    def read_all_pages(self, pdf_path: str | None) -> list[str]:
+        if not pdf_path:
+            return []
+
+        path = Path(pdf_path)
+        if not path.exists():
+            return []
+
+        try:
+            return self._load_pages(path)
+        except Exception:
+            return []
+
     def _load_pages(self, path: Path) -> list[str]:
         stat = path.stat()
         key = str(path.resolve())

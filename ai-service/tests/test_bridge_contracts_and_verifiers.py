@@ -725,6 +725,149 @@ async def test_question_then_next_page_sequence_matches_reference_flow():
 
 
 @pytest.mark.asyncio
+async def test_chat_next_page_command_explains_next_page_without_llm_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("page navigation chat commands must bypass LLM planning")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, state.current_page, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="explainer",
+                tool="EXPLAIN_PAGE",
+                channel="main",
+                delta=f"{state.current_page}페이지 설명",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "넘어가줘"}),
+        )
+    ]
+
+    assert state.current_page == 2
+    assert state.pages[1].status.value == "DONE"
+    assert events[0].type == NdjsonEventType.NAVIGATION
+    assert events[0].targetPage == 2
+    assert events[0].source == "page_command"
+    assert any(event.agent == "explainer" and event.delta == "2페이지 설명" for event in events)
+    assert events[-1].data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert [(event_type, page, action.type, action.tool) for event_type, page, action in dispatcher.calls] == [
+        (AppEventType.USER_MESSAGE.value, 2, ActionType.CALL_TOOL, ToolName.EXPLAIN_PAGE),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_semantic_navigation_emits_target_page_directive(monkeypatch):
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("semantic navigation must bypass LLM planning")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, state.current_page, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="explainer",
+                tool="EXPLAIN_PAGE",
+                channel="main",
+                delta=f"{state.current_page}페이지 설명",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+            )
+
+    monkeypatch.setattr(
+        "ai_agent.v3.engine.NavigationIntentService.pdf_context_service.read_all_pages",
+        lambda pdf_path: [
+            "Introduction to software engineering",
+            "Requirements Engineering Process. Requirements elicitation, analysis, validation.",
+            "System design and architecture",
+        ],
+    )
+
+    state = SessionState(
+        session_id=1,
+        lecture_id=1,
+        current_page=1,
+        pdf_path="/tmp/lecture.pdf",
+    )
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "앞에서 설명한 요구공학 부분 다시 보여줘"}),
+        )
+    ]
+
+    assert state.current_page == 2
+    assert events[0].type == NdjsonEventType.NAVIGATION
+    assert events[0].targetPage == 2
+    assert events[0].source == "page_index_search"
+    assert "요구공학" in events[0].reason
+    assert any(event.agent == "explainer" and event.delta == "2페이지 설명" for event in events)
+    assert dispatcher.calls[0][1] == 2
+
+
+@pytest.mark.asyncio
 async def test_user_message_page_number_updates_explanation_context_before_planning():
     class FakeStore:
         def __init__(self, state):

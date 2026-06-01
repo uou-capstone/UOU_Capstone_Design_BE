@@ -82,6 +82,32 @@ def test_state_reducer_syncs_visible_page_from_non_page_events():
     assert state.pages[6].status.value == "DONE"
 
 
+def test_state_reducer_treats_chat_page_commands_as_navigation():
+    reducer = StateReducer()
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "넘어가줘"}),
+    )
+    assert state.current_page == 2
+    assert state.pages[1].status.value == "DONE"
+    assert state.pages[2].page_number == 2
+    assert state.messages[-1]["content"] == "넘어가줘"
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "이전 페이지로 돌아가줘"}),
+    )
+    assert state.current_page == 1
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "다음 페이지로 넘어가면 어떻게 돼?"}),
+    )
+    assert state.current_page == 1
+
+
 def test_grader_auto_accepts_reference_answer_shapes():
     grader = GraderAgent(None)  # type: ignore[arg-type]
 
