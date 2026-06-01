@@ -1643,6 +1643,52 @@ def test_exam_grade_fallback_normalizes_object_answer_shapes():
     assert response.scoreRatio == 1
 
 
+@pytest.mark.asyncio
+async def test_explain_page_stream_emits_single_final_done_with_next_widget():
+    class FakeBridge:
+        async def load_pdf_part(self, pdf_path):
+            return "PDF_PART"
+
+        async def stream(self, contents, agent="explainer", tool="EXPLAIN_PAGE", config=None):
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent=agent,
+                tool=tool,
+                channel="main",
+                delta="## 핵심 요지\n1페이지 설명",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent=agent,
+                tool=tool,
+                final=True,
+                data={},
+            )
+
+    dispatcher = ToolDispatcher(FakeBridge())  # type: ignore[arg-type]
+    state = SessionState(session_id=1, lecture_id=1, pdf_path="/tmp/test.pdf")
+    events = [
+        event async for event in dispatcher.dispatch(
+            OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.EXPLAIN_PAGE,
+                    params={"next_widget": "NEXT_PAGE_DECISION"},
+                )
+            ]),
+            state,
+            {},
+            event_type=AppEventType.START_EXPLANATION_DECISION.value,
+        )
+    ]
+
+    done_events = [event for event in events if event.type == NdjsonEventType.DONE]
+    assert len(done_events) == 1
+    assert done_events[0].agent == "system"
+    assert done_events[0].data == {"ui": {"widget": "NEXT_PAGE_DECISION"}}
+    assert state.get_current_page_state().status.value == "EXPLAINED"
+
+
 def test_discussion_result_sanitizer_removes_assistant_tone_and_redundant_heading():
     result = bridge_agents._normalize_discussion_result(
         bridge_agents.DiscussionAssistantRequest(topic="분수 질문", category="QUESTION"),
@@ -1715,6 +1761,103 @@ async def test_criteria_suggestions_deduplicate_and_rebalance_weights(monkeypatc
     assert len(suggestions) == 3
     assert sum(item["weight"] for item in suggestions) == 100
     assert all("warnings" in item for item in suggestions)
+
+
+@pytest.mark.asyncio
+async def test_criteria_chat_returns_operation_and_protects_builtin(monkeypatch):
+    async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
+        return {
+            "replyMarkdown": "기본 항목 삭제는 할 수 없습니다.",
+            "operation": {
+                "method": "deleteCriterion",
+                "params": {"targetCriterionName": "개념 이해도"},
+            },
+            "source": "AI",
+        }
+
+    monkeypatch.setattr(bridge_agents, "_call_gemini_json", fake_call_gemini_json)
+
+    result = await bridge_agents._criteria_chat_result(
+        bridge_agents.CriteriaAssistantChatRequest(
+            courseName="수학",
+            message="개념 이해도 기준 삭제해줘",
+            builtInCriteria=[
+                bridge_agents.ReportCriterionAssistantItem(name="개념 이해도", description="기본 기준"),
+            ],
+        )
+    )
+
+    assert result["operation"]["method"] == "messageOnly"
+    assert "BUILT_IN_CRITERION_IMMUTABLE" in result["warnings"]
+    assert result["fallbackUsed"] is False
+
+
+@pytest.mark.asyncio
+async def test_criteria_chat_normalizes_create_criterion_operation(monkeypatch):
+    async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
+        return {
+            "replyMarkdown": "추가 평가 항목 제안을 준비했습니다.",
+            "operation": {
+                "method": "createCriterion",
+                "params": {
+                    "criterion": {
+                        "name": "질문 근거 활용 능력",
+                        "description": "학생이 질문과 답변에서 개념 근거를 연결하는지 평가합니다.",
+                    }
+                },
+            },
+            "source": "AI",
+        }
+
+    monkeypatch.setattr(bridge_agents, "_call_gemini_json", fake_call_gemini_json)
+
+    result = await bridge_agents._criteria_chat_result(
+        bridge_agents.CriteriaAssistantChatRequest(
+            courseName="수학",
+            message="이 기준을 추가해줘",
+            currentProposal={
+                "name": "질문 근거 활용 능력",
+                "description": "학생이 질문과 답변에서 개념 근거를 연결하는지 평가합니다.",
+            },
+        )
+    )
+
+    assert result["operation"]["method"] == "createCriterion"
+    assert result["operation"]["params"]["criterion"]["name"] == "질문 근거 활용 능력"
+    assert result["source"] == "AI"
+
+
+@pytest.mark.asyncio
+async def test_notice_assistant_returns_notice_operation(monkeypatch):
+    async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
+        return {
+            "replyMarkdown": "공지 초안을 준비했습니다.",
+            "title": "중간고사 안내",
+            "contentMarkdown": "중간고사는 다음 주 수업 시간에 진행됩니다.",
+            "operation": {
+                "method": "draftNotice",
+                "params": {
+                    "notice": {
+                        "title": "중간고사 안내",
+                        "contentMarkdown": "중간고사는 다음 주 수업 시간에 진행됩니다.",
+                        "pinned": True,
+                        "status": "DRAFT",
+                    }
+                },
+            },
+            "source": "AI",
+        }
+
+    monkeypatch.setattr(bridge_agents, "_call_gemini_json", fake_call_gemini_json)
+
+    result = await bridge_agents._notice_result(
+        bridge_agents.NoticeAssistantRequest(courseName="운영체제", message="중간고사 공지 초안 만들어줘")
+    )
+
+    assert result["title"] == "중간고사 안내"
+    assert result["operation"]["method"] == "draftNotice"
+    assert result["operation"]["params"]["notice"]["pinned"] is True
+    assert result["fallbackUsed"] is False
 
 
 @pytest.mark.asyncio
@@ -1873,6 +2016,42 @@ def test_bridge_stream_endpoints_return_parseable_ndjson(monkeypatch):
             }
         ]
 
+    async def fake_criteria_chat(req):
+        return {
+            "replyMarkdown": "평가 항목 초안을 준비했습니다.",
+            "operation": {
+                "method": "draftCriterion",
+                "params": {"criterion": {"name": "근거 활용", "description": "근거를 활용한다."}},
+            },
+            "source": "AI",
+            "fallbackUsed": False,
+            "reason": None,
+            "confidence": "MEDIUM",
+            "warnings": [],
+        }
+
+    async def fake_notice(req):
+        return {
+            "replyMarkdown": "공지 초안을 준비했습니다.",
+            "title": "수업 공지",
+            "contentMarkdown": "다음 수업 전 자료를 확인해 주세요.",
+            "operation": {
+                "method": "draftNotice",
+                "params": {
+                    "notice": {
+                        "title": "수업 공지",
+                        "contentMarkdown": "다음 수업 전 자료를 확인해 주세요.",
+                        "status": "DRAFT",
+                    }
+                },
+            },
+            "source": "AI",
+            "fallbackUsed": False,
+            "reason": None,
+            "confidence": "MEDIUM",
+            "warnings": [],
+        }
+
     async def fake_classroom(req):
         return {
             "summaryMarkdown": "## 요약",
@@ -1891,6 +2070,8 @@ def test_bridge_stream_endpoints_return_parseable_ndjson(monkeypatch):
     monkeypatch.setattr(bridge_agents, "_discussion_result", fake_discussion)
     monkeypatch.setattr(bridge_agents, "answer_student_report_chat_result", fake_student_report_chat)
     monkeypatch.setattr(bridge_agents, "_criteria_suggestions", fake_criteria)
+    monkeypatch.setattr(bridge_agents, "_criteria_chat_result", fake_criteria_chat)
+    monkeypatch.setattr(bridge_agents, "_notice_result", fake_notice)
     monkeypatch.setattr(bridge_agents, "_classroom_report", fake_classroom)
     from app.main import create_app
 
@@ -1898,8 +2079,10 @@ def test_bridge_stream_endpoints_return_parseable_ndjson(monkeypatch):
 
     cases = [
         ("/bridge/discussion_assistant_stream", {"topic": "분수 질문"}),
+        ("/bridge/notice_assistant_stream", {"message": "공지 초안 만들어줘"}),
         ("/bridge/report/student_chat_stream", {"context": {}, "question": "약점은?"}),
         ("/bridge/report/criteria_assistant_stream", {"courseName": "수학"}),
+        ("/bridge/report/criteria_assistant_chat_stream", {"message": "평가 기준 하나 추천해줘"}),
         ("/bridge/report/classroom_analyze_stream", {"courseName": "수학", "studentReports": []}),
         ("/bridge/exam_studio/chat_stream", {"message": "OX 문제 2개 만들어줘"}),
     ]

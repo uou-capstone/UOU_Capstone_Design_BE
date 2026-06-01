@@ -113,6 +113,54 @@ class CriteriaAssistantRequest(BaseModel):
     model: str | None = None
 
 
+class ReportCriterionAssistantItem(BaseModel):
+    id: int | str | None = None
+    name: str | None = None
+    label: str | None = None
+    description: str | None = None
+    weight: int | None = None
+    updatedAt: str | None = None
+    isBuiltIn: bool = False
+
+
+class CriteriaAssistantChatRequest(BaseModel):
+    courseId: int | None = None
+    courseName: str | None = None
+    message: str | None = None
+    messages: list[StudentReportChatMessage] = Field(default_factory=list)
+    history: list[StudentReportChatMessage] = Field(default_factory=list)
+    builtInCriteria: list[ReportCriterionAssistantItem] = Field(default_factory=list)
+    additionalCriteria: list[ReportCriterionAssistantItem] = Field(default_factory=list)
+    existingCriteria: list[CriterionItem] = Field(default_factory=list)
+    currentProposal: dict[str, Any] | None = None
+    model: str | None = None
+    responseJsonSchema: dict[str, Any] | None = None
+
+
+class NoticeContextItem(BaseModel):
+    id: int | str | None = None
+    title: str | None = None
+    contentPreview: str | None = None
+    pinned: bool | None = None
+    status: str | None = None
+    publishAt: str | None = None
+    updatedAt: str | None = None
+
+
+class NoticeAssistantRequest(BaseModel):
+    courseId: int | None = None
+    courseName: str | None = None
+    message: str | None = None
+    prompt: str | None = None
+    messages: list[StudentReportChatMessage] = Field(default_factory=list)
+    history: list[StudentReportChatMessage] = Field(default_factory=list)
+    currentNotice: dict[str, Any] | None = None
+    draft: dict[str, Any] = Field(default_factory=dict)
+    recentNotices: list[NoticeContextItem] = Field(default_factory=list)
+    model: str | None = None
+    responseJsonSchema: dict[str, Any] | None = None
+
+
 class ClassroomReportAnalyzeRequest(BaseModel):
     courseId: int | None = None
     courseName: str | None = None
@@ -375,6 +423,275 @@ async def _discussion_result(req: DiscussionAssistantRequest) -> dict[str, Any]:
         )
 
 
+_NOTICE_METHODS = {
+    "messageOnly",
+    "draftNotice",
+    "reviseNotice",
+    "createNotice",
+    "updateNotice",
+    "deleteNotice",
+}
+_NOTICE_BANNED_PHRASES = (
+    "AI가",
+    "인공지능이",
+    "도와드리겠습니다",
+    "안녕하세요",
+)
+
+
+def _notice_user_request(req: NoticeAssistantRequest) -> str:
+    message = _last_user_message(req.messages or req.history)
+    if message:
+        return message
+    if req.message and req.message.strip():
+        return req.message.strip()
+    if req.prompt and req.prompt.strip():
+        return req.prompt.strip()
+    return ""
+
+
+def _compact_notice_context(items: list[NoticeContextItem]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "contentPreview": (item.contentPreview or "")[:600],
+            "pinned": item.pinned,
+            "status": item.status,
+            "publishAt": item.publishAt,
+            "updatedAt": item.updatedAt,
+        }
+        for item in items[:10]
+    ]
+
+
+def _notice_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "replyMarkdown": {"type": "string"},
+            "title": {"type": "string"},
+            "contentMarkdown": {"type": "string"},
+            "operation": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string"},
+                    "params": {"type": "object"},
+                },
+                "required": ["method", "params"],
+            },
+            "source": {"type": "string"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["replyMarkdown", "title", "contentMarkdown", "operation"],
+    }
+
+
+def _fallback_notice(req: NoticeAssistantRequest, reason: str) -> dict[str, Any]:
+    user_request = _notice_user_request(req)
+    current = req.currentNotice or req.draft or {}
+    title = str(current.get("title") or user_request[:60] or "강의 공지").strip()
+    content = str(current.get("contentMarkdown") or current.get("content") or "").strip()
+    if not content:
+        content = "\n\n".join([
+            f"## {title}",
+            "강의 진행과 관련해 확인이 필요한 내용을 안내드립니다.",
+            "- 세부 일정과 준비물은 강의실 안내를 다시 확인해 주세요.",
+            "- 질문이 있으면 댓글이나 토론 게시판을 통해 남겨 주세요.",
+        ])
+    method = "draftNotice"
+    if current and re.search(r"(수정|바꿔|고쳐|다듬)", user_request):
+        method = "reviseNotice"
+    elif current and re.search(r"(반영|저장|게시|등록|생성)", user_request):
+        method = "createNotice"
+    return {
+        "replyMarkdown": "AI 응답을 안정적으로 생성하지 못해 기본 공지 초안을 준비했습니다. 게시 전 내용을 확인해 주세요.",
+        "title": title[:100],
+        "contentMarkdown": content[:3000],
+        "operation": {
+            "method": method,
+            "params": {
+                "notice": {
+                    "title": title[:100],
+                    "contentMarkdown": content[:3000],
+                    "pinned": bool(current.get("pinned", False)),
+                    "status": str(current.get("status") or "DRAFT"),
+                    "publishAt": current.get("publishAt"),
+                },
+                "rationale": "fallback 공지 초안입니다.",
+            },
+        },
+        "source": "FALLBACK",
+        "fallbackUsed": True,
+        "reason": reason,
+        "confidence": "LOW",
+        "warnings": [reason],
+    }
+
+
+def _sanitize_notice_markdown(value: Any, fallback: str) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+    content = str(value or "").strip()
+    for phrase in _NOTICE_BANNED_PHRASES:
+        if phrase in content:
+            content = content.replace(phrase, "")
+            warnings.append("NOTICE_BANNED_PHRASE_REMOVED")
+    content = re.sub(r"\n{3,}", "\n\n", content).strip()
+    if not content:
+        content = fallback
+        warnings.append("NOTICE_CONTENT_FALLBACK")
+    return content, sorted(set(warnings))
+
+
+def _normalize_notice_result(
+    req: NoticeAssistantRequest,
+    raw: Any,
+    *,
+    fallback_used: bool,
+    reason: str | None,
+    default_source: str,
+) -> dict[str, Any]:
+    parsed = raw if isinstance(raw, dict) else {}
+    fallback = _fallback_notice(req, reason or "AI_UNAVAILABLE")
+    title = re.sub(r"\s+", " ", str(parsed.get("title") or fallback["title"]).strip())
+    if not title:
+        title = "강의 공지"
+    content, sanitize_warnings = _sanitize_notice_markdown(
+        parsed.get("contentMarkdown"),
+        str(fallback["contentMarkdown"]),
+    )
+    operation = parsed.get("operation") if isinstance(parsed.get("operation"), dict) else {}
+    method = str(operation.get("method") or fallback["operation"]["method"]).strip()
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+    warnings = list(sanitize_warnings)
+
+    if method not in _NOTICE_METHODS:
+        warnings.append(f"unsupported_operation:{method}")
+        method = "draftNotice"
+        params = {}
+
+    if method in {"draftNotice", "reviseNotice", "createNotice", "updateNotice"}:
+        notice = params.get("notice") if isinstance(params.get("notice"), dict) else {}
+        params = dict(params)
+        params["notice"] = {
+            "title": str(notice.get("title") or title)[:100],
+            "contentMarkdown": str(notice.get("contentMarkdown") or content)[:3000],
+            "pinned": bool(notice.get("pinned", False)),
+            "status": str(notice.get("status") or "DRAFT"),
+            "publishAt": notice.get("publishAt"),
+        }
+        if method == "updateNotice" and not (params.get("targetNoticeId") or params.get("targetNoticeTitle")):
+            warnings.append("NOTICE_TARGET_MISSING")
+            method = "messageOnly"
+            params = {"rationale": "수정할 공지를 특정할 수 없습니다."}
+    elif method == "deleteNotice" and not (
+        params.get("targetNoticeId") or params.get("targetNoticeTitle")
+    ):
+        warnings.append("NOTICE_TARGET_MISSING")
+        method = "messageOnly"
+        params = {"rationale": "수정/삭제할 공지를 특정할 수 없습니다."}
+
+    raw_warnings = parsed.get("warnings")
+    if isinstance(raw_warnings, list):
+        warnings.extend(str(item) for item in raw_warnings if item)
+    if fallback_used and reason:
+        warnings.append(reason)
+
+    reply = str(parsed.get("replyMarkdown") or fallback.get("replyMarkdown") or "").strip()
+    return {
+        "replyMarkdown": reply,
+        "title": title[:100],
+        "contentMarkdown": content[:3000],
+        "operation": {"method": method, "params": params},
+        "source": str(parsed.get("source") or default_source),
+        "fallbackUsed": fallback_used,
+        "reason": reason,
+        "confidence": "LOW" if fallback_used else "MEDIUM",
+        "warnings": sorted({warning for warning in warnings if warning}),
+    }
+
+
+async def _notice_result(req: NoticeAssistantRequest) -> dict[str, Any]:
+    user_request = _notice_user_request(req)
+    if not user_request:
+        raise HTTPException(status_code=400, detail="messages[] or message is required.")
+    prompt = f"""
+너는 EduPilot 강의실 공지사항 작성을 돕는 교사용 AI 에이전트다.
+반드시 JSON만 출력한다. JSON 외 텍스트, 코드블록, 설명 문장을 절대 출력하지 않는다.
+
+출력 스키마:
+{{
+  "replyMarkdown": "교사에게 보여줄 짧은 한국어 markdown 답변",
+  "title": "100자 이하 공지 제목",
+  "contentMarkdown": "학생에게 보여줄 공지 본문 markdown",
+  "operation": {{
+    "method": "messageOnly|draftNotice|reviseNotice|createNotice|updateNotice|deleteNotice",
+    "params": {{
+      "targetNoticeId": "수정/삭제할 공지 id",
+      "targetNoticeTitle": "수정/삭제할 공지 제목",
+      "targetNoticeUpdatedAt": "수정/삭제할 공지 updatedAt",
+      "notice": {{
+        "title": "공지 제목",
+        "contentMarkdown": "공지 본문",
+        "pinned": false,
+        "status": "DRAFT|PUBLISHED|SCHEDULED",
+        "publishAt": "ISO-8601 또는 null"
+      }},
+      "rationale": "선택"
+    }}
+  }},
+  "source": "AI",
+  "warnings": []
+}}
+
+규칙:
+- 실제 저장/게시/삭제를 완료했다고 말하지 마라. 교사가 확인 버튼을 눌러야 적용된다고 안내하라.
+- 새 공지 초안은 draftNotice, 현재 초안 수정은 reviseNotice를 사용한다.
+- createNotice/updateNotice/deleteNotice는 교사가 명시적으로 저장/게시/수정/삭제를 요청한 경우에만 사용한다.
+- 수정/삭제 대상이 모호하면 messageOnly로 어떤 공지인지 다시 물어봐라.
+- 학생에게 보여줄 본문에는 AI 자기소개, 과장된 홍보 문구, 불필요한 인사말을 넣지 않는다.
+- 일정/마감/준비물은 구체적으로 정리하되, 입력에 없는 날짜는 추측하지 않는다.
+
+강의명: {req.courseName or '(강의명 없음)'}
+
+현재 공지/초안:
+{json.dumps(req.currentNotice or req.draft or {}, ensure_ascii=False)}
+
+최근 공지:
+{json.dumps(_compact_notice_context(req.recentNotices), ensure_ascii=False)}
+
+최근 대화:
+{json.dumps(_compact_discussion_history(req.messages or req.history), ensure_ascii=False)}
+
+교사 요청:
+{user_request}
+""".strip()
+    try:
+        parsed = await _call_gemini_json(
+            prompt=prompt,
+            model=_model_name(req.model),
+            response_json_schema=req.responseJsonSchema or _notice_schema(),
+        )
+        return _normalize_notice_result(
+            req,
+            parsed,
+            fallback_used=False,
+            reason=None,
+            default_source="AI",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        reason = stable_error_type(exc)
+        return _normalize_notice_result(
+            req,
+            _fallback_notice(req, reason),
+            fallback_used=True,
+            reason=reason,
+            default_source="FALLBACK",
+        )
+
+
 def _validate_pdf_context_path(pdf_path: str) -> Path:
     safe_path = Path(validate_pdf_path(pdf_path))
     if safe_path.suffix.lower() != ".pdf":
@@ -622,6 +939,275 @@ def _criteria_schema() -> dict[str, Any]:
     }
 
 
+_CRITERIA_CHAT_METHODS = {
+    "messageOnly",
+    "draftCriterion",
+    "reviseCriterion",
+    "createCriterion",
+    "updateCriterion",
+    "deleteCriterion",
+}
+
+
+def _criterion_display_name(item: ReportCriterionAssistantItem | CriterionItem | dict[str, Any]) -> str:
+    if isinstance(item, dict):
+        value = item.get("name") or item.get("label")
+    else:
+        value = getattr(item, "name", None) or getattr(item, "label", None)
+    return str(value or "").strip()
+
+
+def _criterion_description(item: ReportCriterionAssistantItem | CriterionItem | dict[str, Any]) -> str:
+    if isinstance(item, dict):
+        value = item.get("description")
+    else:
+        value = getattr(item, "description", None)
+    return str(value or "").strip()
+
+
+def _criterion_payload(item: ReportCriterionAssistantItem | CriterionItem) -> dict[str, Any]:
+    payload = item.model_dump(mode="json", exclude_none=True)
+    name = _criterion_display_name(item)
+    if name:
+        payload["name"] = name
+    payload.pop("label", None)
+    return payload
+
+
+def _criteria_chat_messages(req: CriteriaAssistantChatRequest) -> list[dict[str, str]]:
+    source = req.messages or req.history
+    return _compact_discussion_history(source)
+
+
+def _criteria_chat_message(req: CriteriaAssistantChatRequest) -> str:
+    return _required_message(
+        messages=req.messages or req.history,
+        shortcut=req.message,
+        field_name="message",
+    )
+
+
+def _criteria_chat_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "replyMarkdown": {"type": "string"},
+            "operation": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string"},
+                    "params": {"type": "object"},
+                },
+                "required": ["method", "params"],
+            },
+            "source": {"type": "string"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["replyMarkdown", "operation"],
+    }
+
+
+def _fallback_criteria_chat(req: CriteriaAssistantChatRequest, reason: str) -> dict[str, Any]:
+    current = req.currentProposal if isinstance(req.currentProposal, dict) else {}
+    message = (req.message or _last_user_message(req.messages or req.history)).strip()
+    name = str(current.get("name") or current.get("label") or "").strip()
+    description = str(current.get("description") or "").strip()
+    if not name:
+        name = "학습 근거 활용도"
+    if not description:
+        description = "학생이 답변과 과제에서 강의 개념, 풀이 근거, 피드백 반영 과정을 구체적으로 보여주는지 평가합니다."
+
+    method = "draftCriterion"
+    if current and re.search(r"(반영|저장|추가|등록|생성)", message):
+        method = "createCriterion"
+    elif current and re.search(r"(수정|바꿔|고쳐|다듬)", message):
+        method = "reviseCriterion"
+
+    return {
+        "replyMarkdown": "AI 응답을 안정적으로 생성하지 못해 기본 평가 항목 초안을 준비했습니다. 저장 전 내용을 확인해 주세요.",
+        "operation": {
+            "method": method,
+            "params": {
+                "criterion": {
+                    "name": name[:60],
+                    "description": description[:600],
+                },
+                "rationale": "fallback 기본 평가 항목입니다.",
+                "summaryCards": [
+                    {"title": "기본 초안", "body": "AI 실패 시에도 교사가 수정 가능한 평가 항목 초안을 제공합니다."}
+                ],
+            },
+        },
+        "source": "FALLBACK",
+        "fallbackUsed": True,
+        "reason": reason,
+        "confidence": "LOW",
+        "warnings": [reason],
+    }
+
+
+def _normalize_criteria_chat_result(
+    req: CriteriaAssistantChatRequest,
+    raw: Any,
+    *,
+    fallback_used: bool,
+    reason: str | None,
+    default_source: str,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    parsed = raw if isinstance(raw, dict) else {}
+    operation = parsed.get("operation") if isinstance(parsed.get("operation"), dict) else {}
+    method = str(operation.get("method") or "messageOnly").strip()
+    params = operation.get("params") if isinstance(operation.get("params"), dict) else {}
+
+    if method not in _CRITERIA_CHAT_METHODS:
+        warnings.append(f"unsupported_operation:{method}")
+        method = "messageOnly"
+        params = {}
+
+    built_in_keys = {
+        _criteria_label_key(_criterion_display_name(item))
+        for item in req.builtInCriteria
+        if _criterion_display_name(item)
+    }
+    for item in req.existingCriteria:
+        if _criterion_display_name(item):
+            built_in_keys.add(_criteria_label_key(_criterion_display_name(item)))
+
+    target_name = str(params.get("targetCriterionName") or params.get("targetCriterionLabel") or "").strip()
+    criterion = params.get("criterion") if isinstance(params.get("criterion"), dict) else {}
+    criterion_name = str(criterion.get("name") or criterion.get("label") or "").strip()
+    criterion_description = str(criterion.get("description") or "").strip()
+
+    if method in {"updateCriterion", "deleteCriterion"} and _criteria_label_key(target_name) in built_in_keys:
+        warnings.append("BUILT_IN_CRITERION_IMMUTABLE")
+        method = "messageOnly"
+        params = {
+            "rationale": "기본 평가 항목은 수정하거나 삭제할 수 없습니다. 추가 평가 항목만 변경할 수 있습니다."
+        }
+    elif method in {"draftCriterion", "reviseCriterion", "createCriterion", "updateCriterion"}:
+        if not criterion_name:
+            criterion_name = "학습 근거 활용도"
+            warnings.append("CRITERION_NAME_FILLED")
+        if not criterion_description:
+            criterion_description = "학생이 답변과 과제에서 강의 개념, 풀이 근거, 피드백 반영 과정을 구체적으로 보여주는지 평가합니다."
+            warnings.append("CRITERION_DESCRIPTION_FILLED")
+        params = dict(params)
+        params["criterion"] = {
+            "name": criterion_name[:60],
+            "description": criterion_description[:600],
+        }
+    elif method == "deleteCriterion":
+        if not params.get("targetCriterionId") and not target_name:
+            warnings.append("DELETE_TARGET_MISSING")
+            method = "messageOnly"
+            params = {"rationale": "삭제할 추가 평가 항목을 특정할 수 없습니다."}
+
+    raw_warnings = parsed.get("warnings")
+    if isinstance(raw_warnings, list):
+        warnings.extend(str(item) for item in raw_warnings if item)
+    if fallback_used and reason:
+        warnings.append(reason)
+
+    reply = str(parsed.get("replyMarkdown") or "").strip()
+    if not reply:
+        reply = "평가 항목 작업 제안을 준비했습니다. 적용 전 내용을 확인해 주세요."
+
+    return {
+        "replyMarkdown": reply,
+        "operation": {"method": method, "params": params},
+        "source": str(parsed.get("source") or default_source),
+        "fallbackUsed": fallback_used,
+        "reason": reason,
+        "confidence": "LOW" if fallback_used else "MEDIUM",
+        "warnings": sorted({warning for warning in warnings if warning}),
+    }
+
+
+async def _criteria_chat_result(req: CriteriaAssistantChatRequest) -> dict[str, Any]:
+    message = _criteria_chat_message(req)
+    built_in = [_criterion_payload(item) for item in req.builtInCriteria]
+    if req.existingCriteria:
+        built_in.extend(_criterion_payload(item) for item in req.existingCriteria)
+    additional = [_criterion_payload(item) for item in req.additionalCriteria]
+    prompt = f"""
+너는 EduPilot 강의실 학생별 역량 리포트의 '추가 평가 항목'을 돕는 교사용 AI 에이전트다.
+반드시 JSON만 출력한다. JSON 외 텍스트, 코드블록, 설명 문장을 절대 출력하지 않는다.
+
+출력 스키마:
+{{
+  "replyMarkdown": "교사에게 보여줄 짧은 한국어 markdown 답변",
+  "operation": {{
+    "method": "messageOnly|draftCriterion|reviseCriterion|createCriterion|updateCriterion|deleteCriterion",
+    "params": {{
+      "targetCriterionId": "수정/삭제할 현재 추가 평가 항목 id",
+      "targetCriterionName": "수정/삭제할 현재 추가 평가 항목 이름",
+      "targetCriterionDescription": "수정/삭제할 현재 추가 평가 항목 설명",
+      "targetCriterionUpdatedAt": "수정/삭제할 현재 추가 평가 항목 updatedAt",
+      "criterion": {{
+        "name": "60자 이하 평가 항목 이름",
+        "description": "600자 이하 세부 설명"
+      }},
+      "rationale": "선택",
+      "summaryCards": [
+        {{"title": "요약 제목", "body": "요약 내용"}}
+      ]
+    }}
+  }},
+  "source": "AI",
+  "warnings": []
+}}
+
+규칙:
+- 기본 평가 항목은 수정하거나 삭제할 수 없다. 추가 평가 항목만 update/delete 대상이다.
+- draftCriterion은 새 초안, reviseCriterion은 현재 초안 수정이다.
+- createCriterion은 교사가 명시적으로 반영/추가/저장하라고 말한 경우에만 사용한다.
+- updateCriterion/deleteCriterion은 현재 추가 평가 항목 하나를 대상으로 해야 하며 target 정보를 넣어라.
+- 수정/삭제 대상이 모호하면 messageOnly로 어떤 항목인지 다시 물어봐라.
+- 실제 DB 저장/수정/삭제를 완료했다고 말하지 마라. 교사가 확인 버튼을 눌러야 적용된다고 안내하라.
+- summaryCards는 최대 3개다.
+
+강의명: {req.courseName or '(강의명 없음)'}
+
+기본 평가 항목:
+{json.dumps(built_in, ensure_ascii=False)}
+
+추가 평가 항목:
+{json.dumps(additional, ensure_ascii=False)}
+
+현재 초안:
+{json.dumps(req.currentProposal or {}, ensure_ascii=False)}
+
+최근 대화:
+{json.dumps(_criteria_chat_messages(req), ensure_ascii=False)}
+
+교사 요청:
+{message}
+""".strip()
+    try:
+        parsed = await _call_gemini_json(
+            prompt=prompt,
+            model=_model_name(req.model),
+            response_json_schema=req.responseJsonSchema or _criteria_chat_schema(),
+        )
+        return _normalize_criteria_chat_result(
+            req,
+            parsed,
+            fallback_used=False,
+            reason=None,
+            default_source="AI",
+        )
+    except Exception as exc:  # noqa: BLE001
+        reason = stable_error_type(exc)
+        return _normalize_criteria_chat_result(
+            req,
+            _fallback_criteria_chat(req, reason),
+            fallback_used=True,
+            reason=reason,
+            default_source="FALLBACK",
+        )
+
+
 async def _criteria_suggestions(req: CriteriaAssistantRequest) -> list[dict[str, Any]]:
     prompt = f"""
 너는 교사용 강의실 리포트 평가 기준 추천 assistant다.
@@ -779,6 +1365,25 @@ async def discussion_assistant_stream(req: DiscussionAssistantRequest) -> Stream
     return _stream_response(events())
 
 
+@router.post("/notice_assistant_stream")
+async def notice_assistant_stream(req: NoticeAssistantRequest) -> StreamingResponse:
+    async def events() -> AsyncIterator[bytes]:
+        try:
+            yield _ndjson({"type": "thought_delta", "text": "공지사항 초안과 교사 요청을 분석하고 있습니다."})
+            result = await _notice_result(req)
+            yield _ndjson({"type": "answer_delta", "text": result.get("replyMarkdown", "")})
+            yield _ndjson({"type": "done", "data": result})
+        except Exception as exc:  # noqa: BLE001
+            yield _ndjson({
+                "type": "error",
+                "code": "NOTICE_ASSISTANT_FAILED",
+                "message": "공지사항 작성 보조 응답 생성 중 오류가 발생했습니다.",
+                "details": {"errorType": stable_error_type(exc)},
+            })
+
+    return _stream_response(events())
+
+
 @router.post("/exam_studio/pdf_context")
 async def exam_studio_pdf_context(req: ExamStudioPdfContextRequest) -> dict[str, Any]:
     return await asyncio.to_thread(_extract_pdf_context, req)
@@ -857,6 +1462,25 @@ async def report_criteria_assistant_stream(req: CriteriaAssistantRequest) -> Str
                 "type": "error",
                 "code": "CRITERIA_ASSISTANT_FAILED",
                 "message": "리포트 기준 추천 생성 중 오류가 발생했습니다.",
+                "details": {"errorType": stable_error_type(exc)},
+            })
+
+    return _stream_response(events())
+
+
+@router.post("/report/criteria_assistant_chat_stream")
+async def report_criteria_assistant_chat_stream(req: CriteriaAssistantChatRequest) -> StreamingResponse:
+    async def events() -> AsyncIterator[bytes]:
+        try:
+            yield _ndjson({"type": "thought_delta", "text": "평가 항목 변경 요청과 현재 기준 목록을 분석하고 있습니다."})
+            result = await _criteria_chat_result(req)
+            yield _ndjson({"type": "answer_delta", "text": result.get("replyMarkdown", "")})
+            yield _ndjson({"type": "done", "data": result})
+        except Exception as exc:  # noqa: BLE001
+            yield _ndjson({
+                "type": "error",
+                "code": "CRITERIA_ASSISTANT_CHAT_FAILED",
+                "message": "리포트 기준 변경 보조 응답 생성 중 오류가 발생했습니다.",
                 "details": {"errorType": stable_error_type(exc)},
             })
 
