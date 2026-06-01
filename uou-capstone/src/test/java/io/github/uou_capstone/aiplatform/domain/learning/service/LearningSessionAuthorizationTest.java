@@ -24,8 +24,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -172,6 +174,33 @@ class LearningSessionAuthorizationTest {
 
         verify(chatPersistenceService).saveUserMessage(sessionId, 77L, LECTURE_ID, "hello", 2);
         verify(chatPersistenceService).saveAssistantMessage(sessionId, 77L, LECTURE_ID, "answer", 2);
+    }
+
+    @Test
+    void createOrGetSession_withoutSessionId_reusesActiveChatSession() {
+        Long chatSessionId = 12L;
+        Teacher courseOwner = teacher(COURSE_OWNER_TEACHER_ID);
+        Course course = courseOwnedBy(courseOwner);
+        Lecture lecture = lectureOf(course);
+        User currentUser = userWith(courseOwner, null);
+        LearningChatSession chatSession = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(currentUser)
+                .build();
+        ReflectionTestUtils.setField(chatSession, "id", chatSessionId);
+
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(currentUserResolver.getUser()).thenReturn(currentUser);
+        when(chatPersistenceService.getOrCreateActiveSession(LECTURE_ID, currentUser)).thenReturn(chatSession);
+        when(materialRepository.findFirstByLecture_IdAndMaterialTypeOrderByCreatedAtDesc(LECTURE_ID, "PDF"))
+                .thenReturn(Optional.empty());
+        when(fastApiSessionClient.getOrCreateByLecture(LECTURE_ID, null, chatSessionId))
+                .thenReturn(Mono.just(Map.of("session_id", chatSessionId)));
+
+        Map<String, Object> response = learningSessionService.getOrCreateSession(LECTURE_ID, null, null).block();
+
+        assertThat(response).containsEntry("chatSessionId", chatSessionId);
+        verify(fastApiSessionClient).getOrCreateByLecture(LECTURE_ID, null, chatSessionId);
     }
 
     private static Teacher teacher(Long id) {

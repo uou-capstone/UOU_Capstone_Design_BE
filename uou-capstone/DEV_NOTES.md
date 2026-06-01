@@ -1887,3 +1887,34 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 ### 관련 파일
 
 - `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/config/AuthRateLimitInterceptor.java`
+
+---
+
+## [2026-06-01] 통합학습 재입장 시 채팅 히스토리 복원
+
+### 증상
+
+통합학습 중 브라우저 뒤로가기나 라우트 이동 후 같은 강의에 다시 들어가면, 이전에 에이전트와 학습했던 메시지가 사라지고 FE 화면에 `메시지가 없습니다` 빈 상태가 표시됐다.
+
+### 원인
+
+`POST /api/learning/sessions/{lectureId}`가 `sessionId` 없이 호출될 때마다 Spring 채팅 세션을 새로 생성했다. 기존 메시지는 DB에 저장돼 있었지만, 재입장 응답의 `chatSessionId`가 새 빈 세션을 가리켜 FE가 `/messages`를 조회해도 이전 대화가 복원되지 않았다.
+
+### 조치
+
+- `sessionId`가 명시되지 않은 일반 강의 진입 요청에서는 같은 사용자 + 같은 강의의 종료되지 않은 최신 `LearningChatSession`을 먼저 재사용하도록 변경했다.
+- 기존 active 세션이 없을 때만 새 채팅 세션을 생성한다.
+- FE가 `chatSessionId`로 메시지 히스토리를 조회하고, 의도적 종료가 아닌 뒤로가기에서는 `SAVE_AND_EXIT`를 보내지 않도록 handoff 가이드를 추가했다.
+
+### 검증
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionAuthorizationTest
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/LearningChatSessionRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionAuthorizationTest.java`
+- `docs/handoff/LEARNING_CHAT_RESTORE_FE.md`

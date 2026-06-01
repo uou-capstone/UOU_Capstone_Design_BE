@@ -24,6 +24,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
@@ -48,6 +49,14 @@ public class LearningChatPersistenceService {
                 .build();
         session.touch(LocalDateTime.now());
         return chatSessionRepository.save(session);
+    }
+
+    @Transactional
+    public LearningChatSession getOrCreateActiveSession(Long lectureId, User user) {
+        Optional<LearningChatSession> activeSession =
+                chatSessionRepository.findFirstByUserIdAndLectureIdAndEndedAtIsNullOrderByLastMessageAtDescIdDesc(
+                        user.getId(), lectureId);
+        return activeSession.orElseGet(() -> createSession(lectureId, user));
     }
 
     @Transactional(readOnly = true)
