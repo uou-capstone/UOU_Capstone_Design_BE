@@ -1861,3 +1861,29 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatPersistenceService.java`
 - `FRONTEND_V2_V3_API.md`
+
+---
+
+## [2026-06-01] 회원가입 rate limit 완화
+
+### 증상
+
+배포 서버에서 테스트 학생 계정을 연속 생성할 때 `/api/auth/signup` 요청이 5회 이후 `429 Too Many Requests`로 차단되었다. 수강 신청 테스트 데이터처럼 여러 학생 계정을 한 번에 준비해야 하는 경우 1분 단위로 작업이 끊겼다.
+
+### 원인
+
+`AuthRateLimitInterceptor`가 인증 API별 IP 기반 제한을 적용하며, `/api/auth/signup`만 분당 5회로 설정되어 있었다. 테스트/시연 데이터 생성에는 낮은 값이었다.
+
+### 조치
+
+회원가입 요청 제한을 IP 기준 분당 20회로 완화했다. 로그인, refresh, 이메일 중복 확인 제한은 기존 값을 유지했다.
+
+### 검증
+
+```powershell
+.\gradlew test --no-daemon
+```
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/config/AuthRateLimitInterceptor.java`
