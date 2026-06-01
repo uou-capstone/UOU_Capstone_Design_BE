@@ -78,7 +78,7 @@ public class LearningSessionService {
 
         Long effectiveSessionId = sessionId;
         if (effectiveSessionId == null) {
-            LearningChatSession chatSession = chatPersistenceService.createSession(lectureId, currentUser);
+            LearningChatSession chatSession = chatPersistenceService.getOrCreateActiveSession(lectureId, currentUser);
             effectiveSessionId = chatSession.getId();
         } else {
             chatPersistenceService.getOwnedSession(effectiveSessionId, currentUser.getId(), lectureId);

@@ -19,6 +19,10 @@ public interface LearningChatSessionRepository extends JpaRepository<LearningCha
     @EntityGraph(attributePaths = {"lecture", "user"})
     Optional<LearningChatSession> findByIdAndUserId(Long id, Long userId);
 
+    @EntityGraph(attributePaths = {"lecture", "user"})
+    Optional<LearningChatSession> findFirstByUserIdAndLectureIdAndEndedAtIsNullOrderByLastMessageAtDescIdDesc(Long userId,
+                                                                                                              Long lectureId);
+
     Page<LearningChatSession> findByUserIdAndLectureId(Long userId, Long lectureId, Pageable pageable);
 
     @Query("""

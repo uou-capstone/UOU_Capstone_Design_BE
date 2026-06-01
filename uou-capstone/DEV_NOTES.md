@@ -1861,3 +1861,60 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatPersistenceService.java`
 - `FRONTEND_V2_V3_API.md`
+
+---
+
+## [2026-06-01] 회원가입 rate limit 완화
+
+### 증상
+
+배포 서버에서 테스트 학생 계정을 연속 생성할 때 `/api/auth/signup` 요청이 5회 이후 `429 Too Many Requests`로 차단되었다. 수강 신청 테스트 데이터처럼 여러 학생 계정을 한 번에 준비해야 하는 경우 1분 단위로 작업이 끊겼다.
+
+### 원인
+
+`AuthRateLimitInterceptor`가 인증 API별 IP 기반 제한을 적용하며, `/api/auth/signup`만 분당 5회로 설정되어 있었다. 테스트/시연 데이터 생성에는 낮은 값이었다.
+
+### 조치
+
+회원가입 요청 제한을 IP 기준 분당 20회로 완화했다. 로그인, refresh, 이메일 중복 확인 제한은 기존 값을 유지했다.
+
+### 검증
+
+```powershell
+.\gradlew test --no-daemon
+```
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/config/AuthRateLimitInterceptor.java`
+
+---
+
+## [2026-06-01] 통합학습 재입장 시 채팅 히스토리 복원
+
+### 증상
+
+통합학습 중 브라우저 뒤로가기나 라우트 이동 후 같은 강의에 다시 들어가면, 이전에 에이전트와 학습했던 메시지가 사라지고 FE 화면에 `메시지가 없습니다` 빈 상태가 표시됐다.
+
+### 원인
+
+`POST /api/learning/sessions/{lectureId}`가 `sessionId` 없이 호출될 때마다 Spring 채팅 세션을 새로 생성했다. 기존 메시지는 DB에 저장돼 있었지만, 재입장 응답의 `chatSessionId`가 새 빈 세션을 가리켜 FE가 `/messages`를 조회해도 이전 대화가 복원되지 않았다.
+
+### 조치
+
+- `sessionId`가 명시되지 않은 일반 강의 진입 요청에서는 같은 사용자 + 같은 강의의 종료되지 않은 최신 `LearningChatSession`을 먼저 재사용하도록 변경했다.
+- 기존 active 세션이 없을 때만 새 채팅 세션을 생성한다.
+- FE가 `chatSessionId`로 메시지 히스토리를 조회하고, 의도적 종료가 아닌 뒤로가기에서는 `SAVE_AND_EXIT`를 보내지 않도록 handoff 가이드를 추가했다.
+
+### 검증
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionAuthorizationTest
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/LearningChatSessionRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionAuthorizationTest.java`
+- `docs/handoff/LEARNING_CHAT_RESTORE_FE.md`
