@@ -241,6 +241,7 @@ class OrchestratorPlan(BaseModel):
 
 class NdjsonEventType(str, Enum):
     AGENT_DELTA = "agent_delta"   # 텍스트 스트리밍 (channel: "thought"|"main")
+    NAVIGATION = "navigation"     # PDF 뷰어 페이지 이동 지시
     DONE = "done"
     ERROR = "error"
     HEARTBEAT = "heartbeat"       # 연결 유지용 keep-alive (클라이언트가 무시해도 됨)
@@ -255,6 +256,11 @@ class NdjsonEvent(BaseModel):
     data: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
     final: Optional[bool] = None   # done 이벤트에서 True
+    # navigation 이벤트 전용 필드
+    targetPage: Optional[int] = None
+    reason: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Optional[str] = None
     # error 이벤트 전용 구조화 필드
     code: Optional[str] = None                      # 에러 코드 (예: QUIZ_PROFILE_VALIDATION_FAILED)
     details: Optional[List[Dict[str, Any]]] = None  # 필드별 상세 오류 목록
