@@ -10,6 +10,7 @@ from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
 from ai_agent.v3.engine.Orchestrator import Orchestrator
 from ai_agent.v3.engine.QaThreadService import QaThreadService, qa_thread_service
 from ai_agent.v3.engine.StateReducer import StateReducer
+from ai_agent.v2.test_gen.utils import load_lecture_material
 from app.routers.report import (
     StudentAiReportContext,
     StudentReportChatMessage,
@@ -18,6 +19,7 @@ from app.routers.report import (
     _build_chat_prompt,
 )
 from app.services.pdf_context_service import PageContext, RelevantPage, PdfContextService
+from app.services.session_state_service import fresh_state_for_pdf, same_material_path
 
 
 def test_normalize_quiz_generation_result_extracts_problem_arrays():
@@ -68,6 +70,65 @@ async def test_quiz_agents_keep_lecture_content_pure_when_applying_reference_pol
     assert "MergeEduAgent v3 출제 계약" not in request.lecture_content
     assert request.user_profile.scope_boundary.value == "Lecture_Material_Only"
     assert request.user_profile.learning_goal.focus_areas == ["flow control"]
+
+
+@pytest.mark.asyncio
+async def test_load_lecture_material_keeps_multiline_quiz_context_as_text():
+    class FakeClient:
+        class files:
+            @staticmethod
+            def upload(file):
+                raise AssertionError("inline quiz context must not be uploaded as a file")
+
+    quiz_context = (
+        "[현재 페이지]\n"
+        "2 / 전체 114페이지\n\n"
+        "[현재 페이지 텍스트]\n"
+        "Transport Layer\n"
+        "TCP and UDP\n"
+    )
+
+    result = await load_lecture_material(quiz_context, FakeClient())  # type: ignore[arg-type]
+
+    assert result == quiz_context
+
+
+def test_session_pdf_change_reset_clears_stale_learning_state():
+    state = SessionState(
+        session_id=10,
+        lecture_id=10,
+        current_page=4,
+        pdf_path="/uploads/transport.pdf",
+        created_at="2026-06-01T00:00:00+00:00",
+    )
+    state.pages[4] = PageState(page_number=4, pdf_path="/uploads/transport.pdf", explanation="전송 계층")
+    state.messages.append({"role": "assistant", "content": "TCP 설명"})
+    state.qa_threads["4"] = [{"role": "assistant", "content": "flow control"}]
+    state.integrated_memory["topic"] = "transport layer"
+    state.quiz_assessments.append({"status": "PENDING"})
+    state.conversation_summary = "전송 계층 대화"
+    state.page_index_path = "/uploads/transport.pdf.pageIndex.json"
+
+    fresh = fresh_state_for_pdf(state, 10, "/uploads/multimedia.pdf")
+
+    assert fresh.session_id == 10
+    assert fresh.lecture_id == 10
+    assert fresh.current_page == 1
+    assert fresh.pdf_path == "/uploads/multimedia.pdf"
+    assert fresh.created_at == "2026-06-01T00:00:00+00:00"
+    assert fresh.pages == {}
+    assert fresh.messages == []
+    assert fresh.qa_threads == {}
+    assert fresh.integrated_memory == {}
+    assert fresh.quiz_history == []
+    assert fresh.quiz_assessments == []
+    assert fresh.conversation_summary is None
+    assert fresh.page_index_path is None
+
+
+def test_session_pdf_change_detection_normalizes_paths():
+    assert same_material_path("/tmp/lecture.pdf", "/tmp/../tmp/lecture.pdf")
+    assert not same_material_path("/tmp/transport.pdf", "/tmp/multimedia.pdf")
 
 
 def test_state_reducer_uses_one_based_pages_and_next_page_decision():
