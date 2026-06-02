@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
@@ -11,6 +12,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.http.codec.json.Jackson2JsonDecoder;
+import org.springframework.http.codec.json.Jackson2JsonEncoder;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.HttpProtocol;
@@ -46,9 +49,11 @@ public class WebClientConfig {
     private String aiSecretKey;
 
     private final Environment environment;
+    private final ObjectMapper objectMapper;
 
-    public WebClientConfig(Environment environment) {
+    public WebClientConfig(Environment environment, ObjectMapper objectMapper) {
         this.environment = environment;
+        this.objectMapper = objectMapper;
     }
 
     @PostConstruct
@@ -90,9 +95,7 @@ public class WebClientConfig {
                         conn.addHandlerLast(new ReadTimeoutHandler(300, TimeUnit.SECONDS))
                                 .addHandlerLast(new WriteTimeoutHandler(300, TimeUnit.SECONDS)));
 
-        ExchangeStrategies strategies = ExchangeStrategies.builder()
-                .codecs(cfg -> cfg.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
-                .build();
+        ExchangeStrategies strategies = aiExchangeStrategies(10 * 1024 * 1024);
 
         return WebClient.builder()
                 .baseUrl(aiServiceBaseUrl)
@@ -117,9 +120,7 @@ public class WebClientConfig {
                         conn.addHandlerLast(new ReadTimeoutHandler(600, TimeUnit.SECONDS))
                                 .addHandlerLast(new WriteTimeoutHandler(30, TimeUnit.SECONDS)));
 
-        ExchangeStrategies streamingStrategies = ExchangeStrategies.builder()
-                .codecs(cfg -> cfg.defaultCodecs().maxInMemorySize(256 * 1024)) // 256KB
-                .build();
+        ExchangeStrategies streamingStrategies = aiExchangeStrategies(256 * 1024);
 
         return WebClient.builder()
                 .baseUrl(aiServiceBaseUrl)
@@ -140,6 +141,16 @@ public class WebClientConfig {
 
         return HttpClient.create(provider)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000);
+    }
+
+    private ExchangeStrategies aiExchangeStrategies(int maxInMemorySize) {
+        return ExchangeStrategies.builder()
+                .codecs(cfg -> {
+                    cfg.defaultCodecs().maxInMemorySize(maxInMemorySize);
+                    cfg.defaultCodecs().jackson2JsonEncoder(new Jackson2JsonEncoder(objectMapper));
+                    cfg.defaultCodecs().jackson2JsonDecoder(new Jackson2JsonDecoder(objectMapper));
+                })
+                .build();
     }
 
     /** blank secret이면 빈 문자열을 헤더 값으로 둔다 — FastAPI auth disabled 환경에서만 허용. */
