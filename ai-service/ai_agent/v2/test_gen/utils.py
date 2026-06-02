@@ -35,10 +35,21 @@ async def load_lecture_material(file_path_or_content: str, client: genai.Client)
         - PDF 파일: types.File 객체
         - 텍스트 파일/내용: str
     """
-    path = pathlib.Path(file_path_or_content)
+    if _looks_like_inline_content(file_path_or_content):
+        return file_path_or_content
+
+    try:
+        path = pathlib.Path(file_path_or_content)
+    except (OSError, ValueError):
+        return file_path_or_content
     
     # 파일이 실제로 존재하는지 확인
-    if path.is_file():
+    try:
+        is_file = path.is_file()
+    except OSError:
+        return file_path_or_content
+
+    if is_file:
         suffix = path.suffix.lower()
         
         if suffix == '.pdf':
@@ -59,6 +70,27 @@ async def load_lecture_material(file_path_or_content: str, client: genai.Client)
     else:
         # 파일이 없으면 텍스트 내용으로 간주
         return file_path_or_content
+
+
+def _looks_like_inline_content(value: str) -> bool:
+    """
+    Distinguish raw lecture text from a filesystem path before stat().
+
+    v3 session quiz generation passes page-scoped material blocks such as
+    "[현재 페이지]\\n..." as lecture_content. Treating that block as a path can
+    raise OSError(ENAMETOOLONG) before we ever reach the "not a file" fallback.
+    """
+    if not isinstance(value, str):
+        return False
+    if not value:
+        return False
+    if "\x00" in value:
+        return True
+    if "\n" in value or "\r" in value:
+        return True
+    if len(value) > 240:
+        return True
+    return False
 
 
 def get_gemini_client(api_key: str = None) -> genai.Client:
