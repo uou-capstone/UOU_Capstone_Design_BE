@@ -211,7 +211,7 @@ class ToolDispatcher:
             question = params.get("question") or params.get("text") or ""
             pdf_path = page_state.pdf_path or state.pdf_path or ""
             chapter_title = page_state.chapter_title
-            learning_context = self._context_collector.collect(state, page_state)
+            learning_context = self._context_collector.collect_for_question(state, str(question), page_state)
 
             answer_chunks: List[str] = []
             async for event in self._qa.run_stream(
@@ -224,6 +224,7 @@ class ToolDispatcher:
                 next_text=learning_context.next_text,
                 learner_memory_digest=learning_context.learner_memory_digest,
                 qa_thread_digest=learning_context.qa_thread_digest,
+                related_pages_text=learning_context.related_pages_digest,
             ):
                 if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)

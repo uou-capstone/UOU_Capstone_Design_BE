@@ -17,7 +17,7 @@ from app.routers.report import (
     answer_student_report_chat_result,
     _build_chat_prompt,
 )
-from app.services.pdf_context_service import PageContext
+from app.services.pdf_context_service import PageContext, RelevantPage, PdfContextService
 
 
 def test_normalize_quiz_generation_result_extracts_problem_arrays():
@@ -207,6 +207,62 @@ def test_learning_context_collector_builds_page_memory_and_qa_digest(monkeypatch
     assert "fallback explanation" not in quiz_context
 
 
+def test_pdf_context_service_searches_related_pages_by_expanded_terms(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "lecture.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    service = PdfContextService()
+
+    def fake_load_pages(path):
+        return [
+            "Transport Layer overview: flow control, reliable data transfer, TCP, UDP.",
+            "Multiplexing and demultiplexing with port numbers.",
+            "TCP reliable data transfer uses sequence number, ACK, checksum, timeout and retransmission.",
+            "TCP flow control uses receive window rwnd to prevent receiver buffer overflow.",
+        ]
+
+    monkeypatch.setattr(service, "_load_pages", fake_load_pages)
+
+    flow_pages = service.search_relevant_pages(str(pdf_path), "흐름제어가 뭐지?", current_page=1, limit=2)
+    reliable_pages = service.search_relevant_pages(str(pdf_path), "tcp에서 신뢰성을 어떻게 주지?", current_page=1, limit=2)
+
+    assert flow_pages[0].page == 4
+    assert "rwnd" in flow_pages[0].matched_terms
+    assert reliable_pages[0].page == 3
+    assert any(term in reliable_pages[0].matched_terms for term in ("retransmission", "sequence number", "ack"))
+
+
+def test_learning_context_collector_adds_related_pages_for_qa(monkeypatch):
+    collector_module = importlib.import_module("ai_agent.v3.engine.LearningContextCollector")
+
+    monkeypatch.setattr(
+        collector_module.pdf_context_service,
+        "read_page_context",
+        lambda pdf_path, page: PageContext(
+            page=1,
+            page_text="Transport Layer overview: flow control, TCP, UDP.",
+            page_count=4,
+        ),
+    )
+    monkeypatch.setattr(
+        collector_module.pdf_context_service,
+        "search_relevant_pages",
+        lambda pdf_path, question, current_page=None, limit=3, include_current=False: [
+            RelevantPage(
+                page=4,
+                text="TCP flow control uses receive window rwnd.",
+                score=9.0,
+                matched_terms=("rwnd", "flow control"),
+            )
+        ],
+    )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=1, pdf_path="/tmp/lecture.pdf")
+    context = LearningContextCollector().collect_for_question(state, "흐름제어가 뭐지?")
+
+    assert "관련 페이지 4" in context.related_pages_digest
+    assert "receive window rwnd" in context.related_pages_digest
+
+
 def test_orchestrator_prompt_uses_page_scoped_qa_thread_not_global_messages():
     state = SessionState(session_id=1, lecture_id=1, current_page=2)
     state.pages[2] = PageState(page_number=2, chapter_title="현재 페이지")
@@ -262,6 +318,7 @@ async def test_qa_agent_uses_page_text_prompt_without_loading_pdf():
             next_text="다음 페이지",
             learner_memory_digest="수준: INTERMEDIATE",
             qa_thread_digest="- 학생: 이전 질문",
+            related_pages_text="[관련 페이지 4]\nTCP flow control uses receive window rwnd.",
         )
     ]
 
@@ -270,6 +327,9 @@ async def test_qa_agent_uses_page_text_prompt_without_loading_pdf():
     prompt = bridge.contents[0]
     assert "답변은 반드시 자연스러운 한국어 Markdown" in prompt
     assert "현재 페이지 텍스트" in prompt
+    assert "질문 관련 페이지 후보" in prompt
+    assert "receive window rwnd" in prompt
+    assert "현재 페이지 전체를 다시 강의하거나 요약하지 마라" in prompt
     assert "핵심이 뭐야?" in prompt
     assert "- 학생: 이전 질문" in prompt
 
