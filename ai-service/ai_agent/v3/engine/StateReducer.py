@@ -70,7 +70,7 @@ class StateReducer:
         _sync_current_page_from_event(state, event)
 
     def _on_user_message(self, state: SessionState, event: AppEvent) -> None:
-        text = event.get("text", event.get("message", event.get("question", "")))
+        text = _event_text(event)
         state.append_message("user", text)
         intent = get_page_command_intent(text)
         if intent == "NEXT":
@@ -107,12 +107,7 @@ class StateReducer:
     def _on_next_page_decision(self, state: SessionState, event: AppEvent) -> None:
         if not _event_accepts(event):
             return
-        _sync_current_page_from_event(state, event, keys=("fromPage", "from_page"))
-        current_page_state = state.get_current_page_state()
-        current_page_state.status = PageStatus.DONE
-        state.current_page = max(state.current_page, 1) + 1
-        if state.current_page not in state.pages:
-            state.pages[state.current_page] = PageState(page_number=state.current_page)
+        _advance_from_next_page_decision(state, event)
 
 
 def _event_accepts(event: AppEvent) -> bool:
@@ -120,6 +115,47 @@ def _event_accepts(event: AppEvent) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "next"}
     return bool(value)
+
+
+def _event_text(event: AppEvent) -> str:
+    value = event.get(
+        "question",
+        event.get(
+            "text",
+            event.get("message", event.get("content", event.get("userMessage", ""))),
+        ),
+    )
+    return str(value or "").strip()
+
+
+def _advance_from_next_page_decision(state: SessionState, event: AppEvent) -> None:
+    previous_page = max(state.current_page, 1)
+    target_page = _page_number_from_event(
+        event,
+        keys=("targetPage", "target_page", "toPage", "to_page"),
+    )
+    from_page = _page_number_from_event(event, keys=("fromPage", "from_page"))
+    visible_page = _page_number_from_event(
+        event,
+        keys=("page", "pageNumber", "page_number", "currentPage", "current_page"),
+    )
+
+    if target_page is not None:
+        next_page = target_page
+    elif from_page is not None:
+        previous_page = from_page
+        next_page = from_page + 1
+    elif visible_page is not None and visible_page > state.current_page:
+        next_page = visible_page
+    else:
+        next_page = state.current_page + 1
+
+    if previous_page not in state.pages:
+        state.pages[previous_page] = PageState(page_number=previous_page)
+    state.pages[previous_page].status = PageStatus.DONE
+    state.current_page = max(next_page, 1)
+    if state.current_page not in state.pages:
+        state.pages[state.current_page] = PageState(page_number=state.current_page)
 
 
 def _sync_current_page_from_event(

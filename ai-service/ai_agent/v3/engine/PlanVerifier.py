@@ -27,6 +27,32 @@ _PAGE_EXPLANATION_RE = re.compile(
     r"(설명|강의|요약).*((현재|이|지금)\s*(페이지|슬라이드)|(페이지|슬라이드)\s*전체))"
 )
 
+_NEXT_PAGE_DECISION_MESSAGE_RE = re.compile(
+    r"(다음\s*(페이지|슬라이드).*(넘어|이동|진행)|"
+    r"(넘어|이동|진행)할까요\??|"
+    r"next\s*(page|slide))",
+    re.IGNORECASE,
+)
+
+_QUIZ_DECISION_MESSAGE_RE = re.compile(
+    r"((퀴즈|시험|문제).*(진행|시작|풀|볼).*까요\??|"
+    r"(진행|시작|풀|볼).*?(퀴즈|시험|문제)|"
+    r"quiz)",
+    re.IGNORECASE,
+)
+
+_RETEST_DECISION_MESSAGE_RE = re.compile(
+    r"((재시험|다시\s*(풀|확인|도전)).*(진행|시작|볼).*까요\??|"
+    r"retest)",
+    re.IGNORECASE,
+)
+
+_ABUSIVE_RE = re.compile(r"(좆|ㅈ같|씨발|시발|ㅅㅂ|개새|병신|꺼져|fuck|shit)", re.IGNORECASE)
+_LEARNING_SIGNAL_RE = re.compile(
+    r"(이해|모르|헷갈|설명|알려|뭐|무엇|왜|어떻게|tcp|udp|flow|control|페이지|슬라이드|문제|\?)",
+    re.IGNORECASE,
+)
+
 _PLANNER_ALLOWED_TOOLS = {
     ToolName.EXPLAIN_PAGE,
     ToolName.ANSWER_QUESTION,
@@ -96,6 +122,10 @@ class PlanVerifier:
         candidate_actions = self._patch_event_followup_widgets(
             candidate_actions,
             event_type=event_type,
+            warnings=warnings,
+        )
+        candidate_actions = self._patch_decision_send_message_widgets(
+            candidate_actions,
             warnings=warnings,
         )
 
@@ -208,7 +238,7 @@ class PlanVerifier:
         if any(action.type == ActionType.CALL_TOOL and action.tool == ToolName.REPAIR_MISCONCEPTION for action in actions):
             return list(actions)
 
-        student_message = str(event_payload.get("text") or event_payload.get("question") or "").strip()
+        student_message = _event_user_message(event_payload)
         repair_action = OrchestratorAction(
             type=ActionType.CALL_TOOL,
             tool=ToolName.REPAIR_MISCONCEPTION,
@@ -243,6 +273,8 @@ class PlanVerifier:
 
         user_message = _event_user_message(event_payload)
         if not user_message:
+            return list(actions)
+        if _is_abusive_noise(user_message) and any(action.type == ActionType.SEND_MESSAGE for action in actions):
             return list(actions)
         if _is_explicit_page_explanation_request(user_message):
             return list(actions)
@@ -304,6 +336,31 @@ class PlanVerifier:
             ))
         return patched
 
+    def _patch_decision_send_message_widgets(
+        self,
+        actions: list[OrchestratorAction],
+        *,
+        warnings: list[dict[str, Any]],
+    ) -> list[OrchestratorAction]:
+        patched: list[OrchestratorAction] = []
+        for index, action in enumerate(actions):
+            if action.type != ActionType.SEND_MESSAGE or action.ui_state:
+                patched.append(action)
+                continue
+
+            widget = _decision_widget_from_message(action.message or "")
+            if not widget:
+                patched.append(action)
+                continue
+
+            patched.append(action.model_copy(update={"ui_state": {"widget": widget}}))
+            warnings.append(self._warning(
+                "DECISION_MESSAGE_WIDGET_PATCHED",
+                "Decision prompt SEND_MESSAGE was patched with the matching UI widget.",
+                action_index=index,
+            ))
+        return patched
+
     @staticmethod
     def _warning(
         code: str,
@@ -321,9 +378,32 @@ class PlanVerifier:
 
 
 def _event_user_message(event_payload: dict[str, Any]) -> str:
-    value = event_payload.get("question", event_payload.get("text", ""))
-    return str(value or "").strip()
+    for key in ("question", "text", "message", "content", "userMessage", "prompt"):
+        value = event_payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def _is_explicit_page_explanation_request(message: str) -> bool:
     return bool(_PAGE_EXPLANATION_RE.search(message.strip()))
+
+
+def _is_abusive_noise(message: str) -> bool:
+    return bool(_ABUSIVE_RE.search(message) and not _LEARNING_SIGNAL_RE.search(message))
+
+
+def _decision_widget_from_message(message: str) -> str | None:
+    normalized = message.strip()
+    if not normalized:
+        return None
+    if _RETEST_DECISION_MESSAGE_RE.search(normalized):
+        return "RETEST_DECISION"
+    if _QUIZ_DECISION_MESSAGE_RE.search(normalized):
+        return "QUIZ_DECISION"
+    if _NEXT_PAGE_DECISION_MESSAGE_RE.search(normalized):
+        return "NEXT_PAGE_DECISION"
+    return None
