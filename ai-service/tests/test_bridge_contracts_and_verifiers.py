@@ -135,6 +135,64 @@ def test_plan_verifier_patches_explain_followup_widget_for_event_flow():
     assert start_decision.plan.actions[0].params["next_widget"] == "NEXT_PAGE_DECISION"
 
 
+def test_plan_verifier_routes_general_user_message_to_qa():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "tcp에서 신뢰성을 어떻게 주지?"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.ANSWER_QUESTION]
+    assert result.plan.actions[0].params["question"] == "tcp에서 신뢰성을 어떻게 주지?"
+    assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QA"
+
+
+def test_plan_verifier_allows_explicit_page_explanation_request():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "현재 페이지 전체 설명해줘"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.EXPLAIN_PAGE]
+
+
+def test_plan_verifier_keeps_page_scoped_concept_explanation_as_qa():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(type=ActionType.CALL_TOOL, tool=ToolName.EXPLAIN_PAGE),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "이 페이지에서 흐름제어 설명해줘"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.ANSWER_QUESTION]
+
+
 @pytest.mark.asyncio
 async def test_tool_dispatcher_runs_verified_plan(monkeypatch):
     dispatcher = ToolDispatcher(bridge=None)  # type: ignore[arg-type]

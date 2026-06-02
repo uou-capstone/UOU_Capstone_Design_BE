@@ -5,7 +5,7 @@ from typing import Optional
 
 from ai_agent.types.domain import PageState, SessionState
 from ai_agent.v3.engine.QaThreadService import qa_thread_service
-from app.services.pdf_context_service import pdf_context_service
+from app.services.pdf_context_service import RelevantPage, pdf_context_service
 
 _MAX_CURRENT_PAGE_CHARS = 8000
 _MAX_NEIGHBOR_PAGE_CHARS = 2500
@@ -30,6 +30,7 @@ class LearningContext:
     page_count: int = 0
     learner_memory_digest: str = ""
     qa_thread_digest: str = ""
+    related_pages_digest: str = ""
 
     @property
     def has_page_text(self) -> bool:
@@ -90,6 +91,33 @@ class LearningContextCollector:
             qa_thread_digest=qa_thread_service.build_digest(state, page_number=page_number),
         )
 
+    def collect_for_question(
+        self,
+        state: SessionState,
+        question: str,
+        page_state: PageState | None = None,
+    ) -> LearningContext:
+        context = self.collect(state, page_state)
+        related_pages = pdf_context_service.search_relevant_pages(
+            context.pdf_path,
+            question,
+            current_page=context.page_number,
+            limit=4,
+            include_current=False,
+        )
+        return LearningContext(
+            page_number=context.page_number,
+            pdf_path=context.pdf_path,
+            chapter_title=context.chapter_title,
+            page_text=context.page_text,
+            prev_text=context.prev_text,
+            next_text=context.next_text,
+            page_count=context.page_count,
+            learner_memory_digest=context.learner_memory_digest,
+            qa_thread_digest=context.qa_thread_digest,
+            related_pages_digest=self._build_related_pages_digest(related_pages),
+        )
+
     def _build_learner_memory_digest(self, state: SessionState) -> str:
         learner = state.learner
         weak = ", ".join(learner.weak_concepts[-5:]) if learner.weak_concepts else "없음"
@@ -103,3 +131,16 @@ class LearningContextCollector:
             f"약점 개념: {weak}\n"
             f"최근 평균: {learner.average_recent_score:.2f}"
         )
+
+    @staticmethod
+    def _build_related_pages_digest(pages: list[RelevantPage]) -> str:
+        if not pages:
+            return ""
+        blocks: list[str] = []
+        for page in pages:
+            matched = ", ".join(page.matched_terms[:6]) if page.matched_terms else "키워드 매칭"
+            blocks.append(
+                f"[관련 페이지 {page.page} | match: {matched} | score: {page.score:.1f}]\n"
+                f"{_trim(page.text, 2200)}"
+            )
+        return "\n\n".join(blocks)

@@ -170,7 +170,7 @@ sequenceDiagram
 역할:
 
 - 페이지 설명
-- 현재 페이지 기반 QA
+- 현재 페이지 + 관련 페이지 검색 기반 QA
 - 퀴즈 생성
 - 퀴즈 채점
 - 오개념 교정 설명
@@ -182,6 +182,9 @@ sequenceDiagram
 - 설명 생성은 우선 현재/이전/다음 페이지 텍스트를 읽어 레퍼런스 스타일 prompt로 실행한다.
 - page text 추출 실패 시 기존 Gemini PDF 전체 입력 방식으로 fallback한다.
 - 레퍼런스 스타일 prompt에는 한국어 출력, 현재 페이지 집중, LaTeX/코드 포맷, 핵심 개념 굵게 표시 규칙을 유지한다.
+- `QaAgent`는 현재 페이지 전체 설명을 반복하지 않고 학생 질문에 직접 답한다.
+- 현재 페이지가 목차/개요 수준이면 `PdfContextService.search_relevant_pages()`로 PDF page index에서 질문 관련 페이지 후보를 찾아 QA prompt에 함께 넣는다.
+- 관련 페이지 후보를 사용한 답변은 근거 페이지를 짧게 표시한다.
 
 ### Plan Verifier
 
@@ -197,6 +200,8 @@ sequenceDiagram
 - `PedagogyPolicy`가 직접 답변 금지, HOLD_BACK 등을 표시하면 `plan_verification_warnings`에 남긴다.
 - `active_intervention`이 있는 상태에서 다음 `USER_MESSAGE`가 들어오면 일반 `ANSWER_QUESTION` 대신 `REPAIR_MISCONCEPTION`을 우선 실행한다.
 - repair 자동 주입은 현재 페이지의 활성 오개념 교정 상태가 있을 때만 동작한다.
+- 일반 `USER_MESSAGE`는 `ANSWER_QUESTION`으로 보정한다. LLM planner가 실수로 `EXPLAIN_PAGE`를 반환해도 현재 페이지 설명을 반복하지 않도록 막는다.
+- `"현재 페이지 전체 설명해줘"`, `"이 페이지 설명해줘"`처럼 명시적 페이지 설명 요청만 `EXPLAIN_PAGE`를 허용한다.
 
 현재 제한:
 
