@@ -93,6 +93,12 @@ class Orchestrator:
         
         prompt = f"""당신은 "MergeEduAgent LLM 플래너" (학습 오케스트레이터)입니다.
 당신의 절대적인 목표는 주어진 컨텍스트를 분석하여, 학생의 다음 학습을 위한 **도구 호출 계획(OrchestratorPlan)**을 확정하는 것입니다.
+당신은 직접 강의 내용을 길게 답하지 않습니다. 현재 턴에서 어떤 하위 에이전트를 실행할지만 결정합니다.
+
+[한 턴 처리 흐름]
+Learning Context Collection → Orchestrator Planner → Tool Dispatcher → Selected Sub-Agent → Execution Result → Session Memory Update.
+이 프롬프트는 위 흐름 중 Orchestrator Planner 단계입니다.
+따라서 최종 응답은 실행 계획 JSON이어야 하며, 학생에게 보일 설명/답변/채점 내용은 각 도구가 생성합니다.
 
 [현재 상황]
 수신 이벤트: {event_str}
@@ -156,6 +162,9 @@ UI 상태 action:
 14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`를 호출하세요.
 15. `QUIZ_SUBMITTED`에서 객관식/OX는 `AUTO_GRADE_MCQ_OX`, 단답형/서술형은 `GRADE_SHORT_OR_ESSAY`를 사용하세요. 기준 미달이면 진단/교정 흐름을 유지하고, 재시험 통과 후에도 다음 페이지 설명을 자동 시작하지 말고 사용자의 `PAGE_CHANGED`를 기다리세요.
 16. 일반 `USER_MESSAGE` 질문에는 `ANSWER_QUESTION` 도구를 호출하고, 답변 후 다음 페이지 이동 여부를 묻는 흐름을 유지하세요. 단, 사용자가 "현재 페이지 전체 설명해줘", "이 페이지 설명해줘"처럼 페이지 설명을 명시적으로 요청한 경우에만 `EXPLAIN_PAGE`를 사용할 수 있습니다.
+17. 사용자가 "이해가 잘 안 됨", "다시 설명해줘", "헷갈려"처럼 말하면 새 페이지 설명이 아니라 `ANSWER_QUESTION`으로 라우팅하세요. QA 에이전트가 현재 페이지/관련 페이지를 바탕으로 다른 방식의 설명을 제공합니다.
+18. 사용자가 의미 기반 페이지 이동을 요청하면 navigation directive는 별도 intent layer가 처리하므로, 플래너는 현재 이벤트가 이미 `PAGE_CHANGED`로 정리된 경우에만 `EXPLAIN_PAGE`를 호출하세요.
+19. 퀴즈 생성은 현재 페이지 컨텍스트가 확보된 경우에만 수행해야 합니다. 컨텍스트가 없으면 무리해서 퀴즈 생성 도구를 호출하지 마세요.
 """
         return prompt
 

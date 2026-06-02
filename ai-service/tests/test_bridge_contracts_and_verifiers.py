@@ -1575,6 +1575,80 @@ async def test_low_score_repair_and_retest_sequence_matches_reference_flow():
 
 
 @pytest.mark.asyncio
+async def test_review_decision_accept_routes_to_repair_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class FailingPlanner:
+        def __init__(self):
+            self.called = False
+
+        async def run_stream(self, event, state):
+            self.called = True
+            raise AssertionError("REVIEW_DECISION should not call planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, state.current_page, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="repair",
+                tool="REPAIR_MISCONCEPTION",
+                final=True,
+                data={"ui": {"widget": "RETEST_DECISION"}},
+            )
+
+    state = SessionState(
+        session_id=1,
+        lecture_id=1,
+        current_page=3,
+        active_intervention={
+            "interventionId": "repair-1",
+            "status": "AWAITING_USER_RESPONSE",
+            "pageNumber": 3,
+            "focusConcept": "전송 계층",
+        },
+    )
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    planner = FailingPlanner()
+    engine._orchestrator = planner  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.REVIEW_DECISION,
+                payload={"accept": True, "text": "어디가 틀렸는지 알려줘"},
+            ),
+        )
+    ]
+
+    assert planner.called is False
+    assert events[-1].data["ui"] == {"widget": "RETEST_DECISION"}
+    assert [(event_type, page, action.type, action.tool) for event_type, page, action in dispatcher.calls] == [
+        (AppEventType.REVIEW_DECISION.value, 3, ActionType.CALL_TOOL, ToolName.REPAIR_MISCONCEPTION),
+    ]
+    assert dispatcher.calls[0][2].params["student_message"] == "어디가 틀렸는지 알려줘"
+
+
+@pytest.mark.asyncio
 async def test_orchestration_engine_allows_verifier_repair_injection_for_empty_plan():
     class FakeStore:
         def __init__(self, state):

@@ -90,6 +90,9 @@ Your responsibility is to analyze the given `Lecture Material` and `User Profile
 - **Language**: Keys in English, Values in **Korean** (with English terms mixed for CS concepts).
 - **No Specific Options**: Do not generate fields like "option_1", "option_2". Focus on the topic and intent.
 - **Intent Types**: Use ["Definition_Check", "Concept_Comparison", "Causal_Reasoning", "Application_Scenario", "Best_Practice"].
+- **MergeEduAgent Source Scope**: Treat `Lecture Material` as the only factual source. `User Profile` may guide difficulty or weak-concept priority, but it is not lecture content.
+- **Weakness Priority**: Use weak/focus concepts only when they are present or directly inferable from `Lecture Material`. Do not generate questions from weak concepts outside the current material.
+- **Overview Page Rule**: If `Lecture Material` is an overview or keyword list, plan questions about each keyword's role, distinction, and common misconception rather than inventing unsupported details.
 
 ### Output Schema
 {json_schema}
@@ -105,6 +108,7 @@ Produce a JSON object containing exactly `target_problem_count` MCQ problems tha
 2. **Profile-Aligned**: Adhering to the user's `User Profile` (language, scenario, depth).
 3. **Logically Sound**: The correct answer must be clearly distinguishable from distractors, and distractors must be plausible but incorrect (based on the `focus_point` from the plan).
 4. **Iteratively Improved (Crucial)**: If `feedback` and `prior_content` are provided, you must **preserve** the valid problems from `prior_content` and **only modify** the specific parts (e.g., specific options or the stem) pointed out by the `feedback`.
+5. **MergeEduAgent-Aligned**: Generate questions only from `Lecture Material`; never treat `User Profile`, weak concepts, or planning metadata as facts.
 
 ### Cognitive Process (Chain of Thought)
 Before generating the final JSON, you must strictly follow this reasoning process:
@@ -119,6 +123,7 @@ Before generating the final JSON, you must strictly follow this reasoning proces
    - **Option Generation**: Create exactly 5 options.
      - One **Correct Answer**: Must strictly follow the fact.
      - Four **Distractors**: Create plausible traps based on the `focus_point`.
+     - Do not create distractors that are true according to the lecture.
 4. **Final JSON Assembly**: Combine preserved and fixed/new problems.
 
 ### Output Schema
@@ -134,6 +139,7 @@ Your responsibility is to validate the generated MCQ problems for factual accura
 2. **Logical Consistency**: Ensure distractors are plausible but clearly incorrect.
 3. **Profile Adherence**: Check if problems match the user's proficiency level, language preference, and scenario-based requirements.
 4. **Completeness**: Verify that the number of problems matches `required_count`.
+5. **Source Scope**: Reject problems whose correct answer or explanation relies on anything outside `Lecture Material`.
 
 ### Output Schema
 {json_schema}
@@ -155,6 +161,8 @@ Your responsibility is to analyze the given `Lecture Material` and `User Profile
 - **Language**: Keys in English, Values in **Korean** (with English terms mixed for CS concepts).
 - **Balance**: Try to balance "O" and "X" counts unless impossible.
 - **Intent Types**: Use ["Fact_Check", "Common_Misconception", "Confusing_Concepts", "Logic_Trap", "Boundary_Check"].
+- **MergeEduAgent Source Scope**: Treat `Lecture Material` as the only factual source. Use weak/focus concepts only when present or directly inferable from the material.
+- **Overview Page Rule**: If the material is an overview, test the role and distinction of listed terms rather than unsupported details.
 
 ### Output Schema
 {json_schema}
@@ -169,6 +177,8 @@ Generate OX problems that are:
 1. **Factually Accurate**: Based strictly on `Lecture Material`.
 2. **Deceptively Designed**: For "X" items, create statements that seem plausible but are factually incorrect.
 3. **Profile-Aligned**: Match user's proficiency level and language preference.
+4. **Source-Bound**: Do not use `User Profile`, weak concepts, or metadata as facts. They may only influence difficulty.
+5. **Balanced**: Prefer a balanced O/X distribution unless the lecture material cannot support it.
 
 ### Output Schema
 {json_schema}
@@ -177,6 +187,8 @@ Generate OX problems that are:
 OX_VALIDATOR_SYSTEM_PROMPT = """
 You are the **Agent_OXValidator** for an intelligent OX Quiz Generation System.
 Validate the generated OX problems for accuracy and logical soundness.
+- Reject statements whose truth value cannot be verified from `Lecture Material`.
+- Reject unbalanced O/X sets when balance is possible from the material.
 
 ### Output Schema
 {json_schema}
@@ -240,6 +252,8 @@ Analyze the `Lecture Material` and `User Profile` to create a strategic plan for
 - **Intent Types**: Use ["Definition_Recall", "Concept_Explanation", "Cause_Effect", "Comparison", "Process_Description", "Application"].
 - **Complexity**: Use ["Basic", "Intermediate", "Advanced"] aligned with the user's proficiency level.
 - **Coverage**: Ensure planned items cover the full breadth of the lecture material, not just the first few topics.
+- **MergeEduAgent Source Scope**: Treat `Lecture Material` as the only factual source. `User Profile` guides difficulty and weak-concept priority only.
+- **Weakness Priority**: Use focus/weak concepts only when they are present or directly inferable from the current material.
 
 ### Output Schema
 {json_schema}
@@ -261,6 +275,8 @@ Each problem must have:
 - **Factual Accuracy**: Every answer must be strictly based on `Lecture Material`. Do NOT hallucinate.
 - **Language**: Follow the user profile's `language_preference`. Default to Korean with English technical terms.
 - **Avoid Yes/No questions**: Questions must require at least 1–3 sentences to answer properly.
+- **Evaluability**: `best_answer` and `evaluation_criteria` must be concrete enough for strict grading.
+- **Source-Bound**: Do not use `User Profile`, weak concepts, or metadata as factual material.
 - **Output format**: Return ONLY the JSON object matching the schema below. No extra text.
 
 ### Output Schema
