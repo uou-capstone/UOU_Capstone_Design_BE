@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Optional
 
 from ai_agent.types.domain import PageState, SessionState
@@ -10,6 +11,12 @@ from app.services.pdf_context_service import RelevantPage, pdf_context_service
 _MAX_CURRENT_PAGE_CHARS = 8000
 _MAX_NEIGHBOR_PAGE_CHARS = 2500
 _MAX_EXPLANATION_CHARS = 2500
+_VAGUE_CONFUSION_RE = re.compile(
+    r"(이해\s*(가\s*)?(잘\s*)?(안|않)|모르겠|몰라|헷갈|어려워|다시\s*설명|"
+    r"잘\s*안\s*돼|잘\s*안돼|무슨\s*말|뭔\s*말)",
+    re.IGNORECASE,
+)
+_QUESTION_WORD_RE = re.compile(r"[a-zA-Z가-힣0-9]+")
 
 
 def _trim(text: str | None, limit: int) -> str:
@@ -98,13 +105,22 @@ class LearningContextCollector:
         page_state: PageState | None = None,
     ) -> LearningContext:
         context = self.collect(state, page_state)
+        retrieval_query = self._build_retrieval_query(state, question, context)
         related_pages = pdf_context_service.search_relevant_pages(
             context.pdf_path,
-            question,
+            retrieval_query,
             current_page=context.page_number,
             limit=4,
             include_current=False,
         )
+        if not related_pages and retrieval_query.strip() != question.strip():
+            related_pages = pdf_context_service.search_relevant_pages(
+                context.pdf_path,
+                question,
+                current_page=context.page_number,
+                limit=4,
+                include_current=False,
+            )
         return LearningContext(
             page_number=context.page_number,
             pdf_path=context.pdf_path,
@@ -117,6 +133,30 @@ class LearningContextCollector:
             qa_thread_digest=context.qa_thread_digest,
             related_pages_digest=self._build_related_pages_digest(related_pages),
         )
+
+    def _build_retrieval_query(self, state: SessionState, question: str, context: LearningContext) -> str:
+        question_text = (question or "").strip()
+        if not _is_vague_confusion(question_text):
+            return question_text
+
+        previous_question = self._latest_page_thread_question(state, context.page_number)
+        if previous_question:
+            return previous_question
+
+        page_terms = _extract_page_key_terms(context.page_text)
+        if page_terms:
+            return page_terms
+
+        return question_text
+
+    @staticmethod
+    def _latest_page_thread_question(state: SessionState, page_number: int) -> str:
+        thread = state.qa_threads.get(qa_thread_service.page_key(page_number), [])
+        for turn in reversed(thread):
+            question = str(turn.get("question") or "").strip()
+            if question and not _is_vague_confusion(question):
+                return question
+        return ""
 
     def _build_learner_memory_digest(self, state: SessionState) -> str:
         learner = state.learner
@@ -144,3 +184,36 @@ class LearningContextCollector:
                 f"{_trim(page.text, 2200)}"
             )
         return "\n\n".join(blocks)
+
+
+def _is_vague_confusion(question: str) -> bool:
+    return bool(_VAGUE_CONFUSION_RE.search(question.strip()))
+
+
+def _extract_page_key_terms(page_text: str) -> str:
+    text = (page_text or "").lower()
+    terms: list[str] = []
+    patterns = (
+        ("tcp", "tcp"),
+        ("udp", "udp"),
+        ("flow control", "flow control"),
+        ("흐름 제어", "흐름 제어"),
+        ("reliable data transfer", "reliable data transfer"),
+        ("신뢰", "신뢰성"),
+        ("congestion control", "congestion control"),
+        ("혼잡", "혼잡 제어"),
+        ("multiplex", "multiplexing demultiplexing"),
+        ("network layer", "network layer"),
+        ("transport layer", "transport layer"),
+    )
+    for needle, term in patterns:
+        if needle in text and term not in terms:
+            terms.append(term)
+    if terms:
+        return " ".join(terms[:6])
+
+    tokens = [
+        token for token in _QUESTION_WORD_RE.findall(page_text or "")
+        if len(token) >= 3
+    ]
+    return " ".join(tokens[:8])

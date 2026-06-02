@@ -14,6 +14,7 @@ Processing order:
 from __future__ import annotations
 
 import logging
+import re
 from typing import AsyncGenerator, Optional
 
 from ai_agent.v3.engine.NavigationIntentService import (
@@ -78,6 +79,7 @@ class OrchestrationEngine:
         """
         # 1. Load session
         state = await self._store.get_or_create(session_id, lecture_id)
+        event = _normalize_event(event)
 
         try:
             # 2. Apply state immediately (StateReducer)
@@ -221,6 +223,41 @@ class OrchestrationEngine:
         }
 
     def _fast_path_plan(self, event: AppEvent, state: SessionState) -> OrchestratorPlan | None:
+        if event.type == AppEventType.USER_MESSAGE:
+            message = _event_message_text(event)
+            if not message:
+                return None
+            if _is_abusive_noise(message):
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.SEND_MESSAGE,
+                        message="표현은 조금만 조절해 주세요. 막힌 개념이나 페이지를 알려주면 그 부분만 짧게 다시 설명하겠습니다.",
+                    )
+                ])
+            if state.active_intervention:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=ToolName.REPAIR_MISCONCEPTION,
+                        params={"student_message": message},
+                    )
+                ])
+            if _is_explicit_page_navigation_message(message) or _is_explicit_page_explanation_request(message):
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=ToolName.EXPLAIN_PAGE,
+                        params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                    )
+                ])
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.ANSWER_QUESTION,
+                    params={"question": message},
+                )
+            ])
+
         if event.type == AppEventType.REVIEW_DECISION and _event_accepts(event):
             if state.active_intervention:
                 return OrchestratorPlan(actions=[
@@ -305,7 +342,7 @@ class OrchestrationEngine:
                 )
             ])
         if event.type == AppEventType.USER_MESSAGE:
-            question = str(event.get("question", event.get("text", ""))).strip()
+            question = _event_message_text(event)
             if question and not state.active_intervention:
                 return OrchestratorPlan(actions=[
                     OrchestratorAction(
@@ -377,7 +414,66 @@ def _event_accepts(event: AppEvent) -> bool:
 
 
 def _event_message_text(event: AppEvent) -> str:
-    return str(event.get("text", event.get("message", event.get("question", ""))).strip())
+    return str(_payload_message_text(event.payload)).strip()
+
+
+def _normalize_event(event: AppEvent) -> AppEvent:
+    payload = dict(event.payload or {})
+    nested = payload.get("payload")
+    if isinstance(nested, dict):
+        outer = {key: value for key, value in payload.items() if key != "payload"}
+        payload = {**nested, **outer}
+
+    if event.type == AppEventType.USER_MESSAGE:
+        message = _payload_message_text(payload)
+        if message:
+            payload["question"] = message
+            payload.setdefault("text", message)
+
+    return event.model_copy(update={"payload": payload})
+
+
+def _payload_message_text(payload: dict) -> str:
+    for key in ("question", "text", "message", "content", "userMessage", "prompt"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+_ABUSIVE_RE = re.compile(r"(좆|ㅈ같|씨발|시발|ㅅㅂ|개새|병신|꺼져|fuck|shit)", re.IGNORECASE)
+_LEARNING_SIGNAL_RE = re.compile(
+    r"(이해|모르|헷갈|설명|알려|뭐|무엇|왜|어떻게|tcp|udp|flow|control|페이지|슬라이드|문제|\?)",
+    re.IGNORECASE,
+)
+_EXPLICIT_PAGE_EXPLANATION_RE = re.compile(
+    r"((현재|이|지금)\s*(페이지|슬라이드)(의|를|을|에서)?\s*(전체|내용)?\s*(설명|강의|요약)"
+    r"|"
+    r"(페이지|슬라이드)\s*전체\s*(설명|강의|요약)"
+    r"|"
+    r"\d+\s*(페이지|슬라이드)\s*(전체|내용)?\s*(설명|강의|요약)"
+    r"|"
+    r"(설명|강의|요약).*((현재|이|지금)\s*(페이지|슬라이드)|(페이지|슬라이드)\s*전체))"
+)
+_EXPLICIT_PAGE_NAVIGATION_MESSAGE_RE = re.compile(
+    r"^\s*\d{1,4}\s*(페이지|쪽|page|p\b)\s*(ㄱ+ㄱ*ㄹ?|가줘|가자|이동|보여|열어|설명)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_abusive_noise(message: str) -> bool:
+    return bool(_ABUSIVE_RE.search(message) and not _LEARNING_SIGNAL_RE.search(message))
+
+
+def _is_explicit_page_explanation_request(message: str) -> bool:
+    return bool(_EXPLICIT_PAGE_EXPLANATION_RE.search(message.strip()))
+
+
+def _is_explicit_page_navigation_message(message: str) -> bool:
+    return bool(_EXPLICIT_PAGE_NAVIGATION_MESSAGE_RE.search(message.strip()))
 
 
 def _event_quiz_type(event: AppEvent) -> str:

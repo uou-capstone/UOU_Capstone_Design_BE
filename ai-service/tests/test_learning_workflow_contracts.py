@@ -114,6 +114,33 @@ def test_state_reducer_syncs_visible_page_from_non_page_events():
     assert state.pages[6].status.value == "DONE"
 
 
+def test_state_reducer_next_page_decision_uses_viewer_page_when_already_moved():
+    reducer = StateReducer()
+    state = SessionState(session_id=1, lecture_id=1, current_page=3)
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.NEXT_PAGE_DECISION, payload={"accept": True, "pageNumber": 4}),
+    )
+
+    assert state.current_page == 4
+    assert state.pages[3].status.value == "DONE"
+    assert state.pages[4].page_number == 4
+
+
+def test_state_reducer_next_page_decision_advances_when_viewer_page_is_current():
+    reducer = StateReducer()
+    state = SessionState(session_id=1, lecture_id=1, current_page=4)
+
+    reducer.reduce(
+        state,
+        AppEvent(type=AppEventType.NEXT_PAGE_DECISION, payload={"accept": True, "currentPage": 4}),
+    )
+
+    assert state.current_page == 5
+    assert state.pages[4].status.value == "DONE"
+
+
 def test_state_reducer_treats_chat_page_commands_as_navigation():
     reducer = StateReducer()
     state = SessionState(session_id=1, lecture_id=1, current_page=1)
@@ -346,6 +373,47 @@ def test_learning_context_collector_adds_related_pages_for_qa(monkeypatch):
 
     assert "관련 페이지 4" in context.related_pages_digest
     assert "receive window rwnd" in context.related_pages_digest
+
+
+def test_learning_context_collector_reuses_last_question_for_vague_confusion(monkeypatch):
+    collector_module = importlib.import_module("ai_agent.v3.engine.LearningContextCollector")
+    searched_queries: list[str] = []
+
+    monkeypatch.setattr(
+        collector_module.pdf_context_service,
+        "read_page_context",
+        lambda pdf_path, page: PageContext(
+            page=2,
+            page_text="Transport vs Network Layer. TCP and UDP.",
+            page_count=100,
+        ),
+    )
+
+    def fake_search(pdf_path, question, current_page=None, limit=3, include_current=False):
+        searched_queries.append(question)
+        return [
+            RelevantPage(
+                page=73,
+                text="TCP reliable data transfer uses ACK and retransmission.",
+                score=12.0,
+                matched_terms=("tcp", "ack"),
+            )
+        ]
+
+    monkeypatch.setattr(collector_module.pdf_context_service, "search_relevant_pages", fake_search)
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2, pdf_path="/tmp/lecture.pdf")
+    qa_thread_service.append_turn(
+        state,
+        page_number=2,
+        question="tcp에 대해 자세히 설명해줘",
+        answer="TCP는 신뢰성 있는 전송 계층 프로토콜입니다.",
+    )
+
+    context = LearningContextCollector().collect_for_question(state, "이해가 잘 안돼")
+
+    assert searched_queries[0] == "tcp에 대해 자세히 설명해줘"
+    assert "관련 페이지 73" in context.related_pages_digest
 
 
 def test_orchestrator_prompt_uses_page_scoped_qa_thread_not_global_messages():

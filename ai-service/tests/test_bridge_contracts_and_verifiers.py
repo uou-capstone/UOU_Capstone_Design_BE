@@ -135,6 +135,21 @@ def test_plan_verifier_patches_explain_followup_widget_for_event_flow():
     assert start_decision.plan.actions[0].params["next_widget"] == "NEXT_PAGE_DECISION"
 
 
+def test_plan_verifier_patches_decision_send_message_with_widget():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.SEND_MESSAGE,
+            message="이해하셨나요? 다음 페이지로 넘어갈까요?",
+        ),
+    ])
+
+    result = PlanVerifier().verify(plan, state)
+
+    assert result.plan.actions[0].ui_state == {"widget": "NEXT_PAGE_DECISION"}
+    assert result.warnings[-1]["code"] == "DECISION_MESSAGE_WIDGET_PATCHED"
+
+
 def test_plan_verifier_routes_general_user_message_to_qa():
     state = SessionState(session_id=1, lecture_id=1)
     plan = OrchestratorPlan(actions=[
@@ -155,6 +170,23 @@ def test_plan_verifier_routes_general_user_message_to_qa():
     assert [action.tool for action in result.plan.actions] == [ToolName.ANSWER_QUESTION]
     assert result.plan.actions[0].params["question"] == "tcp에서 신뢰성을 어떻게 주지?"
     assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QA"
+
+
+def test_plan_verifier_accepts_message_key_as_user_question():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(type=ActionType.CALL_TOOL, tool=ToolName.EXPLAIN_PAGE),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"message": "tcp에 대해 자세히 설명해줘"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.ANSWER_QUESTION]
+    assert result.plan.actions[0].params["question"] == "tcp에 대해 자세히 설명해줘"
 
 
 def test_plan_verifier_allows_explicit_page_explanation_request():
@@ -783,6 +815,106 @@ async def test_question_then_next_page_sequence_matches_reference_flow():
 
 
 @pytest.mark.asyncio
+async def test_user_message_fast_path_routes_message_key_to_qa_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("general USER_MESSAGE should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, state.current_page, action, dict(event_payload)))
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="qa",
+                tool="ANSWER_QUESTION",
+                channel="main",
+                delta="질문 답변",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=4)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"message": "tcp에 대해 자세히 설명해줘"}),
+        )
+    ]
+
+    action = dispatcher.calls[0][2]
+    event_payload = dispatcher.calls[0][3]
+    assert action.tool == ToolName.ANSWER_QUESTION
+    assert action.params["question"] == "tcp에 대해 자세히 설명해줘"
+    assert event_payload["question"] == "tcp에 대해 자세히 설명해줘"
+    assert any(event.agent == "qa" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_abusive_noise_fast_path_does_not_call_explainer_or_qa():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("abusive noise should bypass planner")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    engine._dispatcher = ToolDispatcher(None)  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "좆까"}),
+        )
+    ]
+
+    assert events[0].agent == "system"
+    assert events[0].channel == "main"
+    assert "표현은 조금만" in events[0].delta
+    assert events[-1].data is None or "ui" not in events[-1].data
+
+
+@pytest.mark.asyncio
 async def test_chat_next_page_command_explains_next_page_without_llm_planner():
     class FakeStore:
         def __init__(self, state):
@@ -926,7 +1058,7 @@ async def test_semantic_navigation_emits_target_page_directive(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_user_message_page_number_updates_explanation_context_before_planning():
+async def test_user_message_page_number_command_explains_target_page_without_planner():
     class FakeStore:
         def __init__(self, state):
             self.state = state
@@ -940,26 +1072,9 @@ async def test_user_message_page_number_updates_explanation_context_before_plann
     class FakeBridge:
         pass
 
-    class PageExplainPlanner:
-        def __init__(self):
-            self.seen_pages = []
-
+    class PlannerShouldNotRun:
         async def run_stream(self, event, state):
-            self.seen_pages.append(state.current_page)
-            yield NdjsonEvent(
-                type=NdjsonEventType.DONE,
-                agent="orchestrator",
-                final=True,
-                data={
-                    "plan": OrchestratorPlan(actions=[
-                        OrchestratorAction(
-                            type=ActionType.CALL_TOOL,
-                            tool=ToolName.EXPLAIN_PAGE,
-                            params={"detail": "NORMAL"},
-                        )
-                    ]).model_dump()
-                },
-            )
+            raise AssertionError("explicit page command should bypass planner")
 
     class CapturingDispatcher:
         def __init__(self):
@@ -979,8 +1094,7 @@ async def test_user_message_page_number_updates_explanation_context_before_plann
 
     state = SessionState(session_id=1, lecture_id=1, current_page=1)
     engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
-    planner = PageExplainPlanner()
-    engine._orchestrator = planner  # type: ignore[assignment]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
     dispatcher = CapturingDispatcher()
     engine._dispatcher = dispatcher  # type: ignore[assignment]
 
@@ -993,8 +1107,8 @@ async def test_user_message_page_number_updates_explanation_context_before_plann
     ]
 
     assert state.current_page == 3
-    assert planner.seen_pages == [3]
     assert dispatcher.calls[0][1] == 3
+    assert dispatcher.calls[0][2].tool == ToolName.EXPLAIN_PAGE
     assert any(event.delta == "3페이지 설명" for event in events)
 
 
