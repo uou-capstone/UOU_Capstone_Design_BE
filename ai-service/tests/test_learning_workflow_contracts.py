@@ -3,9 +3,9 @@ import importlib
 import pytest
 
 from ai_agent.types.domain import AppEvent, AppEventType, NdjsonEvent, NdjsonEventType, PageState, SessionState
-from ai_agent.v3.agents.GraderAgent import GraderAgent
+from ai_agent.v3.agents.GraderAgent import GraderAgent, GradingParseError
 from ai_agent.v3.agents.QaAgent import QaAgent
-from ai_agent.v3.agents.QuizAgents import normalize_quiz_generation_result
+from ai_agent.v3.agents.QuizAgents import QuizAgents, normalize_quiz_generation_result
 from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
 from ai_agent.v3.engine.Orchestrator import Orchestrator
 from ai_agent.v3.engine.QaThreadService import QaThreadService, qa_thread_service
@@ -36,6 +36,38 @@ def test_normalize_quiz_generation_result_extracts_problem_arrays():
         {"id": 1, "question_content": "Q1"},
         {"id": 2, "question_content": "Q2"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_quiz_agents_keep_lecture_content_pure_when_applying_reference_policy():
+    captured = {}
+
+    class FakeGenerator:
+        async def generate_test(self, request):
+            captured["request"] = request
+            return {
+                "problems": {
+                    "ox_problems": [{"id": 1, "prompt": "현재 페이지 기반 문제"}],
+                }
+            }
+
+    agent = QuizAgents(None)  # type: ignore[arg-type]
+    agent._generator_instance = FakeGenerator()
+
+    result = await agent._generate_quiz(
+        "OX_Problem",
+        "CURRENT PAGE TEXT ONLY",
+        profile=None,
+        learner_hint={"weak_concepts": ["flow control"]},
+        count=1,
+    )
+
+    assert result == [{"id": 1, "prompt": "현재 페이지 기반 문제"}]
+    request = captured["request"]
+    assert request.lecture_content == "CURRENT PAGE TEXT ONLY"
+    assert "MergeEduAgent v3 출제 계약" not in request.lecture_content
+    assert request.user_profile.scope_boundary.value == "Lecture_Material_Only"
+    assert request.user_profile.learning_goal.focus_areas == ["flow control"]
 
 
 def test_state_reducer_uses_one_based_pages_and_next_page_decision():
@@ -126,6 +158,59 @@ def test_grader_auto_accepts_reference_answer_shapes():
 
     assert result["total_score"] == 1.0
     assert [item["passed"] for item in result["results"]] == [True, True, True]
+
+
+@pytest.mark.asyncio
+async def test_grader_llm_extracts_json_from_fenced_response_with_trailing_text():
+    class FakeBridge:
+        async def generate(self, contents):
+            return """
+채점 결과입니다.
+```json
+{
+  "results": [
+    {
+      "question_index": 0,
+      "score": "0.7",
+      "passed": true,
+      "reason": "핵심 개념을 설명했습니다.",
+      "feedback": "원리 설명을 조금 더 보강하세요.",
+      "deduction_reason": "예시가 부족합니다."
+    }
+  ],
+  "total_score": "0.7",
+  "overall_feedback": "기준 점수 이상입니다."
+}
+```
+감사합니다.
+"""
+
+    grader = GraderAgent(FakeBridge())  # type: ignore[arg-type]
+    result = await grader._grade_llm(
+        [{"question_content": "설명하세요"}],
+        ["학생 답변"],
+        "강의 자료",
+    )
+
+    assert result["total_score"] == 0.7
+    assert result["results"][0]["score"] == 0.7
+    assert result["results"][0]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_grader_llm_parse_failure_raises_instead_of_zero_score():
+    class FakeBridge:
+        async def generate(self, contents):
+            return "채점 결과를 JSON으로 만들지 못했습니다."
+
+    grader = GraderAgent(FakeBridge())  # type: ignore[arg-type]
+
+    with pytest.raises(GradingParseError, match="GRADING_PARSE_FAILED"):
+        await grader._grade_llm(
+            [{"question_content": "설명하세요"}],
+            ["학생 답변"],
+            "강의 자료",
+        )
 
 
 def test_qa_thread_service_keeps_page_scoped_six_turns():

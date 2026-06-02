@@ -221,6 +221,23 @@ class OrchestrationEngine:
         }
 
     def _fast_path_plan(self, event: AppEvent, state: SessionState) -> OrchestratorPlan | None:
+        if event.type == AppEventType.REVIEW_DECISION and _event_accepts(event):
+            if state.active_intervention:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=ToolName.REPAIR_MISCONCEPTION,
+                        params={"student_message": _event_message_text(event)},
+                    )
+                ])
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=ToolName.EXPLAIN_PAGE,
+                    params={"detail": "DETAILED", "next_widget": "RETEST_DECISION"},
+                )
+            ])
+
         if event.type != AppEventType.QUIZ_SUBMITTED:
             return None
         latest = self._latest_page_quiz(state)
@@ -357,6 +374,10 @@ def _event_accepts(event: AppEvent) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "start", "next"}
     return bool(value)
+
+
+def _event_message_text(event: AppEvent) -> str:
+    return str(event.get("text", event.get("message", event.get("question", ""))).strip())
 
 
 def _event_quiz_type(event: AppEvent) -> str:

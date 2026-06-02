@@ -185,6 +185,53 @@ def normalize_quiz_generation_result(result: Any, quiz_type: str) -> List[Dict[s
     return []
 
 
+def _merge_reference_quiz_profile(
+    *,
+    quiz_type: str,
+    count: int,
+    merged_profile: Dict[str, Any],
+    learner_hint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Keep ProblemRequest.lecture_content as pure lecture text.
+
+    The v2 generator treats lecture_content as material, so reference-style
+    generation guidance belongs in the profile where it is metadata.
+    """
+    profile_copy = _to_jsonable(merged_profile)
+    if not isinstance(profile_copy, dict):
+        profile_copy = {}
+
+    weak_concepts = []
+    if isinstance(learner_hint, dict) and isinstance(learner_hint.get("weak_concepts"), list):
+        weak_concepts = [str(item) for item in learner_hint.get("weak_concepts", [])[:8]]
+
+    learning_goal = profile_copy.setdefault("learning_goal", {})
+    if not isinstance(learning_goal, dict):
+        learning_goal = {}
+        profile_copy["learning_goal"] = learning_goal
+
+    focus_areas = learning_goal.get("focus_areas", [])
+    if isinstance(focus_areas, list):
+        weak_concepts.extend(str(item) for item in focus_areas[:8])
+    deduped_weak = [item for item in dict.fromkeys(item for item in weak_concepts if item.strip())]
+    learning_goal["focus_areas"] = deduped_weak[:10]
+    learning_goal["target_depth"] = learning_goal.get("target_depth") or "Concept"
+    learning_goal["question_modality"] = learning_goal.get("question_modality") or "Balance"
+
+    user_status = profile_copy.setdefault("user_status", {})
+    if isinstance(user_status, dict):
+        user_status["weakness_focus"] = bool(deduped_weak)
+
+    feedback = profile_copy.setdefault("feedback_preference", {})
+    if isinstance(feedback, dict):
+        feedback["strictness"] = feedback.get("strictness") or "Moderate"
+        feedback["explanation_depth"] = feedback.get("explanation_depth") or "Detailed_with_Examples"
+
+    profile_copy["scope_boundary"] = "Lecture_Material_Only"
+    return profile_copy
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -231,7 +278,7 @@ class QuizAgents:
             agent="quiz",
             tool="GENERATE_QUIZ",
             channel="thought",
-            delta=f"Generating {count} {quiz_type} quiz questions...",
+            delta=f"{quiz_type} 퀴즈 {count}문항을 현재 페이지 컨텍스트와 학습자 약점에 맞춰 생성하고 있습니다.",
         )
 
         quiz_task = asyncio.ensure_future(
@@ -291,7 +338,13 @@ class QuizAgents:
         exam_type = exam_type_map.get(qt, ExamType.FIVE_CHOICE)
 
         merged = merge_profile(profile, learner_hint)
-        test_profile = TestProfile.model_validate(merged)  # ValidationError는 run_stream에서 처리
+        reference_profile = _merge_reference_quiz_profile(
+            quiz_type=qt,
+            count=count,
+            merged_profile=merged,
+            learner_hint=learner_hint,
+        )
+        test_profile = TestProfile.model_validate(reference_profile)  # ValidationError는 run_stream에서 처리
 
         request = ProblemRequest(
             exam_type=exam_type,
