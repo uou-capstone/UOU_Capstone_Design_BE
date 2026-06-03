@@ -1070,16 +1070,35 @@ def _normalize_criteria_chat_result(
         for item in req.builtInCriteria
         if _criterion_display_name(item)
     }
+    built_in_ids = {
+        str(item.id).strip()
+        for item in req.builtInCriteria
+        if item.id is not None and str(item.id).strip()
+    }
     for item in req.existingCriteria:
         if _criterion_display_name(item):
             built_in_keys.add(_criteria_label_key(_criterion_display_name(item)))
+        if item.id is not None and str(item.id).strip():
+            built_in_ids.add(str(item.id).strip())
 
+    target_id = str(params.get("targetCriterionId") or "").strip()
     target_name = str(params.get("targetCriterionName") or params.get("targetCriterionLabel") or "").strip()
     criterion = params.get("criterion") if isinstance(params.get("criterion"), dict) else {}
     criterion_name = str(criterion.get("name") or criterion.get("label") or "").strip()
     criterion_description = str(criterion.get("description") or "").strip()
 
-    if method in {"updateCriterion", "deleteCriterion"} and _criteria_label_key(target_name) in built_in_keys:
+    if method == "updateCriterion" and not target_id and not target_name:
+        warnings.append("UPDATE_TARGET_MISSING")
+        method = "messageOnly"
+        params = {"rationale": "수정할 추가 평가 항목을 특정할 수 없습니다."}
+    elif method == "deleteCriterion" and not target_id and not target_name:
+        warnings.append("DELETE_TARGET_MISSING")
+        method = "messageOnly"
+        params = {"rationale": "삭제할 추가 평가 항목을 특정할 수 없습니다."}
+    elif method in {"updateCriterion", "deleteCriterion"} and (
+        (target_id and target_id in built_in_ids)
+        or (target_name and _criteria_label_key(target_name) in built_in_keys)
+    ):
         warnings.append("BUILT_IN_CRITERION_IMMUTABLE")
         method = "messageOnly"
         params = {
@@ -1097,12 +1116,6 @@ def _normalize_criteria_chat_result(
             "name": criterion_name[:60],
             "description": criterion_description[:600],
         }
-    elif method == "deleteCriterion":
-        if not params.get("targetCriterionId") and not target_name:
-            warnings.append("DELETE_TARGET_MISSING")
-            method = "messageOnly"
-            params = {"rationale": "삭제할 추가 평가 항목을 특정할 수 없습니다."}
-
     raw_warnings = parsed.get("warnings")
     if isinstance(raw_warnings, list):
         warnings.extend(str(item) for item in raw_warnings if item)

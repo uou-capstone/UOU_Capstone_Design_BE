@@ -352,7 +352,9 @@ class GeminiBridgeClient:
 
         `load_pdf_part()`는 작은 PDF를 인라인 바이트로 보내지만, 페이지 텍스트
         추출이 약한 QA에서는 레퍼런스처럼 원본 PDF fileRef를 같이 넘기는 편이
-        유리하다. 업로드가 실패하면 기존 inline PDF part로 폴백한다.
+        유리하다. 업로드 실패 시 소형 PDF는 inline Part.from_bytes로 폴백할 수
+        있고, 대용량 PDF는 inline fallback 없이 예외를 올려 상위에서 기존 page
+        text/index QA로 재시도하게 한다.
         """
         p = pathlib.Path(pdf_path)
         if not p.exists():
