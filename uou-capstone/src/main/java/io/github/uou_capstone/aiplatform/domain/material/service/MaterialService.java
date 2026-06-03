@@ -22,6 +22,9 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepo
 import io.github.uou_capstone.aiplatform.domain.learning.service.LearningChatPersistenceService;
 
 
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+
+
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 
 
@@ -102,6 +105,8 @@ public class MaterialService {
 
 
     private final MaterialRepository materialRepository;
+
+    private final ExamSessionRepository examSessionRepository;
 
     private final LectureRepository lectureRepository;
 
@@ -200,6 +205,7 @@ public class MaterialService {
 
     private Material saveUploadedMaterial(Long lectureId, Lecture lecture, User uploader,
                                           String displayName, String filePath) {
+        examSessionRepository.clearMaterialReferencesByLectureAndType(lectureId, "PDF");
         materialRepository.deleteByLecture_IdAndMaterialType(lectureId, "PDF");
 
         Material material = Material.builder()
@@ -249,6 +255,8 @@ public class MaterialService {
         // 3. 자료 삭제 (flush로 즉시 DB 반영, 이후 contents 조회에서 제외 보장)
 
         Long lectureId = material.getLecture().getId();
+
+        examSessionRepository.clearMaterialReference(materialId);
 
         materialRepository.delete(material);
 

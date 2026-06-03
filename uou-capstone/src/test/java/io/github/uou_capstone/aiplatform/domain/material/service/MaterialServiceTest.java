@@ -7,6 +7,7 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.learning.service.LearningChatPersistenceService;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
@@ -50,6 +51,7 @@ class MaterialServiceTest {
     private static final Long USER_ID = 20L;
 
     private MaterialRepository materialRepository;
+    private ExamSessionRepository examSessionRepository;
     private LectureRepository lectureRepository;
     private CurrentUserResolver currentUserResolver;
     private FastApiSessionClient fastApiSessionClient;
@@ -63,6 +65,7 @@ class MaterialServiceTest {
     @BeforeEach
     void setUp() {
         materialRepository = mock(MaterialRepository.class);
+        examSessionRepository = mock(ExamSessionRepository.class);
         lectureRepository = mock(LectureRepository.class);
         currentUserResolver = mock(CurrentUserResolver.class);
         fastApiSessionClient = mock(FastApiSessionClient.class);
@@ -71,6 +74,7 @@ class MaterialServiceTest {
 
         materialService = new MaterialService(
                 materialRepository,
+                examSessionRepository,
                 lectureRepository,
                 mock(UserRepository.class),
                 currentUserResolver,
@@ -120,6 +124,7 @@ class MaterialServiceTest {
         Material result = materialService.uploadFile(LECTURE_ID, file);
 
         assertThat(result.getFilePath()).isEqualTo("uploads/new.pdf");
+        verify(examSessionRepository).clearMaterialReferencesByLectureAndType(LECTURE_ID, "PDF");
         verify(materialRepository).deleteByLecture_IdAndMaterialType(LECTURE_ID, "PDF");
         verify(materialRepository).save(any(Material.class));
         verify(fastApiSessionClient).invalidateByLecture(LECTURE_ID);
@@ -136,6 +141,7 @@ class MaterialServiceTest {
 
         materialService.deleteMaterial(MATERIAL_ID);
 
+        verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
         verify(materialRepository).delete(material);
         verify(materialRepository).flush();
         verify(fastApiSessionClient).invalidateByLecture(LECTURE_ID);
@@ -153,6 +159,7 @@ class MaterialServiceTest {
 
         materialService.deleteMaterial(MATERIAL_ID);
 
+        verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
         verify(materialRepository).delete(material);
         verify(materialRepository).flush();
         verify(learningChatPersistenceService).endActiveSessionsByLecture(LECTURE_ID);
