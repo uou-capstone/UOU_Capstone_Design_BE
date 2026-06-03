@@ -279,6 +279,25 @@ def test_grader_auto_accepts_reference_answer_shapes():
     assert [item["passed"] for item in result["results"]] == [True, True, True]
 
 
+def test_grader_auto_marks_missing_answers_wrong_instead_of_error():
+    grader = GraderAgent(None)  # type: ignore[arg-type]
+
+    result = grader._grade_auto(
+        [
+            {"answer": {"value": "O"}},
+            {"answer": {"value": "X"}},
+            {"answer": {"value": "O"}},
+        ],
+        [{"answer": "O"}],
+    )
+
+    assert result["total_score"] == pytest.approx(1 / 3)
+    assert result["results"][0]["passed"] is True
+    assert result["results"][1]["passed"] is False
+    assert "미응답" in result["results"][1]["feedback"]
+    assert result["warnings"] == ["ANSWER_COUNT_MISMATCH: expected=3, received=1"]
+
+
 @pytest.mark.asyncio
 async def test_grader_llm_extracts_json_from_fenced_response_with_trailing_text():
     class FakeBridge:

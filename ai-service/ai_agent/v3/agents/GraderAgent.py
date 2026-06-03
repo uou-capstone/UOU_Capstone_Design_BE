@@ -340,15 +340,14 @@ class GraderAgent:
         user_answers: List[Any],
     ) -> Dict[str, Any]:
         """MCQ/OX 자동 채점 (서버 내부 정답 비교)"""
-        if len(problems) != len(user_answers):
-            raise ValueError(
-                f"문제 수({len(problems)})와 답안 수({len(user_answers)})가 일치하지 않습니다."
-            )
+        answers = user_answers if isinstance(user_answers, list) else []
+        answer_count_mismatch = len(problems) != len(answers)
 
         results = []
         correct_count = 0
 
-        for idx, (problem, user_answer) in enumerate(zip(problems, user_answers)):
+        for idx, problem in enumerate(problems):
+            user_answer = answers[idx] if idx < len(answers) else None
             correct = _extract_problem_answer(problem)
             answer = _extract_user_answer(user_answer)
             correct_str = "" if correct is None else str(correct)
@@ -361,17 +360,25 @@ class GraderAgent:
                 "question_index": idx,
                 "score": 1.0 if is_correct else 0.0,
                 "passed": is_correct,
-                "feedback": "정답입니다!" if is_correct else f"오답입니다. 정답은 '{correct_str}' 입니다.",
+                "feedback": "정답입니다!" if is_correct else (
+                    "미응답입니다. 답안을 선택한 뒤 다시 제출해 주세요."
+                    if answer is None else f"오답입니다. 정답은 '{correct_str}' 입니다."
+                ),
                 "user_answer": answer_str,
                 "correct_answer": correct_str,
             })
 
         total = correct_count / max(len(problems), 1)
-        return {
+        result = {
             "results": results,
             "total_score": total,
             "overall_feedback": f"{len(problems)}문항 중 {correct_count}문항 정답 ({total*100:.0f}점)",
         }
+        if answer_count_mismatch:
+            result["warnings"] = [
+                f"ANSWER_COUNT_MISMATCH: expected={len(problems)}, received={len(answers)}"
+            ]
+        return result
 
     async def _grade_llm(
         self,

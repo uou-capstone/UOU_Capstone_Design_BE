@@ -133,7 +133,7 @@ def test_plan_verifier_patches_explain_followup_widget_for_event_flow():
         event_type=AppEventType.START_EXPLANATION_DECISION.value,
         event_payload={"accept": True},
     )
-    assert start_decision.plan.actions[0].params["next_widget"] == "NEXT_PAGE_DECISION"
+    assert start_decision.plan.actions[0].params["next_widget"] == "QUIZ_DECISION"
 
 
 def test_plan_verifier_patches_decision_send_message_with_widget():
@@ -364,6 +364,39 @@ def test_quiz_diagnosis_creates_pending_assessment_and_active_intervention():
     assert state.active_intervention["focusConcept"] == "분수 덧셈"
 
 
+def test_quiz_diagnosis_marks_passed_assessment_as_passed_not_pending():
+    service = QuizDiagnosisService()
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    record = QuizRecord(
+        quiz_id="quiz-pass-1",
+        page_number=1,
+        quiz_type="OX_Problem",
+        questions=[{"prompt": "테스트 문항", "answer": {"value": "O"}}],
+    )
+
+    assessment = service.record_assessment(
+        state,
+        record,
+        {
+            "total_score": 1.0,
+            "results": [
+                {
+                    "question_index": 0,
+                    "score": 1.0,
+                    "passed": True,
+                    "user_answer": "O",
+                    "correct_answer": "O",
+                }
+            ],
+        },
+        [{"answer": "O"}],
+    )
+
+    assert assessment["status"] == "PASSED"
+    assert assessment["passed"] is True
+    assert state.active_intervention is None
+
+
 def test_orchestrator_prompt_consumes_pending_assessment_artifact():
     state = SessionState(session_id=1, lecture_id=1, current_page=1)
     state.quiz_assessments.append({
@@ -517,8 +550,135 @@ async def test_orchestration_engine_fast_paths_mcq_ox_grading_without_planner():
     done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
     assert done.data["grading"]["total_score"] == 0.5
     assert done.data["passed"] is False
+    assert done.data["passScoreRatio"] == 0.6
+    assert done.data["ui"] == {"widget": "REVIEW_DECISION"}
     assert done.data["activeIntervention"]["status"] == "AWAITING_USER_RESPONSE"
     assert store.saved is state
+
+
+@pytest.mark.asyncio
+async def test_orchestration_engine_grading_pass_emits_next_page_decision():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class ExplodingBridge:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("planner should not be called for MCQ/OX fast path")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-1",
+        page_number=1,
+        quiz_type="OX_Problem",
+        questions=[
+            {"answer": {"value": "O"}},
+            {"answer": {"value": "X"}},
+            {"answer": {"value": "O"}},
+            {"answer": {"value": "X"}},
+            {"answer": {"value": "O"}},
+        ],
+    ))
+    engine = OrchestrationEngine(FakeStore(state), bridge=ExplodingBridge())  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.QUIZ_SUBMITTED,
+                payload={
+                    "answers": [
+                        {"answer": "O"},
+                        {"answer": "X"},
+                        {"answer": "O"},
+                        {"answer": "O"},
+                        {"answer": "X"},
+                    ],
+                    "quiz_type": "OX_Problem",
+                },
+            ),
+        )
+    ]
+
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert done.data["grading"]["total_score"] == 0.6
+    assert done.data["passed"] is True
+    assert done.data["passScoreRatio"] == 0.6
+    assert done.data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert state.active_intervention is None
+
+
+@pytest.mark.asyncio
+async def test_retest_mcq_ox_pass_grades_even_with_stale_pending_assessment():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class ExplodingBridge:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("planner should not be called for deterministic retest grading")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    state.quiz_assessments.append({
+        "artifactId": "legacy-pending-assessment",
+        "quizId": "old-quiz",
+        "pageNumber": 5,
+        "status": "PENDING",
+        "score": 1.0,
+        "passed": True,
+    })
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-retest-pass",
+        page_number=5,
+        quiz_type="OX_Problem",
+        questions=[
+            {"answer": {"value": "O"}},
+            {"answer": {"value": "X"}},
+            {"answer": {"value": "O"}},
+            {"answer": {"value": "X"}},
+            {"answer": {"value": "O"}},
+        ],
+    ))
+    engine = OrchestrationEngine(FakeStore(state), bridge=ExplodingBridge())  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.QUIZ_SUBMITTED,
+                payload={
+                    "quizType": "OX",
+                    "answers": [
+                        {"answer": "O"},
+                        {"answer": "X"},
+                        {"answer": "O"},
+                        {"answer": "X"},
+                        {"answer": "O"},
+                    ],
+                },
+            ),
+        )
+    ]
+
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert done.data["passed"] is True
+    assert done.data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert state.quiz_assessments[-1]["quizId"] == "quiz-retest-pass"
+    assert state.quiz_assessments[-1]["status"] == "PASSED"
 
 
 @pytest.mark.asyncio
@@ -694,7 +854,7 @@ async def test_initial_explanation_sequence_matches_reference_flow():
                 type=NdjsonEventType.DONE,
                 agent="system",
                 final=True,
-                data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+                data={"ui": {"widget": action.params.get("next_widget", "NEXT_PAGE_DECISION")}},
             )
 
     state = SessionState(session_id=1, lecture_id=1, current_page=1)
@@ -720,7 +880,7 @@ async def test_initial_explanation_sequence_matches_reference_flow():
         )
     ]
     assert any(event.delta == "1페이지 설명" for event in first_page_events)
-    assert first_page_events[-1].data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert first_page_events[-1].data["ui"] == {"widget": "QUIZ_DECISION"}
 
     next_page_events = [
         event async for event in engine.handle_event_stream(
@@ -731,7 +891,7 @@ async def test_initial_explanation_sequence_matches_reference_flow():
     ]
     assert state.current_page == 2
     assert any(event.delta == "2페이지 설명" for event in next_page_events)
-    assert next_page_events[-1].data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert next_page_events[-1].data["ui"] == {"widget": "QUIZ_DECISION"}
 
     assert [(event_type, page, action.type, action.tool) for event_type, page, action in dispatcher.calls] == [
         (AppEventType.SESSION_ENTERED.value, 1, ActionType.SET_UI_STATE, None),
@@ -798,7 +958,7 @@ async def test_question_then_next_page_sequence_matches_reference_flow():
                     type=NdjsonEventType.DONE,
                     agent="system",
                     final=True,
-                    data={"ui": {"widget": "NEXT_PAGE_DECISION"}},
+                    data={"ui": {"widget": action.params.get("next_widget", "NEXT_PAGE_DECISION")}},
                 )
 
     state = SessionState(session_id=1, lecture_id=1, current_page=3)
@@ -830,7 +990,7 @@ async def test_question_then_next_page_sequence_matches_reference_flow():
 
     assert state.current_page == 4
     assert any(event.agent == "explainer" and event.delta == "4페이지 설명" for event in next_events)
-    assert next_events[-1].data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert next_events[-1].data["ui"] == {"widget": "QUIZ_DECISION"}
     assert [(event_type, page, action.type, action.tool) for event_type, page, action in dispatcher.calls] == [
         (AppEventType.USER_MESSAGE.value, 3, ActionType.CALL_TOOL, ToolName.ANSWER_QUESTION),
         (AppEventType.NEXT_PAGE_DECISION.value, 4, ActionType.CALL_TOOL, ToolName.EXPLAIN_PAGE),

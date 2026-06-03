@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ai_agent.v3.agents.ExplainerAgent import ExplainerAgent
-from ai_agent.v3.agents.GraderAgent import GraderAgent
+from ai_agent.v3.agents.GraderAgent import GraderAgent, PASS_SCORE_RATIO
 from ai_agent.v3.agents.MisconceptionRepairAgent import MisconceptionRepairAgent
 from ai_agent.v3.agents.QaAgent import QaAgent
 from ai_agent.v3.agents.QuizAgents import QuizAgents
@@ -392,6 +392,7 @@ class ToolDispatcher:
                                 data={**event.data, "ui": {"widget": "REVIEW_DECISION"}},
                             )
                             continue
+                        event.data = self._with_passed_followup_data(event.data)
                     yield event
             else:
                 yield NdjsonEvent(
@@ -439,6 +440,7 @@ class ToolDispatcher:
                                 data={**event.data, "ui": {"widget": "REVIEW_DECISION"}},
                             )
                             continue
+                        event.data = self._with_passed_followup_data(event.data)
                     yield event
             else:
                 yield NdjsonEvent(
@@ -574,7 +576,7 @@ class ToolDispatcher:
         except (TypeError, ValueError):
             score = 0.0
         record.score = score
-        record.passed = score >= 0.6
+        record.passed = score >= PASS_SCORE_RATIO
         record.graded_at = datetime.now(timezone.utc).isoformat()
 
         page_key = str(state.current_page)
@@ -593,10 +595,16 @@ class ToolDispatcher:
         assessment: Dict[str, Any],
         state: SessionState,
     ) -> Dict[str, Any]:
-        enriched = {**data, "quizAssessment": assessment}
+        enriched = {**data, "quizAssessment": assessment, "passScoreRatio": PASS_SCORE_RATIO}
         if state.active_intervention:
             enriched["activeIntervention"] = state.active_intervention
         return enriched
+
+    @staticmethod
+    def _with_passed_followup_data(data: Dict[str, Any]) -> Dict[str, Any]:
+        if data.get("passed") is True and "ui" not in data:
+            return {**data, "ui": {"widget": "NEXT_PAGE_DECISION"}}
+        return data
 
 
 def _params_quiz_type(params: Dict[str, Any], default: str) -> str:

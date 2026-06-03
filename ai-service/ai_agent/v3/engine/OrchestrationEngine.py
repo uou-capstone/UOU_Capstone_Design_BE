@@ -95,7 +95,7 @@ class OrchestrationEngine:
                     confidence=navigation_directive.confidence,
                     source=navigation_directive.source,
                 )
-                navigation_plan = self._navigation_plan(navigation_directive)
+                navigation_plan = self._navigation_plan(navigation_directive, state)
                 async for ndjson_event in self._dispatcher.dispatch(
                     navigation_plan,
                     state,
@@ -247,7 +247,7 @@ class OrchestrationEngine:
                     OrchestratorAction(
                         type=ActionType.CALL_TOOL,
                         tool=ToolName.EXPLAIN_PAGE,
-                        params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                        params=_explain_page_params(state, event.type.value),
                     )
                 ])
             if _is_quiz_request_message(message):
@@ -321,8 +321,6 @@ class OrchestrationEngine:
         )
         if quiz_type not in {"Five_Choice", "OX_Problem"}:
             return None
-        if quiz_diagnosis_service.has_pending_assessment(state, page_number=state.current_page):
-            return None
         return OrchestratorPlan(actions=[
             OrchestratorAction(
                 type=ActionType.CALL_TOOL,
@@ -331,12 +329,12 @@ class OrchestrationEngine:
             )
         ])
 
-    def _navigation_plan(self, directive: NavigationDirective) -> OrchestratorPlan:
+    def _navigation_plan(self, directive: NavigationDirective, state: SessionState) -> OrchestratorPlan:
         return OrchestratorPlan(actions=[
             OrchestratorAction(
                 type=ActionType.CALL_TOOL,
                 tool=ToolName.EXPLAIN_PAGE,
-                params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                params=_explain_page_params(state, AppEventType.PAGE_CHANGED.value),
             )
         ])
 
@@ -366,7 +364,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                    params=_explain_page_params(state, event.type.value),
                 )
             ])
         if event.type == AppEventType.PAGE_CHANGED:
@@ -374,7 +372,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params={"detail": "NORMAL", "next_widget": "QUIZ_DECISION"},
+                    params=_explain_page_params(state, event.type.value),
                 )
             ])
         if event.type == AppEventType.USER_MESSAGE:
@@ -392,7 +390,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+                    params=_explain_page_params(state, event.type.value),
                 )
             ])
         if event.type == AppEventType.QUIZ_DECISION and _event_accepts(event):
@@ -447,6 +445,44 @@ def _event_accepts(event: AppEvent) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "yes", "y", "1", "accept", "accepted", "start", "next"}
     return bool(value)
+
+
+def _explain_page_params(
+    state: SessionState | None,
+    event_type: str | None,
+    *,
+    detail: str = "NORMAL",
+) -> dict[str, str]:
+    return {
+        "detail": detail,
+        "next_widget": _followup_widget_after_explanation(state, event_type),
+    }
+
+
+def _followup_widget_after_explanation(
+    state: SessionState | None,
+    event_type: str | None,
+) -> str:
+    """
+    Reference-style post-explanation flow:
+    after an explanation, ask whether the learner wants an understanding
+    check. Do not generate the quiz until the learner accepts and selects
+    a quiz type.
+    """
+    if state is None:
+        return "QUIZ_DECISION"
+
+    current_page = max(int(state.current_page or 1), 1)
+    if _page_has_quiz_activity(state, current_page):
+        return "NEXT_PAGE_DECISION"
+
+    return "QUIZ_DECISION"
+
+
+def _page_has_quiz_activity(state: SessionState, page_number: int) -> bool:
+    if state.learner.quiz_attempt_counts.get(str(page_number), 0) > 0:
+        return True
+    return any(record.page_number == page_number for record in state.quiz_history)
 
 
 def _event_message_text(event: AppEvent) -> str:

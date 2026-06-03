@@ -128,7 +128,7 @@ Learning Context Collection → Orchestrator Planner → Tool Dispatcher → Sel
 절대 enum class prefix나 클래스명과 점(.)을 붙인 형태를 쓰지 마세요.
 
 [사용 가능한 도구]
-- EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED", "next_widget": "NEXT_PAGE_DECISION" | "QUIZ_DECISION"}}) -> 강의 설명이 필요할 경우 호출.
+- EXPLAIN_PAGE: 강의 설명 (매개변수: {{"detail": "NORMAL" | "DETAILED", "next_widget": "NEXT_PAGE_DECISION" | "QUIZ_DECISION"}}) -> 강의 설명이 필요할 경우 호출. 설명 후 퀴즈가 필요하면 `QUIZ_DECISION`으로 제안만 하고, 이 단계에서 퀴즈를 바로 생성하지 않는다.
 - ANSWER_QUESTION: 질문에 대한 답변 (매개변수: {{"question": "..."}}) -> 사용자가 메시지로 질문한 내용의 답변 호출.
 - GENERATE_QUIZ_FIVE_CHOICE: 객관식 퀴즈 (매개변수: {{"quiz_type": "Five_Choice"}})
 - GENERATE_QUIZ_OX: OX 퀴즈 (매개변수: {{"quiz_type": "OX_Problem"}})
@@ -151,13 +151,13 @@ UI 상태 action:
 2. 최종 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
 3. 최종 JSON에는 `thinking`, `thought`, `reasoning` 필드를 넣지 마세요. 사고 흐름은 스트리밍 thought 채널에서만 사용합니다.
 4. 일반 질문/답변의 경우 반드시 `ANSWER_QUESTION` 툴을 부릅니다. `흐름제어가 뭐지`, `TCP가 뭐야`, `왜 이렇게 돼?`처럼 특정 개념을 묻는 말은 페이지 설명이 아니라 QA입니다.
-5. 설명 직후에는 후속 UI를 분명히 정하세요. 처음 설명을 시작한 흐름은 `NEXT_PAGE_DECISION`, 페이지 변경 기반 흐름은 `QUIZ_DECISION`을 우선 사용합니다.
+5. 설명 직후에는 기본적으로 `EXPLAIN_PAGE.params.next_widget`을 `QUIZ_DECISION`으로 두어 "퀴즈를 진행할까요?"를 제안하세요. 학생 동의 없이 `GENERATE_QUIZ_*`를 바로 호출하지 마세요. 이미 현재 페이지에서 퀴즈를 진행했거나 채점이 끝난 경우에만 `NEXT_PAGE_DECISION`으로 다음 페이지 이동을 제안하세요.
 6. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
 7. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
 8. `SESSION_ENTERED`에서는 빈 actions를 반환하지 말고 `START_EXPLANATION_DECISION` 위젯을 표시하세요.
-9. `START_EXPLANATION_DECISION`이 수락되었거나 payload가 비어 있으면 `EXPLAIN_PAGE` 도구를 호출하세요. params에는 {{"detail":"NORMAL","next_widget":"NEXT_PAGE_DECISION"}}를 넣으세요.
-10. `PAGE_CHANGED` 이벤트는 PDF 뷰어가 이미 페이지를 바꾼 상태입니다. 현재 페이지에 대해 `EXPLAIN_PAGE`를 호출하고 params에는 {{"detail":"NORMAL","next_widget":"QUIZ_DECISION"}}를 넣으세요.
-11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. params에는 {{"detail":"NORMAL","next_widget":"NEXT_PAGE_DECISION"}}를 넣으세요.
+9. `START_EXPLANATION_DECISION`이 수락되었거나 payload가 비어 있으면 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후에는 첫 페이지/개요 페이지라도 `next_widget`은 기본적으로 `QUIZ_DECISION`입니다.
+10. `PAGE_CHANGED` 이벤트는 PDF 뷰어가 이미 페이지를 바꾼 상태입니다. 현재 페이지에 대해 `EXPLAIN_PAGE`를 호출하고, 이미 해당 페이지에서 퀴즈 활동이 있었던 경우가 아니면 `next_widget`은 `QUIZ_DECISION`입니다.
+11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후에는 이미 해당 페이지에서 퀴즈를 진행한 경우를 제외하고 `QUIZ_DECISION`을 제안하세요.
 12. `QUIZ_DECISION`이 수락되면 퀴즈 유형 선택 UI만 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER"}}}}.
 13. `RETEST_DECISION`이 수락되면 재시험 유형 선택 UI를 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","mode":"RETEST"}}}}.
 14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`, `"Flash_Card"`/`"FLASH_CARD"`이면 `GENERATE_QUIZ_FLASH`를 호출하세요.
@@ -165,7 +165,7 @@ UI 상태 action:
 16. 일반 `USER_MESSAGE` 질문에는 `ANSWER_QUESTION` 도구를 호출하고, 답변 후 다음 페이지 이동 여부를 묻는 흐름을 유지하세요. 단, 사용자가 "현재 페이지 전체 설명해줘", "이 페이지 설명해줘"처럼 페이지 설명을 명시적으로 요청한 경우에만 `EXPLAIN_PAGE`를 사용할 수 있습니다.
 17. 사용자가 "이해가 잘 안 됨", "다시 설명해줘", "헷갈려"처럼 말하면 새 페이지 설명이 아니라 `ANSWER_QUESTION`으로 라우팅하세요. QA 에이전트가 현재 페이지/관련 페이지를 바탕으로 다른 방식의 설명을 제공합니다.
 18. 사용자가 의미 기반 페이지 이동을 요청하면 navigation directive는 별도 intent layer가 처리하므로, 플래너는 현재 이벤트가 이미 `PAGE_CHANGED`로 정리된 경우에만 `EXPLAIN_PAGE`를 호출하세요.
-19. 퀴즈 생성은 현재 페이지 컨텍스트가 확보된 경우에만 수행해야 합니다. 컨텍스트가 없으면 무리해서 퀴즈 생성 도구를 호출하지 마세요.
+19. 퀴즈 생성은 현재 페이지 컨텍스트가 확보된 경우에만 수행해야 합니다. 컨텍스트가 없으면 무리해서 퀴즈 생성 도구를 호출하지 마세요. 설명 직후 자동 생성은 금지이며, `QUIZ_DECISION` 수락 후 유형 선택 또는 명시적 사용자 퀴즈 요청이 있을 때만 생성하세요.
 20. `USER_MESSAGE`가 "퀴즈 만들어줘", "OX 문제 2개 내줘", "객관식 시험 볼래", "복습 문제 만들어줘", "연습문제 내줘", "확인 문제 풀어볼래", "이 내용으로 문제풀이 해줘", "자가진단 테스트 해줘"처럼 퀴즈/시험/문제 풀이 의도를 명확히 담고 있으면 QA가 아니라 퀴즈 흐름입니다. "내가 이해했는지 확인해줘", "배운 내용 점검해줘"처럼 학습 확인 의도는 있지만 유형이 없는 요청은 직접 생성하지 말고 퀴즈 유형 선택 UI를 여세요. 유형이 명시되면 해당 `GENERATE_QUIZ_*` 도구를 호출하고, 유형이 없으면 `{{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","reason":"USER_QUIZ_REQUEST"}}}}`를 반환하세요.
 """
         return prompt
