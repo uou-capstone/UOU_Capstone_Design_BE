@@ -195,6 +195,93 @@ def test_plan_verifier_preserves_user_quiz_request_actions():
     assert not any(warning["code"] == "USER_MESSAGE_ROUTED_TO_QA" for warning in result.warnings)
 
 
+def test_plan_verifier_routes_llm_answer_for_quiz_request_to_type_picker():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.ANSWER_QUESTION,
+            params={"question": "4페이지 퀴즈 만들어줘"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "4페이지 퀴즈 만들어줘"},
+    )
+
+    assert result.plan.actions == [
+        OrchestratorAction(
+            type=ActionType.SET_UI_STATE,
+            ui_state={"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"},
+        )
+    ]
+    assert state.pending_quiz_request == {
+        "source_request": "4페이지 퀴즈 만들어줘",
+        "coverage_start_page": 4,
+        "coverage_end_page": 4,
+    }
+    assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QUIZ"
+
+
+def test_plan_verifier_routes_llm_answer_for_typed_quiz_request_to_generation_tool():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.ANSWER_QUESTION,
+            params={"question": "4페이지 OX 문제 2개 만들어줘"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "4페이지 OX 문제 2개 만들어줘"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.GENERATE_QUIZ_OX]
+    assert result.plan.actions[0].params == {
+        "quiz_type": "OX_Problem",
+        "source_request": "4페이지 OX 문제 2개 만들어줘",
+        "coverage_start_page": 4,
+        "coverage_end_page": 4,
+        "count": 2,
+    }
+    assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QUIZ"
+
+
+def test_plan_verifier_routes_quiz_check_request_to_decision_prompt():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.ANSWER_QUESTION,
+            params={"question": "내가 이해했는지 확인해줘"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "내가 이해했는지 확인해줘"},
+    )
+
+    assert result.plan.actions == [
+        OrchestratorAction(
+            type=ActionType.SEND_MESSAGE,
+            message="퀴즈로 이해도를 확인해볼까요?",
+            ui_state={"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"},
+        )
+    ]
+    assert state.pending_quiz_request == {"source_request": "내가 이해했는지 확인해줘"}
+    assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QUIZ_DECISION"
+
+
 def test_plan_verifier_accepts_message_key_as_user_question():
     state = SessionState(session_id=1, lecture_id=1)
     plan = OrchestratorPlan(actions=[
@@ -864,6 +951,80 @@ async def test_orchestration_engine_falls_back_for_empty_initial_planner_plan():
 
 
 @pytest.mark.asyncio
+async def test_orchestration_engine_routes_single_page_quiz_request_to_type_picker():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.USER_MESSAGE,
+                payload={"text": "4페이지 퀴즈 만들어줘"},
+            ),
+        )
+    ]
+
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert done.data == {"ui": {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}}
+    assert state.pending_quiz_request == {
+        "source_request": "4페이지 퀴즈 만들어줘",
+        "coverage_start_page": 4,
+        "coverage_end_page": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestration_engine_routes_quiz_check_request_to_decision_prompt():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.USER_MESSAGE,
+                payload={"text": "내가 이해했는지 확인해줘"},
+            ),
+        )
+    ]
+
+    main = [event for event in events if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main"]
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert main[-1].delta == "퀴즈로 이해도를 확인해볼까요?"
+    assert done.data == {"ui": {"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"}}
+    assert state.pending_quiz_request == {"source_request": "내가 이해했는지 확인해줘"}
+
+
+@pytest.mark.asyncio
 async def test_initial_explanation_sequence_matches_reference_flow():
     class FakeStore:
         def __init__(self, state):
@@ -1397,9 +1558,10 @@ async def test_user_message_learning_check_intent_opens_type_picker_without_plan
     ]
 
     action = dispatcher.calls[0]
-    assert action.type == ActionType.SET_UI_STATE
-    assert action.ui_state == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
-    assert events[-1].data["ui"] == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+    assert action.type == ActionType.SEND_MESSAGE
+    assert action.message == "퀴즈로 이해도를 확인해볼까요?"
+    assert action.ui_state == {"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"}
+    assert events[-1].data["ui"] == {"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"}
 
 
 @pytest.mark.asyncio
