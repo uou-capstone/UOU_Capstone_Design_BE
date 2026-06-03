@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.criteria.controller;
 
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantChatRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaSummaryResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
@@ -95,5 +96,19 @@ public class CourseReportCriteriaController {
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("X-Content-Type-Options", "nosniff");
         return assistantService.streamAssistant(courseId, req);
+    }
+
+    @Operation(summary = "Stream report criteria AI chat",
+            description = "Streams reply and operation suggestions for report criteria changes. CRUD is applied separately by FE/Spring confirmation.")
+    @PostMapping(value = "/assistant/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public Flux<ServerSentEvent<Map<String, Object>>> streamAssistantChat(
+            @PathVariable Long courseId,
+            @Valid @RequestBody CriteriaAssistantChatRequest req,
+            HttpServletResponse response) {
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-store");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        return assistantService.streamChat(courseId, req);
     }
 }

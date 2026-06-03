@@ -77,6 +77,13 @@ class FastApiBridgeClientTest {
     }
 
     @Test
+    @DisplayName("reportCriteriaAssistantChatStream → POST /bridge/report/criteria_assistant_chat_stream (streaming)")
+    void reportCriteriaAssistantChatStreamPath() {
+        client.reportCriteriaAssistantChatStream(Map.of("message", "기준 하나 추가해줘"));
+        verify(streamingClient.post()).uri("/bridge/report/criteria_assistant_chat_stream");
+    }
+
+    @Test
     @DisplayName("reportClassroomAnalyze → POST /bridge/report/classroom_analyze (json)")
     void reportClassroomAnalyzePath() {
         client.reportClassroomAnalyze(Map.of("courseId", 1));

@@ -146,6 +146,15 @@ public class FastApiBridgeClient {
                 .bodyToFlux(String.class);
     }
 
+    /** Report Criteria AI Chat — NDJSON 스트림 ({@code operation} 제안). */
+    public Flux<String> reportCriteriaAssistantChatStream(Map<String, Object> body) {
+        return aiServiceStreamingWebClient.post()
+                .uri("/bridge/report/criteria_assistant_chat_stream")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(String.class);
+    }
+
     /** Classroom 종합 리포트 — 단건 JSON. */
     public String reportClassroomAnalyze(Map<String, Object> body) {
         String raw = aiServiceWebClient.post()
