@@ -49,6 +49,13 @@ class FastApiBridgeClientTest {
     }
 
     @Test
+    @DisplayName("noticeAssistantStream -> POST /bridge/notice_assistant_stream (streaming)")
+    void noticeAssistantStreamPath() {
+        client.noticeAssistantStream(Map.of("topic", "t"));
+        verify(streamingClient.post()).uri("/bridge/notice_assistant_stream");
+    }
+
+    @Test
     @DisplayName("examStudioPdfContext → POST /bridge/exam_studio/pdf_context (json)")
     void examStudioPdfContextPath() {
         client.examStudioPdfContext(Map.of("pdfPath", "uploads/x.pdf"));
