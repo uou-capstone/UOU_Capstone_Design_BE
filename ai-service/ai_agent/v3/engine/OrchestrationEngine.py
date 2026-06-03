@@ -352,6 +352,20 @@ class OrchestrationEngine:
                     params={"question": message},
                 )
             ])
+        if event.type == AppEventType.QUIZ_DECISION:
+            if _event_accepts(event):
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.SET_UI_STATE,
+                        ui_state={"modal": "QUIZ_TYPE_PICKER"},
+                    )
+                ])
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.SET_UI_STATE,
+                    ui_state={"widget": "NEXT_PAGE_DECISION", "reason": "QUIZ_SKIPPED"},
+                )
+            ])
         if event.type == AppEventType.QUIZ_TYPE_SELECTED:
             quiz_type = _event_quiz_type(event)
             tool = _quiz_generation_tool(quiz_type)
@@ -468,6 +482,13 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.SET_UI_STATE,
                     ui_state={"modal": "QUIZ_TYPE_PICKER"},
+                )
+            ])
+        if event.type == AppEventType.QUIZ_DECISION:
+            return OrchestratorPlan(actions=[
+                OrchestratorAction(
+                    type=ActionType.SET_UI_STATE,
+                    ui_state={"widget": "NEXT_PAGE_DECISION", "reason": "QUIZ_SKIPPED"},
                 )
             ])
         if event.type == AppEventType.RETEST_DECISION and _event_accepts(event):
