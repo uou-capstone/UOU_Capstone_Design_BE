@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.course.report.criteria.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantChatRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.entity.CourseReportCriterion;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.repository.CourseReportCriterionRepository;
@@ -75,6 +76,60 @@ public class CourseReportCriteriaAssistantService {
                 .appendDoneOnComplete(false)
                 .build();
         return SseStreamSupport.wrapNdjsonByType(upstream, objectMapper, policy, this::mapError);
+    }
+
+    public Flux<ServerSentEvent<Map<String, Object>>> streamChat(Long courseId, CriteriaAssistantChatRequest req) {
+        Course course = courseAccessService.loadCourseAsTeacher(courseId);
+        List<CourseReportCriterion> additional = criterionRepository.findByCourseOrderByIdAsc(course);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("courseId", course.getId());
+        body.put("courseName", course.getTitle());
+        body.put("builtInCriteria", List.of());
+        body.put("additionalCriteria", additional.stream()
+                .map(this::toAssistantCriterion)
+                .toList());
+        if (req.getMessage() != null) {
+            body.put("message", req.getMessage());
+        }
+        if (req.getMessages() != null) {
+            body.put("messages", req.getMessages());
+        }
+        if (req.getHistory() != null) {
+            body.put("history", req.getHistory());
+        }
+        if (req.getCurrentProposal() != null) {
+            body.put("currentProposal", req.getCurrentProposal());
+        }
+        body.put("model", req.getModel());
+        if (req.getResponseJsonSchema() != null) {
+            body.put("responseJsonSchema", req.getResponseJsonSchema());
+        }
+
+        log.info("Criteria assistant chat stream 시작: courseId={}, additionalCriteria={}, hasMessages={}, hasMessage={}",
+                courseId, additional.size(),
+                req.getMessages() != null && !req.getMessages().isEmpty(),
+                req.getMessage() != null && !req.getMessage().isBlank());
+
+        Flux<String> upstream = fastApiBridgeClient.reportCriteriaAssistantChatStream(body);
+        SseStreamPolicy policy = SseStreamPolicy.builder()
+                .idleTimeout(IDLE_TIMEOUT)
+                .heartbeatPassthrough(true)
+                .appendDoneOnComplete(false)
+                .build();
+        return SseStreamSupport.wrapNdjsonByType(upstream, objectMapper, policy, this::mapError);
+    }
+
+    private Map<String, Object> toAssistantCriterion(CourseReportCriterion c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", c.getId());
+        m.put("name", c.getLabel());
+        m.put("label", c.getLabel());
+        m.put("description", c.getDescription());
+        m.put("weight", c.getWeight());
+        m.put("updatedAt", c.getUpdatedAt() != null ? c.getUpdatedAt().toString() : null);
+        m.put("isBuiltIn", false);
+        return m;
     }
 
     private Map<String, Object> mapError(Throwable e) {

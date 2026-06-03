@@ -109,6 +109,11 @@ public class LearningChatPersistenceService {
         session.markEnded(LocalDateTime.now());
     }
 
+    @Transactional
+    public int endActiveSessionsByLecture(Long lectureId) {
+        return chatSessionRepository.endActiveSessionsByLecture(lectureId, LocalDateTime.now());
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<LearningChatSessionResponse> getSessions(Long lectureId, Long userId, Pageable rawPageable) {
         Pageable pageable = PageableSupport.validate(rawPageable, SORT_WHITELIST, DEFAULT_SORT);

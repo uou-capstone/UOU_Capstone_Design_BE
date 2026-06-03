@@ -4,6 +4,38 @@
 
 ---
 
+## [2026-06-03] Report Criteria Assistant Chat Spring 프록시 추가
+
+### 증상
+
+FastAPI `develop` 문서에는 `POST /bridge/report/criteria_assistant_chat_stream` 이 추가되어 있었지만, Spring 공개 API에는 추천형 `POST /api/courses/{courseId}/reports/criteria/assistant/stream` 만 있었다. FE가 "개념 이해도 기준 하나 추가해줘" 같은 자연어 변경 요청을 operation 제안으로 받으려면 Spring에서 chat bridge를 프록시할 엔드포인트가 필요했다.
+
+### 원인
+
+초기 MergeEdu bridge 연동 당시 Report Criteria는 `criterion_suggestion`을 여러 번 내려주는 추천형 스트림만 구현했다. 이후 FastAPI 쪽에 `message/messages`, `history`, `currentProposal` 기반으로 `draftCriterion`, `reviseCriterion`, `createCriterion`, `updateCriterion`, `deleteCriterion`, `messageOnly` operation을 반환하는 chat endpoint가 추가됐지만 Spring `FastApiBridgeClient`와 criteria controller/service에는 대응 메서드가 없었다.
+
+### 조치
+
+- `POST /api/courses/{courseId}/reports/criteria/assistant/chat/stream` 을 추가하고 `TEACHER` 권한 + SSE 헤더를 기존 assistant stream과 동일하게 적용했다.
+- `CriteriaAssistantChatRequest` 를 추가해 `message` 또는 `messages[]` 중 하나를 필수 검증하고, `history`, `currentProposal`, `model`, `responseJsonSchema` 를 FastAPI로 전달한다.
+- `CourseReportCriteriaAssistantService.streamChat` 이 강의명과 현재 DB 추가 평가항목을 모아 `/bridge/report/criteria_assistant_chat_stream` 으로 forward한다. DB 기준은 FastAPI가 수정 불가 대상으로 취급하지 않도록 `existingCriteria[]`가 아니라 `additionalCriteria[]`로 전달한다.
+- `FastApiBridgeClient.reportCriteriaAssistantChatStream` 을 추가하고 streaming WebClient를 사용하도록 고정했다.
+
+### 검증
+
+- `./gradlew.bat test --tests io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClientTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaAssistantServiceTest --no-daemon`
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClient.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/controller/CourseReportCriteriaController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/service/CourseReportCriteriaAssistantService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/dto/CriteriaAssistantChatRequest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClientTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/service/CourseReportCriteriaAssistantServiceTest.java`
+
+---
+
 ## [2026-05-12] 교사 알림 확장 — 학생 이벤트 8종 + 자기 작업 토글
 
 ### 배경

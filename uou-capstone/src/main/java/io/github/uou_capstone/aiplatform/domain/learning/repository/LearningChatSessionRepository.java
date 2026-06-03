@@ -5,9 +5,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +26,15 @@ public interface LearningChatSessionRepository extends JpaRepository<LearningCha
                                                                                                               Long lectureId);
 
     Page<LearningChatSession> findByUserIdAndLectureId(Long userId, Long lectureId, Pageable pageable);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE LearningChatSession s
+            SET s.endedAt = :endedAt, s.lastMessageAt = :endedAt
+            WHERE s.lecture.id = :lectureId AND s.endedAt IS NULL
+            """)
+    int endActiveSessionsByLecture(@Param("lectureId") Long lectureId,
+                                   @Param("endedAt") LocalDateTime endedAt);
 
     @Query("""
             SELECT DISTINCT s.lecture.id
