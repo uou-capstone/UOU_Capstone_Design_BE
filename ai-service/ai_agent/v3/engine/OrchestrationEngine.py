@@ -309,7 +309,7 @@ class OrchestrationEngine:
                         params=_explain_page_params(state, event.type.value),
                     )
                 ])
-            if _is_quiz_request_message(message):
+            if _is_clear_quiz_request_message(message):
                 quiz_type = _infer_quiz_type_from_message(message)
                 pending_request = _quiz_request_metadata_from_message(message)
                 if pending_request:
@@ -332,6 +332,17 @@ class OrchestrationEngine:
                     OrchestratorAction(
                         type=ActionType.SET_UI_STATE,
                         ui_state={"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"},
+                    )
+                ])
+            if _is_quiz_check_request_message(message):
+                pending_request = _quiz_request_metadata_from_message(message)
+                if pending_request:
+                    state.pending_quiz_request = pending_request
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.SEND_MESSAGE,
+                        message="퀴즈로 이해도를 확인해볼까요?",
+                        ui_state={"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"},
                     )
                 ])
             return OrchestratorPlan(actions=[
@@ -618,6 +629,10 @@ _PAGE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:페이지|page|p)?\s*(\d{1,4})\s*(?:~|-|부터|에서)\s*(\d{1,4})\s*(?:페이지|쪽|page|p)?", re.IGNORECASE),
     re.compile(r"(?:페이지|page|p)\s*(\d{1,4})\s*(?:부터|에서|~|-)\s*(\d{1,4})", re.IGNORECASE),
 )
+_SINGLE_PAGE_QUIZ_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(\d{1,4})\s*(?:페이지|쪽|page|p\b).{0,24}(퀴즈|quiz|시험|테스트|문제|문항)", re.IGNORECASE),
+    re.compile(r"(퀴즈|quiz|시험|테스트|문제|문항).{0,24}(\d{1,4})\s*(?:페이지|쪽|page|p\b)", re.IGNORECASE),
+)
 _QUIZ_TYPE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(객관식|5\s*지|오지선다|five\s*choice|multiple\s*choice|mcq)", re.IGNORECASE), "Five_Choice"),
     (re.compile(r"(\bOX\b|O/X|오엑스|참\s*거짓|true\s*/?\s*false|true\s*false)", re.IGNORECASE), "OX_Problem"),
@@ -640,8 +655,17 @@ def _is_explicit_page_navigation_message(message: str) -> bool:
 
 
 def _is_quiz_request_message(message: str) -> bool:
+    return _is_clear_quiz_request_message(message) or _is_quiz_check_request_message(message)
+
+
+def _is_clear_quiz_request_message(message: str) -> bool:
     text = message.strip()
-    return bool(_QUIZ_REQUEST_RE.search(text) or _QUIZ_CHECK_REQUEST_RE.search(text))
+    return bool(_QUIZ_REQUEST_RE.search(text))
+
+
+def _is_quiz_check_request_message(message: str) -> bool:
+    text = message.strip()
+    return bool(_QUIZ_CHECK_REQUEST_RE.search(text))
 
 
 def _infer_quiz_type_from_message(message: str) -> str:
@@ -684,6 +708,24 @@ def _infer_quiz_page_range_from_message(message: str) -> tuple[int, int] | None:
         if start <= 0 or end <= 0:
             return None
         return (min(start, end), max(start, end))
+    for pattern in _SINGLE_PAGE_QUIZ_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        page = _first_positive_int(match.groups())
+        if page is not None:
+            return (page, page)
+    return None
+
+
+def _first_positive_int(values: tuple[object, ...]) -> int | None:
+    for value in values:
+        try:
+            parsed = int(str(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 1:
+            return parsed
     return None
 
 

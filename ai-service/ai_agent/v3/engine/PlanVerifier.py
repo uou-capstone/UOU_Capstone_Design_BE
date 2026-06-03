@@ -13,6 +13,7 @@ from ai_agent.types.domain import (
     SessionState,
     ToolName,
 )
+from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 
 
 ACTION_HARD_CAP = 8
@@ -84,6 +85,42 @@ _QUIZ_FLOW_TOOLS = {
     ToolName.GENERATE_QUIZ_ESSAY,
     ToolName.GENERATE_QUIZ_FLASH,
 }
+_QUIZ_REQUEST_RE = re.compile(
+    r"("
+    r"(퀴즈|quiz|시험|테스트|문제|문항).{0,18}(만들|생성|내|내줘|출제|풀|풀어|보자|볼래|진행|확인|연습|줘)"
+    r"|"
+    r"(만들|생성|내|내줘|출제|풀|풀어|보자|볼래|진행|확인|연습).{0,18}(퀴즈|quiz|시험|테스트|문제|문항)"
+    r"|"
+    r"(복습|연습|확인|점검|자가\s*진단|자기\s*진단).{0,12}(문제|문항|퀴즈|시험|테스트|문제\s*풀이)"
+    r"|"
+    r"(객관식|5지선다|오지선다|mcq|multiple\s*choice|ox|o/x|오엑스|참거짓|true\s*false|단답|서술|논술|essay|플래시\s*카드|플래시카드|flash\s*card).{0,18}(퀴즈|시험|문제|문항|만들|생성|내|내줘|출제)"
+    r")",
+    re.IGNORECASE,
+)
+_QUIZ_CHECK_REQUEST_RE = re.compile(
+    r"("
+    r"(내가|제가|나|우리)?.{0,8}(이해|학습|공부|내용).{0,16}(했는지|한\s*건지|됐는지|되는지|수준|상태)?.{0,12}(확인|점검|체크|테스트|자가\s*진단|자기\s*진단)"
+    r"|"
+    r"(이해|학습|공부|내용).{0,12}(확인|점검|체크|테스트|자가\s*진단|자기\s*진단).{0,12}(해줘|해\s*줘|하고\s*싶|볼래|해볼래)"
+    r")",
+    re.IGNORECASE,
+)
+_QUIZ_TYPE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(객관식|5\s*지|오지선다|five\s*choice|multiple\s*choice|mcq)", re.IGNORECASE), "Five_Choice"),
+    (re.compile(r"(\bOX\b|O/X|오엑스|참\s*거짓|true\s*/?\s*false|true\s*false)", re.IGNORECASE), "OX_Problem"),
+    (re.compile(r"(플래시\s*카드|플래시카드|flash\s*card)", re.IGNORECASE), "Flash_Card"),
+    (re.compile(r"(단답|short\s*answer|short)", re.IGNORECASE), "Short_Answer"),
+    (re.compile(r"(서술|논술|essay|subjective)", re.IGNORECASE), "Essay"),
+)
+_QUIZ_COUNT_RE = re.compile(r"(\d{1,2})\s*(개|문항|문제|questions?)", re.IGNORECASE)
+_PAGE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:페이지|page|p)?\s*(\d{1,4})\s*(?:~|-|부터|에서)\s*(\d{1,4})\s*(?:페이지|쪽|page|p)?", re.IGNORECASE),
+    re.compile(r"(?:페이지|page|p)\s*(\d{1,4})\s*(?:부터|에서|~|-)\s*(\d{1,4})", re.IGNORECASE),
+)
+_SINGLE_PAGE_QUIZ_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(\d{1,4})\s*(?:페이지|쪽|page|p\b).{0,24}(퀴즈|quiz|시험|테스트|문제|문항)", re.IGNORECASE),
+    re.compile(r"(퀴즈|quiz|시험|테스트|문제|문항).{0,24}(\d{1,4})\s*(?:페이지|쪽|page|p\b)", re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -290,6 +327,40 @@ class PlanVerifier:
             return list(actions)
         if _has_quiz_flow_action(actions):
             return list(actions)
+        if _is_clear_quiz_request_message(user_message):
+            metadata = _quiz_request_metadata_from_message(user_message)
+            if metadata:
+                state.pending_quiz_request = metadata
+            quiz_type = _infer_quiz_type_from_message(user_message)
+            tool = _quiz_generation_tool(quiz_type)
+            warnings.append(self._warning(
+                "USER_MESSAGE_ROUTED_TO_QUIZ",
+                "Quiz-like USER_MESSAGE was constrained to the quiz flow instead of ANSWER_QUESTION.",
+                tool=tool.value if tool else None,
+            ))
+            if tool:
+                return [OrchestratorAction(
+                    type=ActionType.CALL_TOOL,
+                    tool=tool,
+                    params={"quiz_type": quiz_type, **metadata},
+                )]
+            return [OrchestratorAction(
+                type=ActionType.SET_UI_STATE,
+                ui_state={"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"},
+            )]
+        if _is_quiz_check_request_message(user_message):
+            metadata = _quiz_request_metadata_from_message(user_message)
+            if metadata:
+                state.pending_quiz_request = metadata
+            warnings.append(self._warning(
+                "USER_MESSAGE_ROUTED_TO_QUIZ_DECISION",
+                "Quiz-check-like USER_MESSAGE was constrained to a quiz decision prompt.",
+            ))
+            return [OrchestratorAction(
+                type=ActionType.SEND_MESSAGE,
+                message="퀴즈로 이해도를 확인해볼까요?",
+                ui_state={"widget": "QUIZ_DECISION", "reason": "USER_QUIZ_CHECK_REQUEST"},
+            )]
 
         existing_answer = next(
             (
@@ -449,6 +520,96 @@ def _page_has_quiz_activity(state: SessionState, page_number: int) -> bool:
     if state.learner.quiz_attempt_counts.get(str(page_number), 0) > 0:
         return True
     return any(record.page_number == page_number for record in state.quiz_history)
+
+
+def _is_quiz_request_message(message: str) -> bool:
+    return _is_clear_quiz_request_message(message) or _is_quiz_check_request_message(message)
+
+
+def _is_clear_quiz_request_message(message: str) -> bool:
+    text = message.strip()
+    return bool(_QUIZ_REQUEST_RE.search(text))
+
+
+def _is_quiz_check_request_message(message: str) -> bool:
+    text = message.strip()
+    return bool(_QUIZ_CHECK_REQUEST_RE.search(text))
+
+
+def _infer_quiz_type_from_message(message: str) -> str:
+    text = message.strip()
+    for pattern, quiz_type in _QUIZ_TYPE_PATTERNS:
+        if pattern.search(text):
+            return quiz_type
+    return ""
+
+
+def _quiz_request_metadata_from_message(message: str) -> dict[str, object]:
+    metadata: dict[str, object] = {"source_request": message.strip()}
+    page_range = _infer_quiz_page_range_from_message(message)
+    if page_range:
+        start, end = page_range
+        metadata["coverage_start_page"] = start
+        metadata["coverage_end_page"] = end
+    count = _infer_quiz_count_from_message(message)
+    if count is not None:
+        metadata["count"] = count
+    return metadata
+
+
+def _infer_quiz_count_from_message(message: str) -> int | None:
+    match = _QUIZ_COUNT_RE.search(message.strip())
+    if not match:
+        return None
+    count = int(match.group(1))
+    return max(1, min(count, 20))
+
+
+def _infer_quiz_page_range_from_message(message: str) -> tuple[int, int] | None:
+    text = message.strip()
+    for pattern in _PAGE_RANGE_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2))
+        if start <= 0 or end <= 0:
+            return None
+        return (min(start, end), max(start, end))
+    for pattern in _SINGLE_PAGE_QUIZ_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        page = _first_positive_int(match.groups())
+        if page is not None:
+            return (page, page)
+    return None
+
+
+def _first_positive_int(values: tuple[object, ...]) -> int | None:
+    for value in values:
+        try:
+            parsed = int(str(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 1:
+            return parsed
+    return None
+
+
+def _quiz_generation_tool(quiz_type: str) -> ToolName | None:
+    normalized = normalize_exam_type_string(quiz_type)
+    if normalized == "Five_Choice":
+        return ToolName.GENERATE_QUIZ_FIVE_CHOICE
+    if normalized == "OX_Problem":
+        return ToolName.GENERATE_QUIZ_OX
+    if normalized == "Short_Answer":
+        return ToolName.GENERATE_QUIZ_SHORT
+    if normalized == "Essay":
+        return ToolName.GENERATE_QUIZ_ESSAY
+    if normalized == "Flash_Card":
+        return ToolName.GENERATE_QUIZ_FLASH
+    return None
 
 
 def _event_page_number(payload: dict[str, Any]) -> int | None:
