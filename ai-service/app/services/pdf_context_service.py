@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Any
@@ -160,6 +161,41 @@ _DOMAIN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "udp": ("user datagram protocol", "connectionless", "best effort"),
 }
 
+_PHONETIC_TERM_PREFIX = "__phonetic__:"
+_KOREAN_QUERY_STOPWORDS = {
+    "그거", "내용", "대해", "대한", "설명", "설명해", "설명해줘", "알려", "알려줘",
+    "어디", "어느", "몇", "페이지", "페이지에", "있어", "있나", "있나요", "있는데",
+    "나와", "나오", "나오는", "보여", "보여줘", "찾아", "찾아줘", "현재", "이전",
+    "다음", "내가", "제대로", "이해", "했는지", "같아", "봐줘", "관련",
+}
+_KOREAN_PARTICLES = (
+    "으로부터", "로부터", "에서는", "에게는", "한테는", "이라는", "라는", "에서는",
+    "에서", "에게", "한테", "으로", "부터", "까지", "처럼", "보다", "이나", "거나",
+    "은", "는", "이", "가", "을", "를", "에", "도", "만", "와", "과", "로", "요",
+)
+_ENGLISH_STOPWORDS = {
+    "the", "and", "for", "with", "this", "that", "from", "page", "pages", "lecture",
+    "overview", "chapter", "current", "next", "previous", "between", "about", "into",
+}
+
+_INITIAL_VARIANTS: tuple[tuple[str, ...], ...] = (
+    ("g", "k"), ("kk",), ("n",), ("d", "t"), ("tt",), ("r", "l"), ("m",), ("b", "p"),
+    ("pp",), ("s",), ("ss",), ("",), ("j", "z"), ("jj",), ("ch",), ("k",), ("t",),
+    ("p", "f"), ("h",),
+)
+_MEDIAL_VARIANTS: tuple[tuple[str, ...], ...] = (
+    ("a",), ("ae", "e"), ("ya",), ("yae", "ye"), ("eo", "e", "er", "u", "o"), ("e",),
+    ("yeo", "yu", "yo"), ("ye",), ("o",), ("wa",), ("wae", "we"), ("oe", "we"),
+    ("yo",), ("u", "oo", "ou"), ("wo", "weo"), ("we",), ("wi",), ("yu",),
+    ("eu", "u"), ("ui", "y"), ("i", "ee", "y"),
+)
+_FINAL_VARIANTS: tuple[tuple[str, ...], ...] = (
+    ("",), ("k", "g"), ("k",), ("ks",), ("n",), ("nj",), ("nh",), ("t", "d"),
+    ("l", "r"), ("lk",), ("lm",), ("lb",), ("ls",), ("lt",), ("lp",), ("lh",),
+    ("m",), ("p", "b"), ("ps",), ("t", "s"), ("t", "ss"), ("ng",), ("t", "j"),
+    ("t", "ch"), ("k",), ("t",), ("p",), ("h",),
+)
+
 
 def _normalize_text(value: str) -> str:
     return " ".join(_WORD_RE.findall(value.lower()))
@@ -171,6 +207,7 @@ def _expand_query_terms(query: str) -> list[str]:
     for token in _WORD_RE.findall(query.lower()):
         if len(token) >= 2:
             terms.add(token)
+        terms.update(_build_phonetic_query_terms(token))
         collapsed = token.replace(" ", "")
         for key, values in _DOMAIN_SYNONYMS.items():
             if key in collapsed:
@@ -184,7 +221,7 @@ def _expand_query_terms(query: str) -> list[str]:
         terms.update(_DOMAIN_SYNONYMS["혼잡제어"])
     if "신뢰" in normalized:
         terms.update(_DOMAIN_SYNONYMS["신뢰"])
-    return sorted({term.strip().lower() for term in terms if term.strip()}, key=lambda item: (-len(item), item))
+    return sorted({term.strip().lower() for term in terms if term.strip()}, key=_term_sort_key)
 
 
 def _score_page(text: str, terms: list[str]) -> tuple[float, list[str]]:
@@ -194,7 +231,15 @@ def _score_page(text: str, terms: list[str]) -> tuple[float, list[str]]:
 
     score = 0.0
     matched: list[str] = []
+    english_tokens = _english_tokens(text)
     for term in terms:
+        if term.startswith(_PHONETIC_TERM_PREFIX):
+            match, ratio = _best_phonetic_match(term, english_tokens)
+            if match:
+                matched.append(match)
+                score += 5.0 + (ratio * 5.0)
+            continue
+
         normalized_term = _normalize_text(term)
         if not normalized_term:
             continue
@@ -217,6 +262,127 @@ def _score_page(text: str, terms: list[str]) -> tuple[float, list[str]]:
     if matched and len(normalized) < 350:
         score *= 0.85
     return score, matched
+
+
+def _term_sort_key(term: str) -> tuple[int, int, str]:
+    if term.startswith(_PHONETIC_TERM_PREFIX):
+        return (0, -len(term), term)
+    return (1, -len(term), term)
+
+
+def _build_phonetic_query_terms(token: str) -> set[str]:
+    stripped = _strip_korean_query_token(token)
+    if not stripped or stripped in _KOREAN_QUERY_STOPWORDS or not _contains_hangul(stripped):
+        return set()
+    if len(stripped) < 2 or len(stripped) > 7:
+        return set()
+
+    variants = _romanize_hangul_variants(stripped, limit=24)
+    if not variants:
+        return set()
+    return {_PHONETIC_TERM_PREFIX + stripped + ":" + "|".join(sorted(variants)[:24])}
+
+
+def _strip_korean_query_token(token: str) -> str:
+    stripped = re.sub(r"[^a-z0-9가-힣]", "", token.lower())
+    for particle in sorted(_KOREAN_PARTICLES, key=len, reverse=True):
+        if stripped.endswith(particle) and len(stripped) > len(particle) + 1:
+            stripped = stripped[: -len(particle)]
+            break
+    return stripped
+
+
+def _contains_hangul(value: str) -> bool:
+    return any("가" <= char <= "힣" for char in value)
+
+
+def _romanize_hangul_variants(value: str, *, limit: int = 24) -> set[str]:
+    variants = {""}
+    for char in value:
+        syllable_variants = _romanize_syllable_variants(char)
+        next_variants: set[str] = set()
+        for prefix in variants:
+            for suffix in syllable_variants:
+                next_variants.add(prefix + suffix)
+                if len(next_variants) >= limit:
+                    break
+            if len(next_variants) >= limit:
+                break
+        variants = next_variants or variants
+    expanded = set(variants)
+    for variant in variants:
+        expanded.add(_smooth_romanized_variant(variant))
+    return {variant for variant in expanded if len(variant) >= 3}
+
+
+def _romanize_syllable_variants(char: str) -> tuple[str, ...]:
+    code = ord(char)
+    if not 0xAC00 <= code <= 0xD7A3:
+        return (char.lower(),)
+
+    offset = code - 0xAC00
+    initial = offset // 588
+    medial = (offset % 588) // 28
+    final = offset % 28
+
+    variants: list[str] = []
+    for initial_text in _INITIAL_VARIANTS[initial][:2]:
+        for medial_text in _MEDIAL_VARIANTS[medial][:3]:
+            for final_text in _FINAL_VARIANTS[final][:2]:
+                variants.append(initial_text + medial_text + final_text)
+    return tuple(dict.fromkeys(variants[:8]))
+
+
+def _english_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z][a-z0-9]{2,}", text.lower())
+        if token not in _ENGLISH_STOPWORDS
+    }
+
+
+def _best_phonetic_match(term: str, english_tokens: set[str]) -> tuple[str, float]:
+    try:
+        original, variants_text = term[len(_PHONETIC_TERM_PREFIX):].split(":", 1)
+    except ValueError:
+        return "", 0.0
+
+    variants = [variant for variant in variants_text.split("|") if len(variant) >= 3]
+    best_token = ""
+    best_ratio = 0.0
+    for variant in variants:
+        normalized_variant = _squeeze_repeated_ascii(variant)
+        for token in english_tokens:
+            normalized_token = _squeeze_repeated_ascii(token)
+            ratio = max(
+                SequenceMatcher(None, normalized_variant, normalized_token).ratio(),
+                SequenceMatcher(None, variant, token).ratio(),
+            )
+            if normalized_variant and (
+                normalized_variant in normalized_token or normalized_token in normalized_variant
+            ):
+                ratio = max(ratio, 0.92)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_token = token
+
+    if best_ratio >= 0.78:
+        return best_token, best_ratio
+    return original if best_ratio >= 0.9 else "", best_ratio
+
+
+def _squeeze_repeated_ascii(value: str) -> str:
+    return re.sub(r"([a-z0-9])\1+", r"\1", value.lower())
+
+
+def _smooth_romanized_variant(value: str) -> str:
+    return (
+        value.lower()
+        .replace("aou", "ou")
+        .replace("aoo", "ou")
+        .replace("teo", "ter")
+        .replace("deo", "der")
+    )
 
 
 pdf_context_service = PdfContextService()

@@ -75,6 +75,9 @@ class QuizRecord(BaseModel):
     score: Optional[float] = None
     passed: Optional[bool] = None
     graded_at: Optional[str] = None
+    coverage_start_page: Optional[int] = None
+    coverage_end_page: Optional[int] = None
+    source_request: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +124,12 @@ class SessionState(BaseModel):
     qa_threads: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
     integrated_memory: Dict[str, Any] = Field(default_factory=dict)
     active_intervention: Optional[Dict[str, Any]] = None
+    pending_quiz_request: Optional[Dict[str, Any]] = None
     quiz_assessments: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_summary: Optional[str] = None
     page_index_path: Optional[str] = None
+    gemini_file_ref: Optional[Dict[str, Any]] = None
+    pdf_fingerprint: Optional[str] = None
     plan_verification_warnings: List[Dict[str, Any]] = Field(default_factory=list)
     waiting_for_answer: bool = False
     current_question_id: Optional[str] = None

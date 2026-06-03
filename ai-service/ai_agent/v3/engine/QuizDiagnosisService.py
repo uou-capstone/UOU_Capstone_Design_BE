@@ -267,7 +267,12 @@ class QuizDiagnosisService:
     def _diagnostic_prompt(focus_concepts: list[str], missed_questions: list[dict[str, Any]]) -> str:
         focus = ", ".join(focus_concepts) or "현재 페이지 핵심 개념"
         missed = len(missed_questions)
-        return f"{focus}에서 {missed}개 오답이 발생했다. 학생 답변의 오개념을 먼저 확인하고 짧게 교정한다."
+        missed_text = f"{missed}개 오답이 나온 " if missed else ""
+        return (
+            f"이번에는 바로 전체 복습으로 가지 않고, **{focus}** 쪽에서 {missed_text}"
+            "어디가 막혔는지 먼저 짚어볼게요.\n\n"
+            "개념 자체가 헷갈렸는지, 적용 이유가 헷갈렸는지, 문제 풀이 과정이 헷갈렸는지 한 줄로 말해 주세요."
+        )
 
     @staticmethod
     def _repair_goal(focus_concepts: list[str]) -> str:

@@ -1,4 +1,5 @@
 import json
+import importlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -949,7 +950,9 @@ async def test_user_message_quiz_intent_generates_typed_quiz_without_planner():
     action = dispatcher.calls[0][1]
     event_payload = dispatcher.calls[0][2]
     assert action.tool == ToolName.GENERATE_QUIZ_OX
-    assert action.params == {"quiz_type": "OX_Problem", "count": 2}
+    assert action.params["quiz_type"] == "OX_Problem"
+    assert action.params["count"] == 2
+    assert action.params["source_request"] == "OX 문제 2개 만들어줘"
     assert event_payload["question"] == "OX 문제 2개 만들어줘"
     assert events[-1].data["quiz_type"] == "OX_Problem"
 
@@ -1005,6 +1008,71 @@ async def test_user_message_generic_quiz_intent_opens_type_picker_without_planne
     assert action.type == ActionType.SET_UI_STATE
     assert action.ui_state == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
     assert events[-1].data["ui"] == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+
+
+@pytest.mark.asyncio
+async def test_user_message_quiz_page_range_survives_type_picker_round_trip():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("quiz request and type selection should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": action.ui_state} if action.type == ActionType.SET_UI_STATE else {"quiz": []},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=9)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    _ = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "페이지 15~20의 내용을 기반으로 퀴즈 생성해줘"}),
+        )
+    ]
+    assert state.pending_quiz_request["coverage_start_page"] == 15
+    assert state.pending_quiz_request["coverage_end_page"] == 20
+
+    _ = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.QUIZ_TYPE_SELECTED, payload={"quizType": "SHORT"}),
+        )
+    ]
+
+    action = dispatcher.calls[-1][1]
+    assert action.tool == ToolName.GENERATE_QUIZ_SHORT
+    assert action.params["quiz_type"] == "Short_Answer"
+    assert action.params["coverage_start_page"] == 15
+    assert action.params["coverage_end_page"] == 20
+    assert action.params["source_request"] == "페이지 15~20의 내용을 기반으로 퀴즈 생성해줘"
 
 
 @pytest.mark.asyncio
@@ -1849,6 +1917,12 @@ async def test_low_score_repair_and_retest_sequence_matches_reference_flow():
                     }
                     assessment = self.diagnosis.record_assessment(state, record, grading, user_answers)
                     yield NdjsonEvent(
+                        type=NdjsonEventType.AGENT_DELTA,
+                        agent="orchestrator",
+                        channel="main",
+                        delta=state.active_intervention["diagnosticPrompt"],
+                    )
+                    yield NdjsonEvent(
                         type=NdjsonEventType.DONE,
                         agent="grader",
                         tool="AUTO_GRADE_MCQ_OX",
@@ -1959,6 +2033,12 @@ async def test_low_score_repair_and_retest_sequence_matches_reference_flow():
     failed_done = [event for event in failed_grade_events if event.type == NdjsonEventType.DONE][-1]
     assert failed_done.data["passed"] is False
     assert failed_done.data["ui"] == {"widget": "REVIEW_DECISION"}
+    assert any(
+        event.agent == "orchestrator"
+        and event.channel == "main"
+        and "어디가 막혔는지 먼저 짚어볼게요" in (event.delta or "")
+        for event in failed_grade_events
+    )
     assert state.active_intervention["status"] == "AWAITING_USER_RESPONSE"
     source_artifact_id = state.active_intervention["sourceArtifactId"]
 
@@ -2484,6 +2564,160 @@ async def test_tool_dispatcher_blocks_quiz_generation_without_page_context():
     assert done.data["source"] == "FALLBACK"
     assert done.data["reason"] == "MISSING_CONTEXT"
     assert not state.quiz_history
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatcher_uses_page_range_context_for_quiz_generation():
+    class FakeBridge:
+        pass
+
+    class FakeLearningContext:
+        page_number = 9
+        coverage_start_page = 15
+        coverage_end_page = 20
+        has_page_text = True
+
+        def build_quiz_context(self, explanation=None):
+            return "[퀴즈 출제 범위]\n15~20페이지\n\n[페이지 15]\nA\n\n[페이지 20]\nB"
+
+    class FakeCollector:
+        def __init__(self):
+            self.calls = []
+
+        def collect_for_quiz(self, state, page_state, *, coverage_start_page=None, coverage_end_page=None):
+            self.calls.append((coverage_start_page, coverage_end_page))
+            return FakeLearningContext()
+
+    class FakeQuiz:
+        def __init__(self):
+            self.calls = []
+
+        async def run_stream(self, quiz_type, lecture_content, profile, learner_hint, count, context_label="현재 페이지"):
+            self.calls.append((quiz_type, lecture_content, count, context_label))
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="quiz",
+                tool="GENERATE_QUIZ",
+                final=True,
+                data={"quiz": [{"id": 1, "prompt": "범위 기반 문제"}], "quiz_type": quiz_type},
+            )
+
+    dispatcher = ToolDispatcher(FakeBridge())  # type: ignore[arg-type]
+    collector = FakeCollector()
+    quiz = FakeQuiz()
+    dispatcher._context_collector = collector  # type: ignore[assignment]
+    dispatcher._quiz = quiz  # type: ignore[assignment]
+    state = SessionState(session_id=1, lecture_id=1, current_page=9)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.GENERATE_QUIZ_SHORT,
+            params={
+                "quiz_type": "Short_Answer",
+                "coverage_start_page": 15,
+                "coverage_end_page": 20,
+                "source_request": "페이지 15~20 기반 퀴즈",
+            },
+        )
+    ])
+
+    events = [event async for event in dispatcher.dispatch(plan, state, {})]
+
+    assert collector.calls == [(15, 20)]
+    assert quiz.calls[0][1].startswith("[퀴즈 출제 범위]\n15~20페이지")
+    assert quiz.calls[0][3] == "15~20페이지"
+    assert events[-1].data["quiz"][0]["prompt"] == "범위 기반 문제"
+    assert state.quiz_history[-1].coverage_start_page == 15
+    assert state.quiz_history[-1].coverage_end_page == 20
+    assert state.quiz_history[-1].source_request == "페이지 15~20 기반 퀴즈"
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatcher_retries_qa_without_file_ref_on_initial_error(monkeypatch):
+    tool_dispatcher_module = importlib.import_module("ai_agent.v3.engine.ToolDispatcher")
+
+    class FakeBridge:
+        def __init__(self):
+            self.invalidated = None
+
+        async def invalidate_pdf_file_ref_cache(self, pdf_path, *, fingerprint=None):
+            self.invalidated = (pdf_path, fingerprint)
+
+    class FakeLearningContext:
+        page_number = 1
+        page_text = "현재 페이지 텍스트"
+        prev_text = ""
+        next_text = ""
+        learner_memory_digest = ""
+        qa_thread_digest = ""
+        related_pages_digest = ""
+
+    class FakeCollector:
+        def collect_for_question(self, state, question, page_state):
+            return FakeLearningContext()
+
+    class FakeQa:
+        def __init__(self):
+            self.parts = []
+
+        async def run_stream(self, *args, pdf_original_part=None, **kwargs):
+            self.parts.append(pdf_original_part)
+            if pdf_original_part is not None:
+                yield NdjsonEvent(
+                    type=NdjsonEventType.ERROR,
+                    agent="qa",
+                    tool="ANSWER_QUESTION",
+                    message="stale file uri",
+                )
+                return
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent="qa",
+                tool="ANSWER_QUESTION",
+                channel="main",
+                delta="텍스트 fallback 답변",
+            )
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="qa",
+                tool="ANSWER_QUESTION",
+                final=True,
+                data={},
+            )
+
+    async def fake_ensure_file_part(bridge, state, pdf_path):
+        state.pdf_fingerprint = "fingerprint-1"
+        state.gemini_file_ref = {"fileUri": "gemini://stale"}
+        return "PDF_PART"
+
+    monkeypatch.setattr(
+        tool_dispatcher_module.pdf_file_ref_service,
+        "ensure_file_part",
+        fake_ensure_file_part,
+    )
+
+    bridge = FakeBridge()
+    dispatcher = ToolDispatcher(bridge)  # type: ignore[arg-type]
+    fake_qa = FakeQa()
+    dispatcher._qa = fake_qa  # type: ignore[assignment]
+    dispatcher._context_collector = FakeCollector()  # type: ignore[assignment]
+    state = SessionState(session_id=1, lecture_id=1, pdf_path="/uploads/lecture.pdf")
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.ANSWER_QUESTION,
+            params={"question": "지터는 어디에 있어?"},
+        )
+    ])
+
+    events = [event async for event in dispatcher.dispatch(plan, state, {})]
+
+    assert fake_qa.parts == ["PDF_PART", None]
+    assert bridge.invalidated == ("/uploads/lecture.pdf", "fingerprint-1")
+    assert not any(event.type == NdjsonEventType.ERROR for event in events)
+    assert any(event.delta == "텍스트 fallback 답변" for event in events)
+    assert state.gemini_file_ref is None
+    assert state.pdf_fingerprint is None
 
 
 @pytest.mark.asyncio
