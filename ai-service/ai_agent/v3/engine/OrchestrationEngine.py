@@ -250,6 +250,28 @@ class OrchestrationEngine:
                         params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
                     )
                 ])
+            if _is_quiz_request_message(message):
+                quiz_type = _infer_quiz_type_from_message(message)
+                if quiz_type:
+                    tool = _quiz_generation_tool(quiz_type)
+                    if tool:
+                        params = {"quiz_type": quiz_type}
+                        count = _infer_quiz_count_from_message(message)
+                        if count is not None:
+                            params["count"] = count
+                        return OrchestratorPlan(actions=[
+                            OrchestratorAction(
+                                type=ActionType.CALL_TOOL,
+                                tool=tool,
+                                params=params,
+                            )
+                        ])
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.SET_UI_STATE,
+                        ui_state={"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"},
+                    )
+                ])
             return OrchestratorPlan(actions=[
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
@@ -462,6 +484,34 @@ _EXPLICIT_PAGE_NAVIGATION_MESSAGE_RE = re.compile(
     r"^\s*\d{1,4}\s*(페이지|쪽|page|p\b)\s*(ㄱ+ㄱ*ㄹ?|가줘|가자|이동|보여|열어|설명)?\s*$",
     re.IGNORECASE,
 )
+_QUIZ_REQUEST_RE = re.compile(
+    r"("
+    r"(퀴즈|quiz|시험|테스트|문제|문항).{0,18}(만들|생성|내|내줘|출제|풀|풀어|보자|볼래|진행|확인|연습|줘)"
+    r"|"
+    r"(만들|생성|내|내줘|출제|풀|풀어|보자|볼래|진행|확인|연습).{0,18}(퀴즈|quiz|시험|테스트|문제|문항)"
+    r"|"
+    r"(복습|연습|확인|점검|자가\s*진단|자기\s*진단).{0,12}(문제|문항|퀴즈|시험|테스트|문제\s*풀이)"
+    r"|"
+    r"(객관식|5지선다|오지선다|mcq|multiple\s*choice|ox|o/x|오엑스|참거짓|true\s*false|단답|서술|논술|essay|플래시\s*카드|플래시카드|flash\s*card).{0,18}(퀴즈|시험|문제|문항|만들|생성|내|내줘|출제)"
+    r")",
+    re.IGNORECASE,
+)
+_QUIZ_CHECK_REQUEST_RE = re.compile(
+    r"("
+    r"(내가|제가|나|우리)?.{0,8}(이해|학습|공부|내용).{0,16}(했는지|한\s*건지|됐는지|되는지|수준|상태)?.{0,12}(확인|점검|체크|테스트|자가\s*진단|자기\s*진단)"
+    r"|"
+    r"(이해|학습|공부|내용).{0,12}(확인|점검|체크|테스트|자가\s*진단|자기\s*진단).{0,12}(해줘|해\s*줘|하고\s*싶|볼래|해볼래)"
+    r")",
+    re.IGNORECASE,
+)
+_QUIZ_COUNT_RE = re.compile(r"(\d{1,2})\s*(개|문항|문제|questions?)", re.IGNORECASE)
+_QUIZ_TYPE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(객관식|5\s*지|오지선다|five\s*choice|multiple\s*choice|mcq)", re.IGNORECASE), "Five_Choice"),
+    (re.compile(r"(\bOX\b|O/X|오엑스|참\s*거짓|true\s*/?\s*false|true\s*false)", re.IGNORECASE), "OX_Problem"),
+    (re.compile(r"(플래시\s*카드|플래시카드|flash\s*card)", re.IGNORECASE), "Flash_Card"),
+    (re.compile(r"(단답|short\s*answer|short)", re.IGNORECASE), "Short_Answer"),
+    (re.compile(r"(서술|논술|essay|subjective)", re.IGNORECASE), "Essay"),
+)
 
 
 def _is_abusive_noise(message: str) -> bool:
@@ -474,6 +524,27 @@ def _is_explicit_page_explanation_request(message: str) -> bool:
 
 def _is_explicit_page_navigation_message(message: str) -> bool:
     return bool(_EXPLICIT_PAGE_NAVIGATION_MESSAGE_RE.search(message.strip()))
+
+
+def _is_quiz_request_message(message: str) -> bool:
+    text = message.strip()
+    return bool(_QUIZ_REQUEST_RE.search(text) or _QUIZ_CHECK_REQUEST_RE.search(text))
+
+
+def _infer_quiz_type_from_message(message: str) -> str:
+    text = message.strip()
+    for pattern, quiz_type in _QUIZ_TYPE_PATTERNS:
+        if pattern.search(text):
+            return quiz_type
+    return ""
+
+
+def _infer_quiz_count_from_message(message: str) -> int | None:
+    match = _QUIZ_COUNT_RE.search(message.strip())
+    if not match:
+        return None
+    count = int(match.group(1))
+    return max(1, min(count, 20))
 
 
 def _event_quiz_type(event: AppEvent) -> str:
@@ -515,4 +586,6 @@ def _quiz_generation_tool(quiz_type: str) -> ToolName | None:
         return ToolName.GENERATE_QUIZ_SHORT
     if quiz_type == "Essay":
         return ToolName.GENERATE_QUIZ_ESSAY
+    if quiz_type == "Flash_Card":
+        return ToolName.GENERATE_QUIZ_FLASH
     return None

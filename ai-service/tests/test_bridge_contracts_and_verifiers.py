@@ -172,6 +172,28 @@ def test_plan_verifier_routes_general_user_message_to_qa():
     assert result.warnings[-1]["code"] == "USER_MESSAGE_ROUTED_TO_QA"
 
 
+def test_plan_verifier_preserves_user_quiz_request_actions():
+    state = SessionState(session_id=1, lecture_id=1)
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.GENERATE_QUIZ_OX,
+            params={"quiz_type": "OX_Problem", "count": 2},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.USER_MESSAGE.value,
+        event_payload={"text": "OX 문제 2개 만들어줘"},
+    )
+
+    assert [action.tool for action in result.plan.actions] == [ToolName.GENERATE_QUIZ_OX]
+    assert result.plan.actions[0].params == {"quiz_type": "OX_Problem", "count": 2}
+    assert not any(warning["code"] == "USER_MESSAGE_ROUTED_TO_QA" for warning in result.warnings)
+
+
 def test_plan_verifier_accepts_message_key_as_user_question():
     state = SessionState(session_id=1, lecture_id=1)
     plan = OrchestratorPlan(actions=[
@@ -874,6 +896,315 @@ async def test_user_message_fast_path_routes_message_key_to_qa_without_planner()
     assert action.params["question"] == "tcp에 대해 자세히 설명해줘"
     assert event_payload["question"] == "tcp에 대해 자세히 설명해줘"
     assert any(event.agent == "qa" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_user_message_quiz_intent_generates_typed_quiz_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("typed quiz request should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, action, dict(event_payload)))
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="quiz",
+                tool=action.tool.value,
+                final=True,
+                data={"quiz": [], "quiz_type": action.params["quiz_type"]},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"message": "OX 문제 2개 만들어줘"}),
+        )
+    ]
+
+    action = dispatcher.calls[0][1]
+    event_payload = dispatcher.calls[0][2]
+    assert action.tool == ToolName.GENERATE_QUIZ_OX
+    assert action.params == {"quiz_type": "OX_Problem", "count": 2}
+    assert event_payload["question"] == "OX 문제 2개 만들어줘"
+    assert events[-1].data["quiz_type"] == "OX_Problem"
+
+
+@pytest.mark.asyncio
+async def test_user_message_generic_quiz_intent_opens_type_picker_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("generic quiz request should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append((event_type, action))
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": action.ui_state},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "이 내용 관련 퀴즈 생성해줄래?"}),
+        )
+    ]
+
+    action = dispatcher.calls[0][1]
+    assert action.type == ActionType.SET_UI_STATE
+    assert action.ui_state == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+    assert events[-1].data["ui"] == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+
+
+@pytest.mark.asyncio
+async def test_user_message_review_problem_intent_opens_type_picker_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("review problem request should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append(action)
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": action.ui_state},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "복습 문제 만들어줘"}),
+        )
+    ]
+
+    action = dispatcher.calls[0]
+    assert action.type == ActionType.SET_UI_STATE
+    assert action.ui_state == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+    assert events[-1].data["ui"] == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+
+
+@pytest.mark.asyncio
+async def test_user_message_learning_check_intent_opens_type_picker_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("learning check request should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append(action)
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="system",
+                final=True,
+                data={"ui": action.ui_state},
+            )
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "내가 이해했는지 확인해줘"}),
+        )
+    ]
+
+    action = dispatcher.calls[0]
+    assert action.type == ActionType.SET_UI_STATE
+    assert action.ui_state == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+    assert events[-1].data["ui"] == {"modal": "QUIZ_TYPE_PICKER", "reason": "USER_QUIZ_REQUEST"}
+
+
+@pytest.mark.asyncio
+async def test_user_message_confusion_still_routes_to_qa_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("confusion message should use QA fast path")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append(action)
+            yield NdjsonEvent(type=NdjsonEventType.DONE, agent="qa", final=True, data={})
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "이해가 잘 안되네"}),
+        )
+    ]
+
+    action = dispatcher.calls[0]
+    assert action.tool == ToolName.ANSWER_QUESTION
+    assert action.params["question"] == "이해가 잘 안되네"
+
+
+@pytest.mark.asyncio
+async def test_user_message_flashcard_quiz_intent_generates_flashcards_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class PlannerShouldNotRun:
+        async def run_stream(self, event, state):
+            raise AssertionError("flashcard quiz request should bypass planner")
+
+    class CapturingDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def dispatch(self, plan, state, event_payload, event_type=None):
+            action = plan.actions[0]
+            self.calls.append(action)
+            yield NdjsonEvent(type=NdjsonEventType.DONE, agent="quiz", final=True, data={})
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = PlannerShouldNotRun()  # type: ignore[assignment]
+    dispatcher = CapturingDispatcher()
+    engine._dispatcher = dispatcher  # type: ignore[assignment]
+
+    [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(type=AppEventType.USER_MESSAGE, payload={"text": "플래시카드 문제 만들어줘"}),
+        )
+    ]
+
+    action = dispatcher.calls[0]
+    assert action.tool == ToolName.GENERATE_QUIZ_FLASH
+    assert action.params["quiz_type"] == "Flash_Card"
 
 
 @pytest.mark.asyncio

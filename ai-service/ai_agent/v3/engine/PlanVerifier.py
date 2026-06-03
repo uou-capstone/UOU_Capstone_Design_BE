@@ -77,6 +77,14 @@ _INTERVENTION_TOOLS = {
     ToolName.REPAIR_MISCONCEPTION,
 }
 
+_QUIZ_FLOW_TOOLS = {
+    ToolName.GENERATE_QUIZ_FIVE_CHOICE,
+    ToolName.GENERATE_QUIZ_OX,
+    ToolName.GENERATE_QUIZ_SHORT,
+    ToolName.GENERATE_QUIZ_ESSAY,
+    ToolName.GENERATE_QUIZ_FLASH,
+}
+
 
 @dataclass(frozen=True)
 class PlanVerificationResult:
@@ -278,6 +286,8 @@ class PlanVerifier:
             return list(actions)
         if _is_explicit_page_explanation_request(user_message):
             return list(actions)
+        if _has_quiz_flow_action(actions):
+            return list(actions)
 
         existing_answer = next(
             (
@@ -386,6 +396,17 @@ def _event_user_message(event_payload: dict[str, Any]) -> str:
         if text:
             return text
     return ""
+
+
+def _has_quiz_flow_action(actions: list[OrchestratorAction]) -> bool:
+    for action in actions:
+        if action.type == ActionType.CALL_TOOL and action.tool in _QUIZ_FLOW_TOOLS:
+            return True
+        if action.type == ActionType.SET_UI_STATE:
+            ui_state = action.ui_state or {}
+            if ui_state.get("modal") == "QUIZ_TYPE_PICKER":
+                return True
+    return False
 
 
 def _is_explicit_page_explanation_request(message: str) -> bool:

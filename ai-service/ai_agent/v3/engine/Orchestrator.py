@@ -134,6 +134,7 @@ Learning Context Collection → Orchestrator Planner → Tool Dispatcher → Sel
 - GENERATE_QUIZ_OX: OX 퀴즈 (매개변수: {{"quiz_type": "OX_Problem"}})
 - GENERATE_QUIZ_SHORT: 단답형 퀴즈 (매개변수: {{"quiz_type": "Short_Answer"}})
 - GENERATE_QUIZ_ESSAY: 서술형 퀴즈 (매개변수: {{"quiz_type": "Essay"}})
+- GENERATE_QUIZ_FLASH: 플래시카드 퀴즈 (매개변수: {{"quiz_type": "Flash_Card"}})
 - AUTO_GRADE_MCQ_OX: 객관식 자동 채점 (매개변수: {{"quiz_type": "..."}})
 - GRADE_SHORT_OR_ESSAY: 주관식 채점 (매개변수: {{"quiz_type": "..."}})
 - REPAIR_MISCONCEPTION: 활성 오개념 교정 상태가 있을 때 학생 답변 기반으로 짧은 교정 설명을 생성 (매개변수: {{"student_message": "..."}})
@@ -159,12 +160,13 @@ UI 상태 action:
 11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. params에는 {{"detail":"NORMAL","next_widget":"NEXT_PAGE_DECISION"}}를 넣으세요.
 12. `QUIZ_DECISION`이 수락되면 퀴즈 유형 선택 UI만 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER"}}}}.
 13. `RETEST_DECISION`이 수락되면 재시험 유형 선택 UI를 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","mode":"RETEST"}}}}.
-14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`를 호출하세요.
+14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`, `"Flash_Card"`/`"FLASH_CARD"`이면 `GENERATE_QUIZ_FLASH`를 호출하세요.
 15. `QUIZ_SUBMITTED`에서 객관식/OX는 `AUTO_GRADE_MCQ_OX`, 단답형/서술형은 `GRADE_SHORT_OR_ESSAY`를 사용하세요. 기준 미달이면 진단/교정 흐름을 유지하고, 재시험 통과 후에도 다음 페이지 설명을 자동 시작하지 말고 사용자의 `PAGE_CHANGED`를 기다리세요.
 16. 일반 `USER_MESSAGE` 질문에는 `ANSWER_QUESTION` 도구를 호출하고, 답변 후 다음 페이지 이동 여부를 묻는 흐름을 유지하세요. 단, 사용자가 "현재 페이지 전체 설명해줘", "이 페이지 설명해줘"처럼 페이지 설명을 명시적으로 요청한 경우에만 `EXPLAIN_PAGE`를 사용할 수 있습니다.
 17. 사용자가 "이해가 잘 안 됨", "다시 설명해줘", "헷갈려"처럼 말하면 새 페이지 설명이 아니라 `ANSWER_QUESTION`으로 라우팅하세요. QA 에이전트가 현재 페이지/관련 페이지를 바탕으로 다른 방식의 설명을 제공합니다.
 18. 사용자가 의미 기반 페이지 이동을 요청하면 navigation directive는 별도 intent layer가 처리하므로, 플래너는 현재 이벤트가 이미 `PAGE_CHANGED`로 정리된 경우에만 `EXPLAIN_PAGE`를 호출하세요.
 19. 퀴즈 생성은 현재 페이지 컨텍스트가 확보된 경우에만 수행해야 합니다. 컨텍스트가 없으면 무리해서 퀴즈 생성 도구를 호출하지 마세요.
+20. `USER_MESSAGE`가 "퀴즈 만들어줘", "OX 문제 2개 내줘", "객관식 시험 볼래", "복습 문제 만들어줘", "연습문제 내줘", "확인 문제 풀어볼래", "이 내용으로 문제풀이 해줘", "자가진단 테스트 해줘"처럼 퀴즈/시험/문제 풀이 의도를 명확히 담고 있으면 QA가 아니라 퀴즈 흐름입니다. "내가 이해했는지 확인해줘", "배운 내용 점검해줘"처럼 학습 확인 의도는 있지만 유형이 없는 요청은 직접 생성하지 말고 퀴즈 유형 선택 UI를 여세요. 유형이 명시되면 해당 `GENERATE_QUIZ_*` 도구를 호출하고, 유형이 없으면 `{{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","reason":"USER_QUIZ_REQUEST"}}}}`를 반환하세요.
 """
         return prompt
 
