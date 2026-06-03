@@ -726,10 +726,10 @@ INSERT INTO student_answers (
 SELECT NOW(6),
        NOW(6),
        CASE ss.learning_level
-           WHEN 'BEGINNER' THEN '기본 개념을 다시 보고 예시를 따라 풀겠습니다.'
-           WHEN 'BASIC' THEN '학생 수준과 학습 기록을 보고 쉬운 단계부터 피드백을 제공합니다.'
-           WHEN 'INTERMEDIATE' THEN '진단 결과, 토론 참여, 오답 유형을 함께 보고 맞춤 피드백을 설계합니다.'
-           ELSE '정량 지표와 서술형 근거를 함께 분석하고, 다음 학습 경로와 심화 과제를 분리해 제안합니다.'
+           WHEN 'BEGINNER' THEN '기초 개념 재확인'
+           WHEN 'BASIC' THEN '수준별 피드백 필요'
+           WHEN 'INTERMEDIATE' THEN '근거 기반 답변'
+           ELSE '심화 전략 제안'
        END,
        JSON_OBJECT('seed', TRUE, 'level', ss.learning_level),
        JSON_OBJECT('rubricMatched', ss.learning_level IN ('INTERMEDIATE', 'ADVANCED')),
@@ -741,10 +741,10 @@ SELECT NOW(6),
            ELSE 33
        END,
        CASE ss.learning_level
-           WHEN 'BEGINNER' THEN '[SEED] 답변 길이를 늘리고 핵심 용어를 포함하세요.'
-           WHEN 'BASIC' THEN '[SEED] 방향은 맞지만 근거가 더 필요합니다.'
-           WHEN 'INTERMEDIATE' THEN '[SEED] 좋은 답변입니다. 예시를 추가하면 더 명확합니다.'
-           ELSE '[SEED] 우수합니다. 실제 수업 상황에 적용해 보세요.'
+           WHEN 'BEGINNER' THEN '[SEED] 핵심 용어 보강'
+           WHEN 'BASIC' THEN '[SEED] 근거 추가 필요'
+           WHEN 'INTERMEDIATE' THEN '[SEED] 예시 추가 권장'
+           ELSE '[SEED] 심화 적용 권장'
        END,
        NULL,
        eq.exam_question_id,
