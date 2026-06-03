@@ -22,6 +22,8 @@ public class StudentAiReportContextResponse {
     private final List<AiAssessmentItemDto> assessments;
     private final List<AiCompetencyDto> competencies;
     private final List<AiEvidenceItemDto> evidence;
+    private final List<AiLearningEvidenceDto> learningEvidence;
+    private final AiIntegratedLearningSummaryDto integratedLearningSummary;
     private final AiNarrativeDto existingNarrative;
     private final List<String> reportWarnings;
 }

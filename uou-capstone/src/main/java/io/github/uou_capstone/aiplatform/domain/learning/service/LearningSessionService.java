@@ -58,6 +58,7 @@ public class LearningSessionService {
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
     private final LearningChatPersistenceService chatPersistenceService;
+    private final LearningIntegratedEvidenceService integratedEvidenceService;
 
     /**
      * 강의 ID로 학습 세션 조회 또는 신규 생성.
@@ -81,7 +82,7 @@ public class LearningSessionService {
             LearningChatSession chatSession = chatPersistenceService.getOrCreateActiveSession(lectureId, currentUser);
             effectiveSessionId = chatSession.getId();
         } else {
-            chatPersistenceService.getOwnedSession(effectiveSessionId, currentUser.getId(), lectureId);
+            chatPersistenceService.getOwnedActiveSession(effectiveSessionId, currentUser.getId(), lectureId);
         }
 
         // pdfPath가 없으면 강의에 업로드된 최신 PDF 자료 경로를 자동으로 조회
@@ -152,7 +153,7 @@ public class LearningSessionService {
 
         validateLectureAccess(lectureId);
         User currentUser = currentUserResolver.getUser();
-        chatPersistenceService.getOwnedSession(sessionId, currentUser.getId(), lectureId);
+        chatPersistenceService.getOwnedActiveSession(sessionId, currentUser.getId(), lectureId);
 
         Integer viewerPage = firstNonNullPositive(currentPage, pageNumber, page);
         log.info("학습 세션 이벤트 스트림: lectureId={}, sessionId={}, eventType={}, viewerPage={}",
@@ -173,7 +174,10 @@ public class LearningSessionService {
 
         AssistantMessageRecorder recorder = new AssistantMessageRecorder(objectMapper);
         Flux<String> upstream = fastApiSessionClient.streamEvent(sessionId, requestBody)
-                .doOnNext(recorder::accept)
+                .doOnNext(line -> {
+                    recorder.accept(line);
+                    recordLearningEvidence(line, sessionId, lectureId, currentUser);
+                })
                 .doOnComplete(() -> {
                     if (recorder.shouldSave()) {
                         chatPersistenceService.saveAssistantMessage(sessionId, currentUser.getId(), lectureId,
@@ -191,6 +195,18 @@ public class LearningSessionService {
             String safeMsg = e.getMessage() != null ? e.getMessage().replace("\"", "'") : "알 수 없는 오류";
             return String.format("{\"type\":\"error\",\"message\":\"%s\"}", safeMsg);
         });
+    }
+
+    private void recordLearningEvidence(String line, Long sessionId, Long lectureId, User currentUser) {
+        if (line == null || !line.contains("learningEvidence")) {
+            return;
+        }
+        try {
+            integratedEvidenceService.saveFromStreamLine(line, sessionId, lectureId, currentUser);
+        } catch (Exception e) {
+            log.warn("Integrated learning evidence save skipped: sessionId={}, lectureId={}, reason={}",
+                    sessionId, lectureId, e.getMessage());
+        }
     }
 
     @Transactional(readOnly = true)
