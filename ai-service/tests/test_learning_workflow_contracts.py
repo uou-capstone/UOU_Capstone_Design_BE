@@ -2,6 +2,8 @@ import importlib
 
 import pytest
 
+import app.core.path_validator as path_validator
+from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import AppEvent, AppEventType, NdjsonEvent, NdjsonEventType, PageState, SessionState
 from ai_agent.v3.agents.GraderAgent import GraderAgent, GradingParseError
 from ai_agent.v3.agents.QaAgent import QaAgent
@@ -18,6 +20,7 @@ from app.routers.report import (
     answer_student_report_chat_result,
     _build_chat_prompt,
 )
+from app.services.pdf_file_ref_service import pdf_file_ref_service
 from app.services.pdf_context_service import PageContext, RelevantPage, PdfContextService
 from app.services.session_state_service import fresh_state_for_pdf, same_material_path
 
@@ -37,6 +40,34 @@ def test_normalize_quiz_generation_result_extracts_problem_arrays():
     assert normalize_quiz_generation_result(raw, "Five_Choice") == [
         {"id": 1, "question_content": "Q1"},
         {"id": 2, "question_content": "Q2"},
+    ]
+
+
+def test_normalize_flashcard_result_adds_fe_compatible_front_back_fields():
+    raw = {
+        "problems": {
+            "flash_cards": [
+                {
+                    "id": 1,
+                    "front_content": "지터란?",
+                    "back_content": "패킷 도착 간격의 변동입니다.",
+                }
+            ]
+        }
+    }
+
+    result = normalize_quiz_generation_result(raw, "Flash_Card")
+
+    assert result == [
+        {
+            "id": 1,
+            "front": "지터란?",
+            "frontContent": "지터란?",
+            "front_content": "지터란?",
+            "back": "패킷 도착 간격의 변동입니다.",
+            "backContent": "패킷 도착 간격의 변동입니다.",
+            "back_content": "패킷 도착 간격의 변동입니다.",
+        }
     ]
 
 
@@ -404,6 +435,41 @@ def test_pdf_context_service_searches_related_pages_by_expanded_terms(monkeypatc
     assert any(term in reliable_pages[0].matched_terms for term in ("retransmission", "sequence number", "ack"))
 
 
+def test_pdf_context_service_matches_korean_loanwords_to_english_tokens(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "multimedia.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    service = PdfContextService()
+
+    def fake_load_pages(path):
+        return [
+            "Added: Multimedia Networking. Multimedia networking applications. Streaming stored video. Voice-over-IP.",
+            "Routers forward packets between networks.",
+            "Client-side buffering and playout delay compensate for packet delay jitter.",
+        ]
+
+    monkeypatch.setattr(service, "_load_pages", fake_load_pages)
+
+    pages = service.search_relevant_pages(
+        str(pdf_path),
+        "지터는 어디 페이지에 있는데?",
+        current_page=1,
+        limit=2,
+    )
+
+    assert pages[0].page == 3
+    assert "jitter" in pages[0].matched_terms
+
+    router_pages = service.search_relevant_pages(
+        str(pdf_path),
+        "라우터는 어디 나와?",
+        current_page=1,
+        limit=2,
+    )
+
+    assert router_pages[0].page == 2
+    assert "routers" in router_pages[0].matched_terms
+
+
 def test_learning_context_collector_adds_related_pages_for_qa(monkeypatch):
     collector_module = importlib.import_module("ai_agent.v3.engine.LearningContextCollector")
 
@@ -546,6 +612,101 @@ async def test_qa_agent_uses_page_text_prompt_without_loading_pdf():
     assert "현재 페이지 전체를 다시 강의하거나 요약하지 마라" in prompt
     assert "핵심이 뭐야?" in prompt
     assert "- 학생: 이전 질문" in prompt
+
+
+@pytest.mark.asyncio
+async def test_qa_agent_can_attach_original_pdf_part_with_page_text_prompt():
+    class FakeBridge:
+        def __init__(self):
+            self.contents = None
+
+        async def stream(self, contents, agent: str, tool: str):
+            self.contents = contents
+            yield NdjsonEvent(
+                type=NdjsonEventType.AGENT_DELTA,
+                agent=agent,
+                tool=tool,
+                channel="main",
+                delta="답변",
+            )
+
+    bridge = FakeBridge()
+    agent = QaAgent(bridge)  # type: ignore[arg-type]
+
+    events = [
+        event
+        async for event in agent.run_stream(
+            "지터는 어디서 다뤄?",
+            "/tmp/missing.pdf",
+            "멀티미디어 네트워킹",
+            page_number=1,
+            page_text="Multimedia networking applications",
+            related_pages_text="(관련 페이지 후보 없음)",
+            pdf_original_part="PDF_ORIGINAL_PART",
+        )
+    ]
+
+    assert events[0].delta == "답변"
+    assert bridge.contents is not None
+    assert bridge.contents[0] == "PDF_ORIGINAL_PART"
+    prompt = bridge.contents[1]
+    assert "PDF 원본 fileRef" in prompt
+    assert "PDF 전체 강의 흐름 안에서 가장 관련 있는 근거" in prompt
+    assert "현재 페이지에 답을 가두지 말고" in prompt
+    assert "지터는 어디서 다뤄?" in prompt
+
+
+@pytest.mark.asyncio
+async def test_pdf_file_ref_service_stores_session_fingerprint(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_validator, "UPLOADS_ROOT", tmp_path.resolve())
+    pdf_path = tmp_path / "lecture.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+
+    class FakeBridge:
+        async def load_pdf_file_ref_part(self, path, *, fingerprint=None):
+            return "PDF_PART", {
+                "fileName": "lecture.pdf",
+                "fileUri": "gemini://file/lecture",
+                "mimeType": "application/pdf",
+                "source": "FILE_API",
+                "fingerprint": fingerprint,
+            }
+
+    state = SessionState(session_id=1, lecture_id=1)
+
+    part = await pdf_file_ref_service.ensure_file_part(
+        FakeBridge(),  # type: ignore[arg-type]
+        state,
+        str(pdf_path),
+    )
+
+    assert part == "PDF_PART"
+    assert state.pdf_fingerprint
+    assert state.gemini_file_ref is not None
+    assert state.gemini_file_ref["fileUri"] == "gemini://file/lecture"
+    assert state.gemini_file_ref["fingerprint"] == state.pdf_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_gemini_file_ref_large_upload_failure_does_not_inline(tmp_path, monkeypatch):
+    gemini_bridge_module = importlib.import_module("ai_agent.bridge.GeminiBridgeClient")
+    monkeypatch.setattr(gemini_bridge_module, "_PDF_INLINE_THRESHOLD", 1)
+    pdf_path = tmp_path / "large.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\nlarge enough for threshold")
+
+    class FakeFiles:
+        def upload(self, path):
+            raise RuntimeError("upload failed")
+
+    class FakeClient:
+        files = FakeFiles()
+
+    bridge = object.__new__(GeminiBridgeClient)
+    bridge._client = FakeClient()
+    bridge._get_redis = lambda: None
+
+    with pytest.raises(RuntimeError, match="FILE_API_UPLOAD_FAILED"):
+        await bridge.load_pdf_file_ref_part(str(pdf_path), fingerprint="fp")
 
 
 def test_student_report_chat_prompt_is_reference_workflow_scoped():

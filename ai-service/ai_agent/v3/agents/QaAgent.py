@@ -35,9 +35,12 @@ TEXT_CONTEXT_QA_PROMPT = """너는 MergeEduAgent의 페이지 기반 QA 에이�
 학생은 현재 {page_number}페이지를 보고 있다.
 답변은 반드시 자연스러운 한국어 Markdown으로 작성하라.
 학생 질문에 직접 답하는 것이 최우선이다. 현재 페이지 전체를 다시 강의하거나 요약하지 마라.
-현재 페이지 텍스트를 1차 근거로 사용하되, 현재 페이지가 목차/개요/키워드 나열 수준이라면 질문 관련 페이지 후보를 근거로 확장해서 답하라.
+현재 페이지 텍스트는 학습 흐름의 기준점으로 사용하라.
+학생 질문이 현재 페이지의 개념 설명, 개념 위치 탐색, 이전/이후 내용 복습, "어디에 있어?" 류의 검색 의도라면 질문 관련 페이지 후보와 PDF 원본 fileRef를 적극 활용해 답하라.
+PDF 원본 fileRef가 함께 제공된 경우, page text/index가 놓친 용어·이미지·표·관련 페이지를 찾는 보조 근거로 활용하라.
+질문이 특정 페이지나 페이지 범위를 명시한 경우에만 그 범위를 우선 지키고, 그렇지 않으면 PDF 전체 강의 흐름 안에서 가장 관련 있는 근거를 찾아 답하라.
 이전/다음 페이지는 흐름 파악용 보조 참고로만 사용하라.
-현재/관련 페이지 텍스트로도 답할 수 없는 내용은 추측하지 말고, "제공된 페이지 텍스트만으로는 확인하기 어렵습니다"라고 명확히 말하라.
+현재/관련 페이지 후보와 PDF 원본으로도 답할 근거를 찾을 수 없을 때만 "제공된 강의 자료만으로는 확인하기 어렵습니다"라고 명확히 말하라.
 PDF 원문이 영어 또는 다른 언어여도 설명, 요약, 예시는 자연스러운 한국어로 풀어 써라.
 전문 용어, 고유명사, 코드, 수식, API 이름은 필요한 경우 영어 원문을 괄호로 병기할 수 있다.
 반복 인사, 호명, 새 강의 도입 문구를 쓰지 말고 바로 답변하라. 단, 학생이 "이해가 안 됨", "헷갈림", "모르겠음"처럼 어려움을 표현하면 한 문장 정도로 자연스럽게 받아주고 더 쉬운 설명으로 전환하라.
@@ -49,6 +52,7 @@ PDF 원문이 영어 또는 다른 언어여도 설명, 요약, 예시는 자연
 - 최근 QA 흐름에서 이미 비슷하게 설명한 내용이 있다면 같은 문장 구조를 반복하지 말고 비유, 단계, 비교표 중 하나로 방식을 바꿔라.
 - 현재 페이지가 장의 도입/목차라면 "이 페이지는 앞으로 배울 개념의 지도"라는 관점으로 설명하고, 각 키워드의 역할을 짧게 연결하라.
 - 질문이 현재 페이지보다 관련 페이지 후보와 더 잘 맞으면 관련 페이지 후보를 사용해 답하되, 현재 페이지와 어떻게 이어지는지 한 문장으로 연결하라.
+- 질문이 "어느 페이지", "어디에 있어", "다시 보여줘", "관련 퀴즈", "복습"처럼 위치 탐색이나 학습 범위 확장 의도라면 현재 페이지에 답을 가두지 말고 관련 페이지 후보와 PDF 원본을 우선 탐색하라.
 - 학생 수준이 낮거나 초등학생/BEGINNER에 가까우면 일상 비유를 우선하고, INTERMEDIATE는 정의와 작동 원리, ADVANCED는 조건과 메커니즘까지 설명하라.
 
 포맷 규칙:
@@ -58,7 +62,7 @@ PDF 원문이 영어 또는 다른 언어여도 설명, 요약, 예시는 자연
 - 중요한 개념, 정의, 조건은 **굵게** 표시하라.
 - 수식은 LaTeX 문법을 사용하라. 예: `$x^2 + y^2 = r^2$`
 - 코드, 명령어, 파일명, 키워드는 코드 포맷을 사용하라. 예: `FastAPI`
-- 관련 페이지 후보를 사용했다면 "근거: 현재 페이지, 관련 페이지 N"처럼 짧게 표시하라.
+- 관련 페이지 후보나 PDF 원본을 사용했다면 "근거: 현재 페이지, 관련 페이지 N" 또는 "근거: 관련 페이지 N, PDF 원본"처럼 짧게 표시하라.
 - 마지막에는 개념 확인 질문이나 다음 페이지 이동 질문을 붙이지 말고, 답변 내용 자체로 자연스럽게 끝내라.
 - 다음 페이지 이동 여부는 시스템 UI가 처리하므로 본문 끝에 "다음 페이지로 넘어갈까요?"를 쓰지 마라.
 
@@ -118,6 +122,7 @@ class QaAgent:
         learner_memory_digest: Optional[str] = None,
         qa_thread_digest: Optional[str] = None,
         related_pages_text: Optional[str] = None,
+        pdf_original_part: Any | None = None,
     ) -> AsyncGenerator[NdjsonEvent, None]:
         """
         질문에 대한 답변 스트리밍 생성.
@@ -138,6 +143,7 @@ class QaAgent:
             learner_memory_digest=learner_memory_digest,
             qa_thread_digest=qa_thread_digest,
             related_pages_text=related_pages_text,
+            pdf_original_part=pdf_original_part,
         )
 
         async for event in self._bridge.stream(contents, agent="qa", tool="ANSWER_QUESTION"):
@@ -156,6 +162,7 @@ class QaAgent:
         learner_memory_digest: Optional[str] = None,
         qa_thread_digest: Optional[str] = None,
         related_pages_text: Optional[str] = None,
+        pdf_original_part: Any | None = None,
     ) -> list[Any]:
         page_text_value = _text_or_none(page_text)
         if page_text_value:
@@ -170,6 +177,8 @@ class QaAgent:
                 next_text=_fallback_text(next_text, "(없음)"),
                 question=question.strip(),
             )
+            if pdf_original_part is not None:
+                return [pdf_original_part, prompt]
             return [prompt]
 
         import pathlib
@@ -203,6 +212,7 @@ class QaAgent:
         learner_memory_digest: Optional[str] = None,
         qa_thread_digest: Optional[str] = None,
         related_pages_text: Optional[str] = None,
+        pdf_original_part: Any | None = None,
     ) -> str:
         """비스트리밍 버전"""
         contents = await self._build_contents(
@@ -216,5 +226,6 @@ class QaAgent:
             learner_memory_digest=learner_memory_digest,
             qa_thread_digest=qa_thread_digest,
             related_pages_text=related_pages_text,
+            pdf_original_part=pdf_original_part,
         )
         return await self._bridge.generate(contents)

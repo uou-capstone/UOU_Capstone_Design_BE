@@ -252,10 +252,13 @@ class OrchestrationEngine:
                 ])
             if _is_quiz_request_message(message):
                 quiz_type = _infer_quiz_type_from_message(message)
+                pending_request = _quiz_request_metadata_from_message(message)
+                if pending_request:
+                    state.pending_quiz_request = pending_request
                 if quiz_type:
                     tool = _quiz_generation_tool(quiz_type)
                     if tool:
-                        params = {"quiz_type": quiz_type}
+                        params = {"quiz_type": quiz_type, **pending_request}
                         count = _infer_quiz_count_from_message(message)
                         if count is not None:
                             params["count"] = count
@@ -279,6 +282,17 @@ class OrchestrationEngine:
                     params={"question": message},
                 )
             ])
+        if event.type == AppEventType.QUIZ_TYPE_SELECTED:
+            quiz_type = _event_quiz_type(event)
+            tool = _quiz_generation_tool(quiz_type)
+            if tool:
+                return OrchestratorPlan(actions=[
+                    OrchestratorAction(
+                        type=ActionType.CALL_TOOL,
+                        tool=tool,
+                        params=_quiz_generation_params_from_event(event, state, quiz_type),
+                    )
+                ])
 
         if event.type == AppEventType.REVIEW_DECISION and _event_accepts(event):
             if state.active_intervention:
@@ -403,7 +417,7 @@ class OrchestrationEngine:
                     OrchestratorAction(
                         type=ActionType.CALL_TOOL,
                         tool=tool,
-                        params={"quiz_type": quiz_type},
+                        params=_quiz_generation_params_from_event(event, state, quiz_type),
                     )
                 ])
         if event.type == AppEventType.QUIZ_SUBMITTED:
@@ -505,6 +519,10 @@ _QUIZ_CHECK_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 _QUIZ_COUNT_RE = re.compile(r"(\d{1,2})\s*(개|문항|문제|questions?)", re.IGNORECASE)
+_PAGE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:페이지|page|p)?\s*(\d{1,4})\s*(?:~|-|부터|에서)\s*(\d{1,4})\s*(?:페이지|쪽|page|p)?", re.IGNORECASE),
+    re.compile(r"(?:페이지|page|p)\s*(\d{1,4})\s*(?:부터|에서|~|-)\s*(\d{1,4})", re.IGNORECASE),
+)
 _QUIZ_TYPE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(객관식|5\s*지|오지선다|five\s*choice|multiple\s*choice|mcq)", re.IGNORECASE), "Five_Choice"),
     (re.compile(r"(\bOX\b|O/X|오엑스|참\s*거짓|true\s*/?\s*false|true\s*false)", re.IGNORECASE), "OX_Problem"),
@@ -545,6 +563,77 @@ def _infer_quiz_count_from_message(message: str) -> int | None:
         return None
     count = int(match.group(1))
     return max(1, min(count, 20))
+
+
+def _quiz_request_metadata_from_message(message: str) -> dict[str, object]:
+    metadata: dict[str, object] = {"source_request": message.strip()}
+    page_range = _infer_quiz_page_range_from_message(message)
+    if page_range:
+        start, end = page_range
+        metadata["coverage_start_page"] = start
+        metadata["coverage_end_page"] = end
+    count = _infer_quiz_count_from_message(message)
+    if count is not None:
+        metadata["count"] = count
+    return metadata
+
+
+def _infer_quiz_page_range_from_message(message: str) -> tuple[int, int] | None:
+    text = message.strip()
+    for pattern in _PAGE_RANGE_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2))
+        if start <= 0 or end <= 0:
+            return None
+        return (min(start, end), max(start, end))
+    return None
+
+
+def _quiz_generation_params_from_event(
+    event: AppEvent,
+    state: SessionState,
+    quiz_type: str,
+) -> dict[str, object]:
+    params: dict[str, object] = {"quiz_type": quiz_type}
+    pending = state.pending_quiz_request or {}
+    for key in ("coverage_start_page", "coverage_end_page", "source_request", "count"):
+        if key in pending:
+            params[key] = pending[key]
+
+    payload_key_map = {
+        "coverage_start_page": ("coverage_start_page", "coverageStartPage", "startPage"),
+        "coverage_end_page": ("coverage_end_page", "coverageEndPage", "endPage"),
+        "source_request": ("source_request", "sourceRequest", "question", "text", "message"),
+        "count": ("count", "questionCount", "numQuestions"),
+    }
+    for normalized_key, raw_keys in payload_key_map.items():
+        for raw_key in raw_keys:
+            value = event.get(raw_key)
+            if value is not None and value != "":
+                params[normalized_key] = value
+                break
+
+    for key in ("coverage_start_page", "coverage_end_page", "count"):
+        if key not in params:
+            continue
+        try:
+            value = int(params[key])
+        except (TypeError, ValueError):
+            params.pop(key, None)
+            continue
+        if key == "count":
+            params[key] = max(1, min(value, 20))
+        else:
+            params[key] = max(1, value)
+
+    start = params.get("coverage_start_page")
+    end = params.get("coverage_end_page")
+    if isinstance(start, int) and isinstance(end, int) and start > end:
+        params["coverage_start_page"], params["coverage_end_page"] = end, start
+    return params
 
 
 def _event_quiz_type(event: AppEvent) -> str:

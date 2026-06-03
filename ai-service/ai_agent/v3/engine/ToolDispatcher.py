@@ -44,6 +44,7 @@ from ai_agent.types.domain import (
 )
 from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 from app.services.error_mapping import stable_error_type
+from app.services.pdf_file_ref_service import pdf_file_ref_service
 
 _MSG_NO_QUIZ_RECORD = "채점할 퀴즈 기록을 찾지 못했습니다."
 _MSG_MISSING_QUIZ_CONTEXT = "퀴즈 생성을 위해 현재 페이지 자료가 필요합니다. 먼저 PDF 설명을 진행한 뒤 다시 시도해 주세요."
@@ -212,8 +213,14 @@ class ToolDispatcher:
             pdf_path = page_state.pdf_path or state.pdf_path or ""
             chapter_title = page_state.chapter_title
             learning_context = self._context_collector.collect_for_question(state, str(question), page_state)
+            pdf_original_part = await pdf_file_ref_service.ensure_file_part(
+                self._bridge,
+                state,
+                pdf_path,
+            )
 
             answer_chunks: List[str] = []
+            retry_without_file_ref = False
             async for event in self._qa.run_stream(
                 question,
                 pdf_path,
@@ -225,12 +232,41 @@ class ToolDispatcher:
                 learner_memory_digest=learning_context.learner_memory_digest,
                 qa_thread_digest=learning_context.qa_thread_digest,
                 related_pages_text=learning_context.related_pages_digest,
+                pdf_original_part=pdf_original_part,
             ):
+                if (
+                    event.type == NdjsonEventType.ERROR
+                    and pdf_original_part is not None
+                    and not answer_chunks
+                ):
+                    await _invalidate_pdf_file_ref_cache(self._bridge, state, pdf_path)
+                    retry_without_file_ref = True
+                    break
                 if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)
                 if event.type == NdjsonEventType.DONE:
                     continue
                 yield event
+
+            if retry_without_file_ref:
+                async for event in self._qa.run_stream(
+                    question,
+                    pdf_path,
+                    chapter_title,
+                    page_number=learning_context.page_number,
+                    page_text=learning_context.page_text,
+                    prev_text=learning_context.prev_text,
+                    next_text=learning_context.next_text,
+                    learner_memory_digest=learning_context.learner_memory_digest,
+                    qa_thread_digest=learning_context.qa_thread_digest,
+                    related_pages_text=learning_context.related_pages_digest,
+                    pdf_original_part=None,
+                ):
+                    if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
+                        answer_chunks.append(event.delta)
+                    if event.type == NdjsonEventType.DONE:
+                        continue
+                    yield event
             full_text = "".join(answer_chunks)
             if full_text:
                 qa_thread_service.append_turn(
@@ -259,8 +295,16 @@ class ToolDispatcher:
             ToolName.GENERATE_QUIZ_FLASH,
         ):
             quiz_type = _params_quiz_type(params, _default_quiz_type_for_tool(tool))
-            learning_context = self._context_collector.collect(state, page_state)
+            coverage_start_page = _optional_int_param(params, "coverage_start_page", "coverageStartPage", "startPage")
+            coverage_end_page = _optional_int_param(params, "coverage_end_page", "coverageEndPage", "endPage")
+            learning_context = self._context_collector.collect_for_quiz(
+                state,
+                page_state,
+                coverage_start_page=coverage_start_page,
+                coverage_end_page=coverage_end_page,
+            )
             if not learning_context.has_page_text and not (page_state.explanation or "").strip():
+                state.pending_quiz_request = None
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="quiz",
@@ -284,8 +328,9 @@ class ToolDispatcher:
                 )
                 return
             lecture_content = learning_context.build_quiz_context(page_state.explanation)
-            count = params.get("count", 5)
+            count = _optional_int_param(params, "count", "questionCount", "numQuestions") or 5
             profile = params.get("profile")
+            context_label = _quiz_context_label(learning_context)
 
             async for event in self._quiz.run_stream(
                 quiz_type,
@@ -293,6 +338,7 @@ class ToolDispatcher:
                 profile,
                 state.learner.model_dump(),
                 count,
+                context_label=context_label,
             ):
                 if event.type == NdjsonEventType.DONE and event.data:
                     quiz_data = event.data.get("quiz")
@@ -302,11 +348,15 @@ class ToolDispatcher:
                             page_number=state.current_page,
                             quiz_type=quiz_type,
                             questions=quiz_data if isinstance(quiz_data, list) else [],
+                            coverage_start_page=learning_context.coverage_start_page,
+                            coverage_end_page=learning_context.coverage_end_page,
+                            source_request=str(params.get("source_request") or params.get("sourceRequest") or "") or None,
                         )
                         state.quiz_history.append(record)
                 yield event
 
             page_state.status = PageStatus.QUIZ_IN_PROGRESS
+            state.pending_quiz_request = None
 
         # ----------------------------------------------------------------
         # AUTO_GRADE_MCQ_OX
@@ -327,6 +377,14 @@ class ToolDispatcher:
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
                         event.data = self._with_assessment_data(event.data, assessment, state)
                         if not event.data.get("passed"):
+                            diagnostic_prompt = _active_diagnostic_prompt(state)
+                            if diagnostic_prompt:
+                                yield NdjsonEvent(
+                                    type=NdjsonEventType.AGENT_DELTA,
+                                    agent="orchestrator",
+                                    channel="main",
+                                    delta=diagnostic_prompt,
+                                )
                             yield NdjsonEvent(
                                 type=NdjsonEventType.DONE,
                                 agent="grader",
@@ -366,6 +424,14 @@ class ToolDispatcher:
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
                         event.data = self._with_assessment_data(event.data, assessment, state)
                         if not event.data.get("passed"):
+                            diagnostic_prompt = _active_diagnostic_prompt(state)
+                            if diagnostic_prompt:
+                                yield NdjsonEvent(
+                                    type=NdjsonEventType.AGENT_DELTA,
+                                    agent="orchestrator",
+                                    channel="main",
+                                    delta=diagnostic_prompt,
+                                )
                             yield NdjsonEvent(
                                 type=NdjsonEventType.DONE,
                                 agent="grader",
@@ -550,3 +616,49 @@ def _default_quiz_type_for_tool(tool: ToolName | None) -> str:
         ToolName.GENERATE_QUIZ_ESSAY: "Essay",
         ToolName.GENERATE_QUIZ_FLASH: "Flash_Card",
     }.get(tool, "Five_Choice")
+
+
+def _optional_int_param(params: Dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key not in params:
+            continue
+        value = params.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _quiz_context_label(learning_context) -> str:
+    start = learning_context.coverage_start_page
+    end = learning_context.coverage_end_page
+    if start and end and start != end:
+        return f"{start}~{end}페이지"
+    return "현재 페이지"
+
+
+def _active_diagnostic_prompt(state: SessionState) -> str:
+    intervention = state.active_intervention or {}
+    prompt = str(intervention.get("diagnosticPrompt") or "").strip()
+    if prompt:
+        return prompt
+    focus = str(intervention.get("focusConcept") or "이번 퀴즈에서 틀린 부분").strip()
+    return (
+        f"이번에는 바로 전체 복습으로 가지 않고, **{focus}** 쪽에서 어디가 막혔는지 먼저 짚어볼게요.\n\n"
+        "개념 자체가 헷갈렸는지, 적용 이유가 헷갈렸는지, 문제 풀이 과정이 헷갈렸는지 한 줄로 말해 주세요."
+    )
+
+
+async def _invalidate_pdf_file_ref_cache(
+    bridge: GeminiBridgeClient,
+    state: SessionState,
+    pdf_path: str,
+) -> None:
+    invalidate = getattr(bridge, "invalidate_pdf_file_ref_cache", None)
+    if callable(invalidate):
+        await invalidate(pdf_path, fingerprint=state.pdf_fingerprint)
+    state.gemini_file_ref = None
+    state.pdf_fingerprint = None

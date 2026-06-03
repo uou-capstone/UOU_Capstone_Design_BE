@@ -184,6 +184,7 @@ sequenceDiagram
 - 레퍼런스 스타일 prompt에는 한국어 출력, 현재 페이지 집중, LaTeX/코드 포맷, 핵심 개념 굵게 표시 규칙을 유지한다.
 - `QaAgent`는 현재 페이지 전체 설명을 반복하지 않고 학생 질문에 직접 답한다.
 - 현재 페이지가 목차/개요 수준이면 `PdfContextService.search_relevant_pages()`로 PDF page index에서 질문 관련 페이지 후보를 찾아 QA prompt에 함께 넣는다.
+- QA는 `PdfFileRefService`를 통해 Gemini Files API fileRef metadata를 세션에 기록하고, 실제 URI는 `GeminiBridgeClient`의 TTL cache를 거쳐 page text/index 검색이 부족할 때 원본 PDF를 2차 근거로 함께 전달한다.
 - 관련 페이지 후보를 사용한 답변은 근거 페이지를 짧게 표시한다.
 
 ### Plan Verifier
@@ -530,12 +531,17 @@ endpoint:
 파일:
 
 - `app/services/pdf_context_service.py`
+- `app/services/pdf_file_ref_service.py`
 
 역할:
 
 - 통합학습 설명 에이전트가 사용할 현재/이전/다음 페이지 텍스트를 추출한다.
 - PDF mtime/size 기준으로 프로세스 메모리 cache를 유지한다.
 - 추출 실패, 스캔 PDF, 빈 텍스트 PDF에서는 `None`을 반환하고 `ExplainerAgent`가 기존 PDF 전체 입력 fallback을 사용한다.
+- QA는 `pdf_path + size + mtimeNs` fingerprint로 `SessionState.gemini_file_ref`와 `SessionState.pdf_fingerprint`를 기록한다.
+- 실제 Gemini Files API URI 재사용/만료 판단은 `GeminiBridgeClient`의 Redis/메모리 TTL cache를 거친다.
+- `QaAgent`에는 현재/관련 page text를 1차 근거로, Gemini Files API fileRef 또는 inline PDF fallback part를 2차 근거로 전달한다.
+- Gemini Files API 업로드/cache가 실패하면 기존 page text/index 기반 QA로 fallback하며 사용자-facing 오류를 내지 않는다.
 
 ## 보안
 

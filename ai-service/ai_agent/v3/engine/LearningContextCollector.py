@@ -11,6 +11,8 @@ from app.services.pdf_context_service import RelevantPage, pdf_context_service
 _MAX_CURRENT_PAGE_CHARS = 8000
 _MAX_NEIGHBOR_PAGE_CHARS = 2500
 _MAX_EXPLANATION_CHARS = 2500
+_MAX_RANGE_QUIZ_CONTEXT_CHARS = 14000
+_MAX_RANGE_PAGE_CHARS = 2200
 _VAGUE_CONFUSION_RE = re.compile(
     r"(이해\s*(가\s*)?(잘\s*)?(안|않)|모르겠|몰라|헷갈|어려워|다시\s*설명|"
     r"잘\s*안\s*돼|잘\s*안돼|무슨\s*말|뭔\s*말)",
@@ -38,6 +40,8 @@ class LearningContext:
     learner_memory_digest: str = ""
     qa_thread_digest: str = ""
     related_pages_digest: str = ""
+    coverage_start_page: Optional[int] = None
+    coverage_end_page: Optional[int] = None
 
     @property
     def has_page_text(self) -> bool:
@@ -52,8 +56,7 @@ class LearningContext:
         into a stable text contract.
         """
         blocks: list[str] = [
-            f"[현재 페이지]\n{self.page_number}"
-            + (f" / 전체 {self.page_count}페이지" if self.page_count else ""),
+            self._quiz_scope_header()
         ]
         if self.chapter_title:
             blocks.append(f"[챕터/제목]\n{self.chapter_title}")
@@ -73,6 +76,21 @@ class LearningContext:
             blocks.append(f"[최근 QA 흐름]\n{self.qa_thread_digest.strip()}")
 
         return "\n\n".join(blocks).strip()
+
+    def _quiz_scope_header(self) -> str:
+        if (
+            self.coverage_start_page
+            and self.coverage_end_page
+            and self.coverage_start_page != self.coverage_end_page
+        ):
+            return (
+                f"[퀴즈 출제 범위]\n{self.coverage_start_page}~{self.coverage_end_page}페이지"
+                + (f" / 전체 {self.page_count}페이지" if self.page_count else "")
+            )
+        return (
+            f"[현재 페이지]\n{self.page_number}"
+            + (f" / 전체 {self.page_count}페이지" if self.page_count else "")
+        )
 
 
 class LearningContextCollector:
@@ -132,6 +150,43 @@ class LearningContextCollector:
             learner_memory_digest=context.learner_memory_digest,
             qa_thread_digest=context.qa_thread_digest,
             related_pages_digest=self._build_related_pages_digest(related_pages),
+        )
+
+    def collect_for_quiz(
+        self,
+        state: SessionState,
+        page_state: PageState | None = None,
+        *,
+        coverage_start_page: int | None = None,
+        coverage_end_page: int | None = None,
+    ) -> LearningContext:
+        context = self.collect(state, page_state)
+        if not coverage_start_page or not coverage_end_page:
+            return context
+
+        start = max(1, min(int(coverage_start_page), int(coverage_end_page)))
+        end = max(1, max(int(coverage_start_page), int(coverage_end_page)))
+        pages = pdf_context_service.read_all_pages(context.pdf_path)
+        if not pages:
+            return context
+        end = min(end, len(pages))
+        if start > end:
+            return context
+
+        selected = pages[start - 1:end]
+        page_text = _build_range_page_text(selected, start)
+        return LearningContext(
+            page_number=context.page_number,
+            pdf_path=context.pdf_path,
+            chapter_title=context.chapter_title,
+            page_text=page_text,
+            prev_text=pages[start - 2] if start > 1 else "",
+            next_text=pages[end] if end < len(pages) else "",
+            page_count=len(pages),
+            learner_memory_digest=context.learner_memory_digest,
+            qa_thread_digest=context.qa_thread_digest,
+            coverage_start_page=start,
+            coverage_end_page=end,
         )
 
     def _build_retrieval_query(self, state: SessionState, question: str, context: LearningContext) -> str:
@@ -217,3 +272,14 @@ def _extract_page_key_terms(page_text: str) -> str:
         if len(token) >= 3
     ]
     return " ".join(tokens[:8])
+
+
+def _build_range_page_text(pages: list[str], start_page: int) -> str:
+    if not pages:
+        return ""
+    per_page_limit = max(900, min(_MAX_RANGE_PAGE_CHARS, _MAX_RANGE_QUIZ_CONTEXT_CHARS // len(pages)))
+    blocks = []
+    for offset, text in enumerate(pages):
+        page_number = start_page + offset
+        blocks.append(f"[페이지 {page_number}]\n{_trim(text, per_page_limit)}")
+    return "\n\n".join(blocks)

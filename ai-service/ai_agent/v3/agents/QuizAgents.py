@@ -154,35 +154,86 @@ def normalize_quiz_generation_result(result: Any, quiz_type: str) -> List[Dict[s
     The v2 generator returns {"problems": {"mcq_problems": [...]}} style
     wrappers, so this extracts the actual list while accepting older shapes.
     """
+    normalized_type = normalize_exam_type_string(quiz_type)
     raw = _to_jsonable(result)
     if isinstance(raw, list):
-        return _as_problem_list(raw)
+        return _normalize_problem_items(_as_problem_list(raw), normalized_type)
     if not isinstance(raw, dict):
         return []
 
     if "quiz" in raw:
         return normalize_quiz_generation_result(raw["quiz"], quiz_type)
 
-    normalized_type = normalize_exam_type_string(quiz_type)
     expected_key = _PROBLEM_KEYS_BY_TYPE.get(normalized_type)
 
     problems = raw.get("problems")
     if isinstance(problems, list):
-        return _as_problem_list(problems)
+        return _normalize_problem_items(_as_problem_list(problems), normalized_type)
     if isinstance(problems, dict):
         if expected_key and expected_key in problems:
-            return _as_problem_list(problems[expected_key])
+            return _normalize_problem_items(_as_problem_list(problems[expected_key]), normalized_type)
         for key in (*_PROBLEM_KEYS_BY_TYPE.values(), "topics"):
             if key in problems:
-                return _as_problem_list(problems[key])
+                return _normalize_problem_items(_as_problem_list(problems[key]), normalized_type)
 
     if expected_key and expected_key in raw:
-        return _as_problem_list(raw[expected_key])
+        return _normalize_problem_items(_as_problem_list(raw[expected_key]), normalized_type)
     for key in (*_PROBLEM_KEYS_BY_TYPE.values(), "topics"):
         if key in raw:
-            return _as_problem_list(raw[key])
+            return _normalize_problem_items(_as_problem_list(raw[key]), normalized_type)
 
     return []
+
+
+def _normalize_problem_items(items: List[Dict[str, Any]], quiz_type: str) -> List[Dict[str, Any]]:
+    if quiz_type != "Flash_Card":
+        return items
+    return [_normalize_flash_card_item(item) for item in items]
+
+
+def _normalize_flash_card_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(item)
+    front = _first_non_empty_text(
+        normalized,
+        "front",
+        "frontContent",
+        "front_content",
+        "cardFront",
+        "term",
+        "cue",
+        "keyword",
+    )
+    back = _first_non_empty_text(
+        normalized,
+        "back",
+        "backContent",
+        "back_content",
+        "cardBack",
+        "definition",
+        "answer",
+        "explanation",
+        "meaning",
+    )
+    if front:
+        normalized.setdefault("front", front)
+        normalized.setdefault("frontContent", front)
+        normalized.setdefault("front_content", front)
+    if back:
+        normalized.setdefault("back", back)
+        normalized.setdefault("backContent", back)
+        normalized.setdefault("back_content", back)
+    return normalized
+
+
+def _first_non_empty_text(item: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def _merge_reference_quiz_profile(
@@ -261,6 +312,7 @@ class QuizAgents:
         profile: Optional[Dict[str, Any]] = None,
         learner_hint: Optional[Dict[str, Any]] = None,
         count: int = 5,
+        context_label: str = "현재 페이지",
     ) -> AsyncGenerator[NdjsonEvent, None]:
         """
         Quiz generation stream.
@@ -278,7 +330,7 @@ class QuizAgents:
             agent="quiz",
             tool="GENERATE_QUIZ",
             channel="thought",
-            delta=f"{quiz_type} 퀴즈 {count}문항을 현재 페이지 컨텍스트와 학습자 약점에 맞춰 생성하고 있습니다.",
+            delta=f"{quiz_type} 퀴즈 {count}문항을 {context_label} 컨텍스트와 학습자 약점에 맞춰 생성하고 있습니다.",
         )
 
         quiz_task = asyncio.ensure_future(
