@@ -339,6 +339,8 @@ context가 있는데 Gemini가 빈 operation을 반환하면 FastAPI가 determin
 
 v3 학습 세션 퀴즈도 동일한 context gate를 적용한다. 현재 페이지 텍스트와 저장된 설명이 모두 없으면 `GENERATE_QUIZ_*`는 LLM을 호출하지 않고 `MISSING_CONTEXT` 안내와 빈 quiz를 반환한다.
 
+통합학습 오케스트레이터는 설명이 끝났다고 바로 `GENERATE_QUIZ_*`를 실행하지 않는다. 설명 직후에는 기본적으로 `QUIZ_DECISION` 위젯으로 먼저 퀴즈 진행 여부를 묻는다. 학생이 수락하고 퀴즈 유형을 선택한 뒤에만 실제 퀴즈 생성 도구가 실행된다. 이미 현재 페이지에서 퀴즈를 진행했거나 채점이 끝난 경우에만 `NEXT_PAGE_DECISION`으로 다음 페이지 이동을 우선 제안한다.
+
 주요 endpoint:
 
 - `POST /bridge/exam_studio/pdf_context`

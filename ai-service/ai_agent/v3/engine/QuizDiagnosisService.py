@@ -43,7 +43,7 @@ class QuizDiagnosisService:
             "quizId": record.quiz_id,
             "pageNumber": record.page_number,
             "quizType": record.quiz_type,
-            "status": "PENDING",
+            "status": "PASSED" if passed else "PENDING",
             "score": round(score, 4),
             "passed": passed,
             "focusConcepts": focus_concepts,

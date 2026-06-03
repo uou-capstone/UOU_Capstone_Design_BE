@@ -129,7 +129,9 @@ class PlanVerifier:
         )
         candidate_actions = self._patch_event_followup_widgets(
             candidate_actions,
+            state,
             event_type=event_type,
+            event_payload=event_payload or {},
             warnings=warnings,
         )
         candidate_actions = self._patch_decision_send_message_widgets(
@@ -313,17 +315,18 @@ class PlanVerifier:
     def _patch_event_followup_widgets(
         self,
         actions: list[OrchestratorAction],
+        state: SessionState,
         *,
         event_type: str | None,
+        event_payload: dict[str, Any],
         warnings: list[dict[str, Any]],
     ) -> list[OrchestratorAction]:
-        if event_type == AppEventType.PAGE_CHANGED.value:
-            default_widget = "QUIZ_DECISION"
-        elif event_type in {
+        if event_type in {
+            AppEventType.PAGE_CHANGED.value,
             AppEventType.START_EXPLANATION_DECISION.value,
             AppEventType.NEXT_PAGE_DECISION.value,
         }:
-            default_widget = "NEXT_PAGE_DECISION"
+            default_widget = _followup_widget_after_explanation(state, event_type, event_payload)
         else:
             return list(actions)
 
@@ -428,3 +431,40 @@ def _decision_widget_from_message(message: str) -> str | None:
     if _NEXT_PAGE_DECISION_MESSAGE_RE.search(normalized):
         return "NEXT_PAGE_DECISION"
     return None
+
+
+def _followup_widget_after_explanation(
+    state: SessionState,
+    event_type: str | None,
+    event_payload: dict[str, Any] | None = None,
+) -> str:
+    current_page = _event_page_number(event_payload or {}) or max(int(state.current_page or 1), 1)
+    if _page_has_quiz_activity(state, current_page):
+        return "NEXT_PAGE_DECISION"
+
+    return "QUIZ_DECISION"
+
+
+def _page_has_quiz_activity(state: SessionState, page_number: int) -> bool:
+    if state.learner.quiz_attempt_counts.get(str(page_number), 0) > 0:
+        return True
+    return any(record.page_number == page_number for record in state.quiz_history)
+
+
+def _event_page_number(payload: dict[str, Any]) -> int | None:
+    for key in ("page", "pageNumber", "page_number", "currentPage", "current_page", "targetPage", "target_page"):
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        try:
+            page = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if page >= 1:
+            return page
+    from_page = payload.get("fromPage", payload.get("from_page"))
+    try:
+        page = int(from_page) + 1
+    except (TypeError, ValueError):
+        return None
+    return page if page >= 1 else None
