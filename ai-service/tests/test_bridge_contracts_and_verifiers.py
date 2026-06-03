@@ -2841,6 +2841,67 @@ async def test_bridge_exam_studio_missing_context_stream_returns_done_fallback()
     assert "MISSING_CONTEXT" in done["warnings"]
 
 
+def test_bridge_exam_studio_current_draft_accepts_null_missing_and_object(monkeypatch):
+    captured_drafts = []
+
+    class FakeExamStudioResponse:
+        answerMarkdown = "시험 초안을 준비했습니다."
+
+        def model_dump(self, mode="json"):
+            return {
+                "answerMarkdown": self.answerMarkdown,
+                "operations": [],
+                "source": "AI",
+                "fallbackUsed": False,
+                "reason": None,
+                "confidence": "MEDIUM",
+                "warnings": [],
+            }
+
+    async def fake_run_exam_studio_chat(request):
+        captured_drafts.append(request.currentDraft)
+        return FakeExamStudioResponse()
+
+    monkeypatch.delenv("AI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(bridge_agents, "run_exam_studio_chat", fake_run_exam_studio_chat)
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    payloads = [
+        {"message": "첫 시험 초안 만들어줘", "currentDraft": None},
+        {"message": "첫 시험 초안 만들어줘"},
+        {"message": "제목을 중간고사로 바꿔줘", "currentDraft": {"title": "기말고사"}},
+    ]
+
+    for payload in payloads:
+        response = client.post("/bridge/exam_studio/chat_stream", json=payload)
+        assert response.status_code == 200
+        assert _read_ndjson(response)[-1]["type"] == "done"
+
+    assert captured_drafts == [{}, {}, {"title": "기말고사"}]
+
+
+def test_bridge_exam_studio_current_draft_rejects_non_object(monkeypatch):
+    async def fake_run_exam_studio_chat(request):
+        raise AssertionError("invalid currentDraft should not reach handler")
+
+    monkeypatch.delenv("AI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(bridge_agents, "run_exam_studio_chat", fake_run_exam_studio_chat)
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/bridge/exam_studio/chat_stream",
+        json={"message": "첫 시험 초안 만들어줘", "currentDraft": []},
+    )
+
+    assert response.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_tool_dispatcher_blocks_quiz_generation_without_page_context():
     class ExplodingBridge:

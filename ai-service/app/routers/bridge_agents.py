@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pypdf import PdfReader
 
 from app.routers.exam import (
@@ -87,6 +87,13 @@ class ExamStudioBridgeChatRequest(BaseModel):
     sourceText: str | None = None
     model: str | None = None
     responseJsonSchema: dict[str, Any] | None = None
+
+    @field_validator("currentDraft", mode="before")
+    @classmethod
+    def normalize_current_draft(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        return value
 
 
 class ReportStudentChatBridgeRequest(BaseModel):
