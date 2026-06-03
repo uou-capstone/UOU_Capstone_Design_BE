@@ -105,6 +105,14 @@ public class FastApiBridgeClient {
                 .bodyToFlux(String.class);
     }
 
+    public Flux<String> noticeAssistantStream(Map<String, Object> body) {
+        return aiServiceStreamingWebClient.post()
+                .uri("/bridge/notice_assistant_stream")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(String.class);
+    }
+
     /** Exam Studio PDF Context 발급 — 단건 JSON. */
     public String examStudioPdfContext(Map<String, Object> body) {
         String raw = aiServiceWebClient.post()
