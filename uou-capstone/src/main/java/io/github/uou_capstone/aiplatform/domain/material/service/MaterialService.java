@@ -92,6 +92,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 
 import java.io.IOException;
+import java.util.LinkedHashSet;
+import java.util.List;
 
 
 
@@ -267,13 +269,7 @@ public class MaterialService {
     }
 
     private void cleanupLearningSessionAfterMaterialChange(Long lectureId) {
-        try {
-            fastApiSessionClient.invalidateByLecture(lectureId).block();
-            log.info("FastAPI learning session invalidated after material change: lectureId={}", lectureId);
-        } catch (Exception e) {
-            log.warn("FastAPI learning session invalidate failed after material change: lectureId={}, err={}",
-                    lectureId, e.getMessage());
-        }
+        invalidateFastApiLearningSessions(lectureId);
 
         try {
             int ended = learningChatPersistenceService.endActiveSessionsByLecture(lectureId);
@@ -284,6 +280,30 @@ public class MaterialService {
         } catch (Exception e) {
             log.warn("Spring learning chat session ending failed after material change: lectureId={}, err={}",
                     lectureId, e.getMessage());
+        }
+    }
+
+    private void invalidateFastApiLearningSessions(Long lectureId) {
+        LinkedHashSet<Long> sessionIds = new LinkedHashSet<>();
+        try {
+            List<Long> activeSessionIds = learningChatPersistenceService.getActiveSessionIdsByLecture(lectureId);
+            if (activeSessionIds != null) {
+                sessionIds.addAll(activeSessionIds);
+            }
+        } catch (Exception e) {
+            log.warn("Spring active learning chat session id lookup failed after material change: lectureId={}, err={}",
+                    lectureId, e.getMessage());
+        }
+
+        for (Long sessionId : sessionIds) {
+            try {
+                fastApiSessionClient.deleteSession(sessionId).block();
+                log.info("FastAPI learning session invalidated after material change: lectureId={}, sessionId={}",
+                        lectureId, sessionId);
+            } catch (Exception e) {
+                log.warn("FastAPI learning session invalidate failed after material change: lectureId={}, sessionId={}, err={}",
+                        lectureId, sessionId, e.getMessage());
+            }
         }
     }
 

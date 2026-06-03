@@ -58,9 +58,9 @@ public class FastApiSessionClient {
                 });
     }
 
-    public Mono<Void> invalidateByLecture(Long lectureId) {
+    public Mono<Void> deleteSession(Long sessionId) {
         return aiServiceWebClient.delete()
-                .uri("/api/v3/session/{lectureId}", lectureId)
+                .uri("/api/v3/session/{sessionId}", sessionId)
                 .retrieve()
                 .bodyToMono(Void.class);
     }

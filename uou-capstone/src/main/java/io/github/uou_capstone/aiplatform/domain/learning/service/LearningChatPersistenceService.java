@@ -121,6 +121,11 @@ public class LearningChatPersistenceService {
     }
 
     @Transactional(readOnly = true)
+    public List<Long> getActiveSessionIdsByLecture(Long lectureId) {
+        return chatSessionRepository.findActiveSessionIdsByLecture(lectureId);
+    }
+
+    @Transactional(readOnly = true)
     public PageResponse<LearningChatSessionResponse> getSessions(Long lectureId, Long userId, Pageable rawPageable) {
         Pageable pageable = PageableSupport.validate(rawPageable, SORT_WHITELIST, DEFAULT_SORT);
         Page<LearningChatSession> page = chatSessionRepository.findByUserIdAndLectureId(userId, lectureId, pageable);
