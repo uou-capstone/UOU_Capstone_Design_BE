@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FastApiSessionClientTest {
 
     @Test
-    void invalidateByLecture_callsDeleteSessionEndpointWithLectureId() {
+    void deleteSession_callsDeleteSessionEndpointWithSessionId() {
         AtomicReference<ClientRequest> capturedRequest = new AtomicReference<>();
         WebClient webClient = WebClient.builder()
                 .exchangeFunction(request -> {
@@ -26,7 +26,7 @@ class FastApiSessionClientTest {
                 .build();
         FastApiSessionClient client = new FastApiSessionClient(webClient, webClient, new ObjectMapper());
 
-        client.invalidateByLecture(100L).block();
+        client.deleteSession(100L).block();
 
         assertThat(capturedRequest.get().method()).isEqualTo(HttpMethod.DELETE);
         assertThat(capturedRequest.get().url().getPath()).isEqualTo("/api/v3/session/100");

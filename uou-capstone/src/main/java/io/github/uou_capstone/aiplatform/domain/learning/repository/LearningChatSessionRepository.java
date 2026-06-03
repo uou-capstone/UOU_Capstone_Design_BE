@@ -40,6 +40,13 @@ public interface LearningChatSessionRepository extends JpaRepository<LearningCha
                                    @Param("endedAt") LocalDateTime endedAt);
 
     @Query("""
+            SELECT s.id
+            FROM LearningChatSession s
+            WHERE s.lecture.id = :lectureId AND s.endedAt IS NULL
+            """)
+    List<Long> findActiveSessionIdsByLecture(@Param("lectureId") Long lectureId);
+
+    @Query("""
             SELECT DISTINCT s.lecture.id
             FROM LearningChatSession s
             WHERE s.lecture.course.id = :courseId AND s.user.id = :userId
