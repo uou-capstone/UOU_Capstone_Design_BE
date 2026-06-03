@@ -30,6 +30,13 @@ from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
 from ai_agent.v3.engine.PlanVerifier import PlanVerifier
 from ai_agent.v3.engine.QaThreadService import qa_thread_service
 from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
+from ai_agent.v3.engine.ThoughtTrace import (
+    summarize_action,
+    summarize_context,
+    summarize_params,
+    summarize_warnings,
+    trace_event,
+)
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import (
     ActionType,
@@ -89,7 +96,22 @@ class ToolDispatcher:
             event_type=event_type,
             event_payload=event_payload,
         )
-        for action in verification.plan.actions:
+        if trace := trace_event(
+            "PlanVerifier 검증 완료\n"
+            f"- inputActions={len(plan.actions)}\n"
+            f"- outputActions={len(verification.plan.actions)}\n"
+            f"- warnings={summarize_warnings(verification.warnings)}",
+            agent="dispatcher",
+        ):
+            yield trace
+        for index, action in enumerate(verification.plan.actions, start=1):
+            if trace := trace_event(
+                f"액션 실행 {index}/{len(verification.plan.actions)}\n"
+                f"- {summarize_action(action)}",
+                agent="dispatcher",
+                tool=action.tool.value if action.tool else None,
+            ):
+                yield trace
             async for event in self._execute_action(action, state, event_payload):
                 yield event
 
@@ -101,6 +123,13 @@ class ToolDispatcher:
     ) -> AsyncGenerator[NdjsonEvent, None]:
         try:
             if action.type == ActionType.SEND_MESSAGE:
+                if trace := trace_event(
+                    "SEND_MESSAGE 실행\n"
+                    f"- messageChars={len(action.message or '')}\n"
+                    f"- ui={summarize_params(action.ui_state)}",
+                    agent="dispatcher",
+                ):
+                    yield trace
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="system",
@@ -116,6 +145,12 @@ class ToolDispatcher:
                     )
 
             elif action.type == ActionType.SET_UI_STATE:
+                if trace := trace_event(
+                    "SET_UI_STATE 실행\n"
+                    f"- ui={summarize_params(action.ui_state)}",
+                    agent="dispatcher",
+                ):
+                    yield trace
                 yield NdjsonEvent(
                     type=NdjsonEventType.DONE,
                     agent="system",
@@ -172,6 +207,15 @@ class ToolDispatcher:
             pdf_path = page_state.pdf_path or state.pdf_path or ""
             chapter_title = page_state.chapter_title  # None -> ExplainerAgent uses "page N"
             learning_context = self._context_collector.collect(state, page_state)
+            if trace := trace_event(
+                "EXPLAIN_PAGE context 준비\n"
+                f"- detail={detail}\n"
+                f"- nextWidget={params.get('next_widget', 'NEXT_PAGE_DECISION')}\n"
+                f"- {_trace_context_summary(learning_context)}",
+                agent="explainer",
+                tool=ToolName.EXPLAIN_PAGE.value,
+            ):
+                yield trace
 
             # Collect explanation stream (cap at 2000 chars for Redis storage)
             answer_chunks: List[str] = []
@@ -198,6 +242,15 @@ class ToolDispatcher:
             state.append_message("assistant", page_state.explanation)
             next_widget = params.get("next_widget", "NEXT_PAGE_DECISION")
             if next_widget:
+                if trace := trace_event(
+                    "EXPLAIN_PAGE 완료\n"
+                    f"- answerChars={len(full_text)}\n"
+                    f"- storedChars={len(page_state.explanation)}\n"
+                    f"- nextWidget={next_widget}",
+                    agent="explainer",
+                    tool=ToolName.EXPLAIN_PAGE.value,
+                ):
+                    yield trace
                 yield NdjsonEvent(
                     type=NdjsonEventType.DONE,
                     agent="system",
@@ -218,6 +271,15 @@ class ToolDispatcher:
                 state,
                 pdf_path,
             )
+            if trace := trace_event(
+                "ANSWER_QUESTION context 준비\n"
+                f"- question={str(question)[:120]!r}\n"
+                f"- fileRef={'yes' if pdf_original_part is not None else 'no'}\n"
+                f"- {_trace_context_summary(learning_context)}",
+                agent="qa",
+                tool=ToolName.ANSWER_QUESTION.value,
+            ):
+                yield trace
 
             answer_chunks: List[str] = []
             retry_without_file_ref = False
@@ -241,6 +303,12 @@ class ToolDispatcher:
                 ):
                     await _invalidate_pdf_file_ref_cache(self._bridge, state, pdf_path)
                     retry_without_file_ref = True
+                    if trace := trace_event(
+                        "ANSWER_QUESTION fileRef 실패: text-only 재시도 예정",
+                        agent="qa",
+                        tool=ToolName.ANSWER_QUESTION.value,
+                    ):
+                        yield trace
                     break
                 if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "main" and event.delta:
                     answer_chunks.append(event.delta)
@@ -277,6 +345,14 @@ class ToolDispatcher:
                     metadata={"agent": "qa"},
                 )
                 state.append_message("assistant", full_text[:2000], {"agent": "qa"})
+            if trace := trace_event(
+                "ANSWER_QUESTION 완료\n"
+                f"- answerChars={len(full_text)}\n"
+                "- nextWidget=NEXT_PAGE_DECISION",
+                agent="qa",
+                tool=ToolName.ANSWER_QUESTION.value,
+            ):
+                yield trace
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
                 agent="system",
@@ -305,6 +381,15 @@ class ToolDispatcher:
             )
             if not learning_context.has_page_text and not (page_state.explanation or "").strip():
                 state.pending_quiz_request = None
+                if trace := trace_event(
+                    "GENERATE_QUIZ 중단\n"
+                    f"- quizType={quiz_type}\n"
+                    "- reason=MISSING_CONTEXT\n"
+                    f"- {_trace_context_summary(learning_context)}",
+                    agent="quiz",
+                    tool="GENERATE_QUIZ",
+                ):
+                    yield trace
                 yield NdjsonEvent(
                     type=NdjsonEventType.AGENT_DELTA,
                     agent="quiz",
@@ -331,6 +416,16 @@ class ToolDispatcher:
             count = _optional_int_param(params, "count", "questionCount", "numQuestions") or 5
             profile = params.get("profile")
             context_label = _quiz_context_label(learning_context)
+            if trace := trace_event(
+                "GENERATE_QUIZ context 준비\n"
+                f"- quizType={quiz_type}\n"
+                f"- count={count}\n"
+                f"- contextLabel={context_label}\n"
+                f"- {_trace_context_summary(learning_context)}",
+                agent="quiz",
+                tool="GENERATE_QUIZ",
+            ):
+                yield trace
 
             async for event in self._quiz.run_stream(
                 quiz_type,
@@ -353,6 +448,16 @@ class ToolDispatcher:
                             source_request=str(params.get("source_request") or params.get("sourceRequest") or "") or None,
                         )
                         state.quiz_history.append(record)
+                        if trace := trace_event(
+                            "GENERATE_QUIZ 결과 저장\n"
+                            f"- quizId={record.quiz_id}\n"
+                            f"- quizType={record.quiz_type}\n"
+                            f"- questions={len(record.questions)}\n"
+                            f"- coverage={record.coverage_start_page or record.page_number}-{record.coverage_end_page or record.page_number}",
+                            agent="quiz",
+                            tool="GENERATE_QUIZ",
+                        ):
+                            yield trace
                 yield event
 
             page_state.status = PageStatus.QUIZ_IN_PROGRESS
@@ -367,6 +472,17 @@ class ToolDispatcher:
             quiz_type = _params_quiz_type(params, quiz_record.quiz_type if quiz_record else "Five_Choice")
 
             if quiz_record:
+                if trace := trace_event(
+                    "AUTO_GRADE_MCQ_OX 시작\n"
+                    f"- quizType={quiz_type}\n"
+                    f"- quizId={quiz_record.quiz_id}\n"
+                    f"- questions={len(quiz_record.questions)}\n"
+                    f"- answers={len(user_answers) if isinstance(user_answers, list) else 0}\n"
+                    f"- passScoreRatio={PASS_SCORE_RATIO}",
+                    agent="grader",
+                    tool=ToolName.AUTO_GRADE_MCQ_OX.value,
+                ):
+                    yield trace
                 async for event in self._grader.run_stream(
                     quiz_type,
                     quiz_record.questions,
@@ -376,6 +492,16 @@ class ToolDispatcher:
                         grading = event.data.get("grading", {})
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
                         event.data = self._with_assessment_data(event.data, assessment, state)
+                        if trace := trace_event(
+                            "AUTO_GRADE_MCQ_OX 결과\n"
+                            f"- score={event.data.get('total_score')}\n"
+                            f"- passed={event.data.get('passed')}\n"
+                            f"- assessmentStatus={assessment.get('status')}\n"
+                            f"- nextWidget={'REVIEW_DECISION' if not event.data.get('passed') else 'NEXT_PAGE_DECISION'}",
+                            agent="grader",
+                            tool=ToolName.AUTO_GRADE_MCQ_OX.value,
+                        ):
+                            yield trace
                         if not event.data.get("passed"):
                             diagnostic_prompt = _active_diagnostic_prompt(state)
                             if diagnostic_prompt:
@@ -393,6 +519,15 @@ class ToolDispatcher:
                             )
                             continue
                         event.data = self._with_passed_followup_data(event.data)
+                        followup_message = self._build_passed_grading_message(event.data)
+                        if followup_message:
+                            yield NdjsonEvent(
+                                type=NdjsonEventType.AGENT_DELTA,
+                                agent="grader",
+                                tool=ToolName.AUTO_GRADE_MCQ_OX.value,
+                                channel="main",
+                                delta=followup_message,
+                            )
                     yield event
             else:
                 yield NdjsonEvent(
@@ -413,6 +548,16 @@ class ToolDispatcher:
             pdf_path = page_state.pdf_path or state.pdf_path or None
 
             if quiz_record:
+                if trace := trace_event(
+                    "GRADE_SHORT_OR_ESSAY 시작\n"
+                    f"- quizType={quiz_type}\n"
+                    f"- quizId={quiz_record.quiz_id}\n"
+                    f"- questions={len(quiz_record.questions)}\n"
+                    f"- answers={len(user_answers) if isinstance(user_answers, list) else 0}",
+                    agent="grader",
+                    tool=ToolName.GRADE_SHORT_OR_ESSAY.value,
+                ):
+                    yield trace
                 async for event in self._grader.run_stream(
                     quiz_type,
                     quiz_record.questions,
@@ -424,6 +569,16 @@ class ToolDispatcher:
                         grading = event.data.get("grading", {})
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
                         event.data = self._with_assessment_data(event.data, assessment, state)
+                        if trace := trace_event(
+                            "GRADE_SHORT_OR_ESSAY 결과\n"
+                            f"- score={event.data.get('total_score')}\n"
+                            f"- passed={event.data.get('passed')}\n"
+                            f"- assessmentStatus={assessment.get('status')}\n"
+                            f"- nextWidget={'REVIEW_DECISION' if not event.data.get('passed') else 'NEXT_PAGE_DECISION'}",
+                            agent="grader",
+                            tool=ToolName.GRADE_SHORT_OR_ESSAY.value,
+                        ):
+                            yield trace
                         if not event.data.get("passed"):
                             diagnostic_prompt = _active_diagnostic_prompt(state)
                             if diagnostic_prompt:
@@ -441,6 +596,15 @@ class ToolDispatcher:
                             )
                             continue
                         event.data = self._with_passed_followup_data(event.data)
+                        followup_message = self._build_passed_grading_message(event.data)
+                        if followup_message:
+                            yield NdjsonEvent(
+                                type=NdjsonEventType.AGENT_DELTA,
+                                agent="grader",
+                                tool=ToolName.GRADE_SHORT_OR_ESSAY.value,
+                                channel="main",
+                                delta=followup_message,
+                            )
                     yield event
             else:
                 yield NdjsonEvent(
@@ -465,6 +629,16 @@ class ToolDispatcher:
                 return
 
             learning_context = self._context_collector.collect(state, page_state)
+            if trace := trace_event(
+                "REPAIR_MISCONCEPTION 시작\n"
+                f"- studentMessage={str(student_message)[:120]!r}\n"
+                f"- interventionId={intervention.get('interventionId')}\n"
+                f"- focus={', '.join(intervention.get('focusConcepts') or intervention.get('focus_concepts') or []) or 'none'}\n"
+                f"- {_trace_context_summary(learning_context)}",
+                agent="repair",
+                tool=ToolName.REPAIR_MISCONCEPTION.value,
+            ):
+                yield trace
             answer_chunks: List[str] = []
             repair_failed = False
             async for event in self._repair.run_stream(
@@ -527,6 +701,14 @@ class ToolDispatcher:
                     metadata={"agent": "repair", "interventionId": intervention.get("interventionId")},
                 )
                 state.append_message("assistant", full_text[:2000], {"agent": "repair"})
+            if trace := trace_event(
+                "REPAIR_MISCONCEPTION 완료\n"
+                f"- answerChars={len(full_text)}\n"
+                "- nextWidget=RETEST_DECISION",
+                agent="repair",
+                tool=ToolName.REPAIR_MISCONCEPTION.value,
+            ):
+                yield trace
             yield NdjsonEvent(
                 type=NdjsonEventType.DONE,
                 agent="repair",
@@ -606,6 +788,60 @@ class ToolDispatcher:
             return {**data, "ui": {"widget": "NEXT_PAGE_DECISION"}}
         return data
 
+    @staticmethod
+    def _build_passed_grading_message(data: Dict[str, Any]) -> str:
+        if data.get("passed") is not True:
+            return ""
+
+        grading = data.get("grading") if isinstance(data.get("grading"), dict) else {}
+        total_score = _safe_float(data.get("total_score", grading.get("total_score")))
+        pass_ratio = _safe_float(data.get("passScoreRatio", PASS_SCORE_RATIO))
+        overall_feedback = str(grading.get("overall_feedback") or "").strip()
+        results = grading.get("results") if isinstance(grading.get("results"), list) else []
+        missed_items = [
+            item for item in results
+            if isinstance(item, dict) and not _result_item_passed(item)
+        ]
+
+        lines = [
+            f"채점 결과, 기준 점수 {pass_ratio * 100:.0f}% 이상이라 통과입니다. "
+            f"이번 점수는 {total_score * 100:.0f}%입니다."
+        ]
+        if overall_feedback:
+            lines.append(overall_feedback)
+
+        if missed_items:
+            lines.extend([
+                "",
+                "다만 틀린 문항은 다음 페이지로 넘어가기 전에 짧게 짚고 갈게요.",
+            ])
+            for item in missed_items[:3]:
+                index = _display_question_index(item)
+                feedback = str(item.get("feedback") or "").strip()
+                user_answer = _stringify_answer(item.get("user_answer"))
+                correct_answer = _stringify_answer(item.get("correct_answer"))
+
+                parts = [f"- {index}번 문항"]
+                if user_answer or correct_answer:
+                    answer_bits = []
+                    if user_answer:
+                        answer_bits.append(f"내 답: {user_answer}")
+                    if correct_answer:
+                        answer_bits.append(f"정답: {correct_answer}")
+                    parts.append(f"({', '.join(answer_bits)})")
+                if feedback:
+                    parts.append(f": {feedback}")
+                lines.append(" ".join(parts))
+
+            if len(missed_items) > 3:
+                lines.append(f"- 그 외 {len(missed_items) - 3}개 문항도 채점 결과에서 확인해 주세요.")
+            lines.append("")
+            lines.append("이 부분만 확인하고 다음 페이지로 넘어가면 됩니다.")
+        else:
+            lines.append("틀린 문항이 없어 현재 페이지 핵심을 충분히 이해한 상태로 볼 수 있습니다.")
+
+        return "\n".join(lines).strip()
+
 
 def _params_quiz_type(params: Dict[str, Any], default: str) -> str:
     return normalize_exam_type_string(
@@ -641,11 +877,61 @@ def _optional_int_param(params: Dict[str, Any], *keys: str) -> int | None:
 
 
 def _quiz_context_label(learning_context) -> str:
-    start = learning_context.coverage_start_page
-    end = learning_context.coverage_end_page
+    start = getattr(learning_context, "coverage_start_page", None)
+    end = getattr(learning_context, "coverage_end_page", None)
     if start and end and start != end:
         return f"{start}~{end}페이지"
     return "현재 페이지"
+
+
+def _trace_context_summary(learning_context) -> str:
+    return summarize_context(
+        page_number=int(getattr(learning_context, "page_number", 1) or 1),
+        page_count=int(getattr(learning_context, "page_count", 0) or 0),
+        page_text=str(getattr(learning_context, "page_text", "") or ""),
+        prev_text=str(getattr(learning_context, "prev_text", "") or ""),
+        next_text=str(getattr(learning_context, "next_text", "") or ""),
+        related_pages_digest=str(getattr(learning_context, "related_pages_digest", "") or ""),
+        qa_thread_digest=str(getattr(learning_context, "qa_thread_digest", "") or ""),
+        coverage_start_page=getattr(learning_context, "coverage_start_page", None),
+        coverage_end_page=getattr(learning_context, "coverage_end_page", None),
+    )
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _result_item_passed(item: Dict[str, Any]) -> bool:
+    if "passed" in item:
+        return item.get("passed") is True
+    score = _safe_float(item.get("score"), 0.0)
+    return score >= 1.0
+
+
+def _display_question_index(item: Dict[str, Any]) -> int:
+    raw_index = item.get("question_index", item.get("questionIndex"))
+    try:
+        return int(raw_index) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _stringify_answer(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("answer", "value", "text", "content"):
+            nested = value.get(key)
+            if nested is not None:
+                return _stringify_answer(nested)
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
 
 
 def _active_diagnostic_prompt(state: SessionState) -> str:
