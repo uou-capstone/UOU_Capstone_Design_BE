@@ -34,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,6 +62,9 @@ class LearningSessionAuthorizationTest {
 
     @Mock
     private LearningChatPersistenceService chatPersistenceService;
+
+    @Mock
+    private LearningIntegratedEvidenceService integratedEvidenceService;
 
     @InjectMocks
     private LearningSessionService learningSessionService;
@@ -158,7 +163,7 @@ class LearningSessionAuthorizationTest {
 
         when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
         when(currentUserResolver.getUser()).thenReturn(currentUser);
-        when(chatPersistenceService.getOwnedSession(sessionId, 77L, LECTURE_ID))
+        when(chatPersistenceService.getOwnedActiveSession(sessionId, 77L, LECTURE_ID))
                 .thenReturn(LearningChatSession.builder().lecture(lecture).user(currentUser).build());
         when(fastApiSessionClient.streamEvent(eq(sessionId), anyMap())).thenReturn(Flux.just(
                 "{\"type\":\"agent_delta\",\"channel\":\"thought\",\"delta\":\"hidden\"}",
@@ -174,6 +179,65 @@ class LearningSessionAuthorizationTest {
 
         verify(chatPersistenceService).saveUserMessage(sessionId, 77L, LECTURE_ID, "hello", 2);
         verify(chatPersistenceService).saveAssistantMessage(sessionId, 77L, LECTURE_ID, "answer", 2);
+    }
+
+    @Test
+    void streamEvent_recordsLearningEvidenceWithoutBreakingSseWhenSaveFails() {
+        Long sessionId = 5L;
+        Teacher courseOwner = teacher(COURSE_OWNER_TEACHER_ID);
+        Course course = courseOwnedBy(courseOwner);
+        Lecture lecture = lectureOf(course);
+        Student student = student(50L);
+        User currentUser = userWith(null, student);
+        ReflectionTestUtils.setField(currentUser, "id", 77L);
+
+        SessionEventRequest request = new SessionEventRequest();
+        request.setType("QUIZ_SUBMITTED");
+
+        String doneLine = """
+                {"type":"done","data":{"eventKind":"QUIZ_GRADED","learningEvidence":{"sessionId":5,"lectureId":100,"quizId":"quiz-1","scoreRatio":0.2}}}
+                """.trim();
+
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(currentUserResolver.getUser()).thenReturn(currentUser);
+        when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(true);
+        when(chatPersistenceService.getOwnedActiveSession(sessionId, 77L, LECTURE_ID))
+                .thenReturn(LearningChatSession.builder().lecture(lecture).user(currentUser).build());
+        when(fastApiSessionClient.streamEvent(eq(sessionId), anyMap())).thenReturn(Flux.just(doneLine));
+        doThrow(new RuntimeException("db down")).when(integratedEvidenceService)
+                .saveFromStreamLine(doneLine, sessionId, LECTURE_ID, currentUser);
+
+        List<ServerSentEvent<String>> events = learningSessionService.streamSessionEvent(
+                LECTURE_ID, sessionId, request, 2, null, null).collectList().block();
+
+        assertThat(events).isNotEmpty();
+        verify(integratedEvidenceService).saveFromStreamLine(doneLine, sessionId, LECTURE_ID, currentUser);
+    }
+
+    @Test
+    void streamEvent_withEndedSession_isRejectedBeforeFastApiCall() {
+        Long sessionId = 5L;
+        Teacher courseOwner = teacher(COURSE_OWNER_TEACHER_ID);
+        Course course = courseOwnedBy(courseOwner);
+        Lecture lecture = lectureOf(course);
+        User currentUser = userWith(courseOwner, null);
+        ReflectionTestUtils.setField(currentUser, "id", 77L);
+
+        SessionEventRequest request = new SessionEventRequest();
+        request.setType("USER_MESSAGE");
+        request.setExtra("question", "hello");
+
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(currentUserResolver.getUser()).thenReturn(currentUser);
+        when(chatPersistenceService.getOwnedActiveSession(sessionId, 77L, LECTURE_ID))
+                .thenThrow(new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        assertThatThrownBy(() -> learningSessionService.streamSessionEvent(
+                LECTURE_ID, sessionId, request, 2, null, null))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(CommonErrorCode.SESSION_NOT_FOUND));
+
+        verify(fastApiSessionClient, never()).streamEvent(eq(sessionId), anyMap());
     }
 
     @Test
@@ -201,6 +265,27 @@ class LearningSessionAuthorizationTest {
 
         assertThat(response).containsEntry("chatSessionId", chatSessionId);
         verify(fastApiSessionClient).getOrCreateByLecture(LECTURE_ID, null, chatSessionId);
+    }
+
+    @Test
+    void createOrGetSession_withEndedExplicitSession_isRejectedBeforeFastApiCall() {
+        Long chatSessionId = 12L;
+        Teacher courseOwner = teacher(COURSE_OWNER_TEACHER_ID);
+        Course course = courseOwnedBy(courseOwner);
+        Lecture lecture = lectureOf(course);
+        User currentUser = userWith(courseOwner, null);
+        ReflectionTestUtils.setField(currentUser, "id", 77L);
+
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(currentUserResolver.getUser()).thenReturn(currentUser);
+        when(chatPersistenceService.getOwnedActiveSession(chatSessionId, 77L, LECTURE_ID))
+                .thenThrow(new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+
+        assertThatThrownBy(() -> learningSessionService.getOrCreateSession(LECTURE_ID, null, chatSessionId))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(CommonErrorCode.SESSION_NOT_FOUND));
+
+        verify(fastApiSessionClient, never()).getOrCreateByLecture(eq(LECTURE_ID), eq(null), eq(chatSessionId));
     }
 
     private static Teacher teacher(Long id) {
