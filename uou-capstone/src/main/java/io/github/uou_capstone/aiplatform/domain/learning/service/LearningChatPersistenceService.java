@@ -71,6 +71,12 @@ public class LearningChatPersistenceService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
     }
 
+    @Transactional(readOnly = true)
+    public LearningChatSession getOwnedActiveSession(Long sessionId, Long userId, Long lectureId) {
+        return chatSessionRepository.findByIdAndUserIdAndLectureIdAndEndedAtIsNull(sessionId, userId, lectureId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
+    }
+
     @Transactional
     public void saveUserMessage(Long sessionId, Long userId, Long lectureId, String content, Integer pageNumber) {
         if (!StringUtils.hasText(content)) {
