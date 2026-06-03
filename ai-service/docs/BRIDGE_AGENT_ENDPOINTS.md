@@ -391,9 +391,16 @@ operation 검증:
 - `history[]`
 - `builtInCriteria[]`
 - `additionalCriteria[]`
+- `existingCriteria[]` 선택. Spring chat 계약에서는 일반적으로 보내지 않는다.
 - `currentProposal`
 - `model`
 - `responseJsonSchema` 선택
+
+기준 목록 역할:
+
+- `builtInCriteria[]`: 기본 평가 항목. 수정/삭제 불가 대상으로 보호된다.
+- `additionalCriteria[]`: Spring DB에 저장된 추가 평가 항목. `updateCriterion`/`deleteCriterion`의 대상이 될 수 있다.
+- `existingCriteria[]`: 추천형 endpoint의 중복 제거용 필드와 호환하기 위해 남겨둔 legacy 필드다. chat endpoint에서는 수정/삭제 불가 기준처럼 보호되므로, Spring DB의 추가 평가항목은 이 필드가 아니라 `additionalCriteria[]`로 전달한다.
 
 `done.data`:
 
@@ -418,6 +425,7 @@ operation 검증:
 
 - 기본 평가 항목은 수정/삭제하지 않는다. 요청되면 `messageOnly`와 `BUILT_IN_CRITERION_IMMUTABLE` warning을 반환한다.
 - `createCriterion`, `updateCriterion`, `deleteCriterion`은 실제 DB 반영이 아니라 Spring/FE가 적용할 제안이다.
+- `updateCriterion`, `deleteCriterion`은 `targetCriterionId` 또는 `targetCriterionName`으로 추가 평가 항목 대상을 특정해야 한다. 대상이 없으면 각각 `UPDATE_TARGET_MISSING`, `DELETE_TARGET_MISSING` warning과 함께 `messageOnly`를 반환한다.
 - `criterion.name`은 60자, `criterion.description`은 600자로 제한된다.
 
 ### Classroom Report

@@ -2485,6 +2485,85 @@ async def test_criteria_chat_normalizes_create_criterion_operation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_criteria_chat_update_requires_target(monkeypatch):
+    async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
+        return {
+            "replyMarkdown": "평가 항목을 수정하겠습니다.",
+            "operation": {
+                "method": "updateCriterion",
+                "params": {
+                    "criterion": {
+                        "name": "질문 근거 활용 능력",
+                        "description": "학생이 질문과 답변에서 개념 근거를 연결하는지 평가합니다.",
+                    }
+                },
+            },
+            "source": "AI",
+        }
+
+    monkeypatch.setattr(bridge_agents, "_call_gemini_json", fake_call_gemini_json)
+
+    result = await bridge_agents._criteria_chat_result(
+        bridge_agents.CriteriaAssistantChatRequest(
+            courseName="수학",
+            message="이 기준 수정해줘",
+            additionalCriteria=[
+                bridge_agents.ReportCriterionAssistantItem(
+                    id=7,
+                    name="질문 근거 활용 능력",
+                    description="학생이 근거를 연결하는지 평가합니다.",
+                    isBuiltIn=False,
+                ),
+            ],
+        )
+    )
+
+    assert result["operation"]["method"] == "messageOnly"
+    assert "UPDATE_TARGET_MISSING" in result["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_criteria_chat_allows_additional_criterion_update(monkeypatch):
+    async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
+        return {
+            "replyMarkdown": "추가 평가 항목 수정안을 준비했습니다.",
+            "operation": {
+                "method": "updateCriterion",
+                "params": {
+                    "targetCriterionId": "7",
+                    "targetCriterionName": "질문 근거 활용 능력",
+                    "criterion": {
+                        "name": "질문 근거 활용 능력",
+                        "description": "학생이 질문과 답변에서 개념 근거를 연결하고 설명하는지 평가합니다.",
+                    },
+                },
+            },
+            "source": "AI",
+        }
+
+    monkeypatch.setattr(bridge_agents, "_call_gemini_json", fake_call_gemini_json)
+
+    result = await bridge_agents._criteria_chat_result(
+        bridge_agents.CriteriaAssistantChatRequest(
+            courseName="수학",
+            message="질문 근거 활용 능력 기준 수정해줘",
+            additionalCriteria=[
+                bridge_agents.ReportCriterionAssistantItem(
+                    id=7,
+                    name="질문 근거 활용 능력",
+                    description="학생이 근거를 연결하는지 평가합니다.",
+                    isBuiltIn=False,
+                ),
+            ],
+        )
+    )
+
+    assert result["operation"]["method"] == "updateCriterion"
+    assert result["operation"]["params"]["targetCriterionId"] == "7"
+    assert "BUILT_IN_CRITERION_IMMUTABLE" not in result["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_notice_assistant_returns_notice_operation(monkeypatch):
     async def fake_call_gemini_json(*, prompt: str, model: str, response_json_schema=None):
         return {

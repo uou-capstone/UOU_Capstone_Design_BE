@@ -404,6 +404,9 @@ endpoint:
 - AI 추천이 부족하면 fallback 기준으로 채우고 각 suggestion에 `source`, `fallbackUsed`, `reason`, `confidence`, `warnings[]`를 붙인다.
 - chat endpoint는 레퍼런스처럼 `operation.method` (`draftCriterion`, `reviseCriterion`, `createCriterion`, `updateCriterion`, `deleteCriterion`, `messageOnly`)를 반환한다.
 - 기본 평가 항목 수정/삭제 요청은 `messageOnly`와 `BUILT_IN_CRITERION_IMMUTABLE` warning으로 막는다.
+- chat endpoint에서 `builtInCriteria[]`는 수정/삭제 불가 기준, `additionalCriteria[]`는 수정/삭제 가능한 Spring DB 추가 평가항목으로 취급한다.
+- Spring chat 계약에서는 `existingCriteria[]`를 일반적으로 보내지 않는다. 이 필드는 legacy 호환용이며 들어오면 수정/삭제 불가 기준처럼 보호한다.
+- `updateCriterion`/`deleteCriterion`은 `targetCriterionId` 또는 `targetCriterionName`이 없으면 각각 `UPDATE_TARGET_MISSING`/`DELETE_TARGET_MISSING` warning과 함께 `messageOnly`로 보정한다.
 - 실제 criteria CRUD는 Spring/FE의 확인 단계에서 수행한다.
 
 ### Classroom Report
