@@ -20,6 +20,7 @@ import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClien
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -33,11 +34,13 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -118,16 +121,20 @@ class MaterialServiceTest {
         when(currentUserResolver.getUser()).thenReturn(user);
         when(currentUserResolver.getTeacher()).thenReturn(teacher);
         when(materialRepository.save(any(Material.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(fastApiSessionClient.invalidateByLecture(LECTURE_ID)).thenReturn(Mono.empty());
+        when(learningChatPersistenceService.getActiveSessionIdsByLecture(LECTURE_ID)).thenReturn(List.of(300L, 301L));
+        when(fastApiSessionClient.deleteSession(300L)).thenReturn(Mono.empty());
+        when(fastApiSessionClient.deleteSession(301L)).thenReturn(Mono.empty());
         when(learningChatPersistenceService.endActiveSessionsByLecture(LECTURE_ID)).thenReturn(2);
 
         Material result = materialService.uploadFile(LECTURE_ID, file);
 
         assertThat(result.getFilePath()).isEqualTo("uploads/new.pdf");
-        verify(examSessionRepository).clearMaterialReferencesByLectureAndType(LECTURE_ID, "PDF");
-        verify(materialRepository).deleteByLecture_IdAndMaterialType(LECTURE_ID, "PDF");
+        InOrder deleteOrder = inOrder(examSessionRepository, materialRepository);
+        deleteOrder.verify(examSessionRepository).clearMaterialReferencesByLectureAndType(LECTURE_ID, "PDF");
+        deleteOrder.verify(materialRepository).deleteByLecture_IdAndMaterialType(LECTURE_ID, "PDF");
         verify(materialRepository).save(any(Material.class));
-        verify(fastApiSessionClient).invalidateByLecture(LECTURE_ID);
+        verify(fastApiSessionClient).deleteSession(300L);
+        verify(fastApiSessionClient).deleteSession(301L);
         verify(learningChatPersistenceService).endActiveSessionsByLecture(LECTURE_ID);
     }
 
@@ -137,14 +144,16 @@ class MaterialServiceTest {
         when(materialRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(material));
         when(currentUserResolver.getUser()).thenReturn(user);
         when(currentUserResolver.getTeacher()).thenReturn(teacher);
-        when(fastApiSessionClient.invalidateByLecture(LECTURE_ID)).thenReturn(Mono.empty());
+        when(learningChatPersistenceService.getActiveSessionIdsByLecture(LECTURE_ID)).thenReturn(List.of(300L));
+        when(fastApiSessionClient.deleteSession(300L)).thenReturn(Mono.empty());
 
         materialService.deleteMaterial(MATERIAL_ID);
 
-        verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
-        verify(materialRepository).delete(material);
-        verify(materialRepository).flush();
-        verify(fastApiSessionClient).invalidateByLecture(LECTURE_ID);
+        InOrder deleteOrder = inOrder(examSessionRepository, materialRepository);
+        deleteOrder.verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
+        deleteOrder.verify(materialRepository).delete(material);
+        deleteOrder.verify(materialRepository).flush();
+        verify(fastApiSessionClient).deleteSession(300L);
         verify(learningChatPersistenceService).endActiveSessionsByLecture(LECTURE_ID);
     }
 
@@ -154,14 +163,16 @@ class MaterialServiceTest {
         when(materialRepository.findById(MATERIAL_ID)).thenReturn(Optional.of(material));
         when(currentUserResolver.getUser()).thenReturn(user);
         when(currentUserResolver.getTeacher()).thenReturn(teacher);
-        when(fastApiSessionClient.invalidateByLecture(LECTURE_ID))
+        when(learningChatPersistenceService.getActiveSessionIdsByLecture(LECTURE_ID)).thenReturn(List.of(300L));
+        when(fastApiSessionClient.deleteSession(300L))
                 .thenReturn(Mono.error(new IllegalStateException("ai down")));
 
         materialService.deleteMaterial(MATERIAL_ID);
 
-        verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
-        verify(materialRepository).delete(material);
-        verify(materialRepository).flush();
+        InOrder deleteOrder = inOrder(examSessionRepository, materialRepository);
+        deleteOrder.verify(examSessionRepository).clearMaterialReference(MATERIAL_ID);
+        deleteOrder.verify(materialRepository).delete(material);
+        deleteOrder.verify(materialRepository).flush();
         verify(learningChatPersistenceService).endActiveSessionsByLecture(LECTURE_ID);
     }
 
@@ -176,7 +187,8 @@ class MaterialServiceTest {
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(CommonErrorCode.FORBIDDEN));
 
-        verify(fastApiSessionClient, never()).invalidateByLecture(LECTURE_ID);
+        verify(examSessionRepository, never()).clearMaterialReference(any());
+        verify(fastApiSessionClient, never()).deleteSession(any());
         verify(learningChatPersistenceService, never()).endActiveSessionsByLecture(LECTURE_ID);
     }
 
