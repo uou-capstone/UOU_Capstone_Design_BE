@@ -1025,6 +1025,45 @@ async def test_orchestration_engine_routes_quiz_check_request_to_decision_prompt
 
 
 @pytest.mark.asyncio
+async def test_quiz_decision_reject_routes_to_next_page_decision_without_planner():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class FakeBridge:
+        pass
+
+    class FailingPlanner:
+        async def run_stream(self, event, state):
+            raise AssertionError("quiz skip should not call the LLM planner")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    engine = OrchestrationEngine(FakeStore(state), bridge=FakeBridge())  # type: ignore[arg-type]
+    engine._orchestrator = FailingPlanner()  # type: ignore[assignment]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.QUIZ_DECISION,
+                payload={"accept": False},
+            ),
+        )
+    ]
+
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert done.data == {"ui": {"widget": "NEXT_PAGE_DECISION", "reason": "QUIZ_SKIPPED"}}
+    assert state.get_current_page_state().status.value == "DONE"
+
+
+@pytest.mark.asyncio
 async def test_initial_explanation_sequence_matches_reference_flow():
     class FakeStore:
         def __init__(self, state):
