@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator, Literal
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.error_mapping import stable_error_type
 from app.services.exam_studio_operation_validator import validate_exam_studio_operations
@@ -23,6 +23,13 @@ class ExamStudioChatRequest(BaseModel):
     timeZone: str | None = None
     sourceText: str | None = None
     responseJsonSchema: dict[str, Any] | None = None
+
+    @field_validator("currentDraft", mode="before")
+    @classmethod
+    def normalize_current_draft(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        return value
 
 
 class ExamStudioOperation(BaseModel):

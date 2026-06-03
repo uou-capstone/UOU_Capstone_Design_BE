@@ -24,6 +24,12 @@ from ai_agent.v3.engine.NavigationIntentService import (
 from ai_agent.v3.engine.Orchestrator import Orchestrator
 from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
 from ai_agent.v3.engine.StateReducer import StateReducer
+from ai_agent.v3.engine.ThoughtTrace import (
+    summarize_payload,
+    summarize_plan,
+    summarize_state,
+    trace_event,
+)
 from ai_agent.v3.engine.ToolDispatcher import ToolDispatcher
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import (
@@ -84,6 +90,13 @@ class OrchestrationEngine:
         try:
             # 2. Apply state immediately (StateReducer)
             state = self._reducer.reduce(state, event)
+            if trace := trace_event(
+                "이벤트 수신 및 상태 반영\n"
+                f"- event={event.type.value}\n"
+                f"- payload={summarize_payload(event.payload)}\n"
+                f"- state={summarize_state(state)}"
+            ):
+                yield trace
 
             navigation_directive = navigation_intent_service.resolve(event, state)
             if navigation_directive:
@@ -95,7 +108,20 @@ class OrchestrationEngine:
                     confidence=navigation_directive.confidence,
                     source=navigation_directive.source,
                 )
+                if trace := trace_event(
+                    "페이지 이동 intent 감지\n"
+                    f"- targetPage={navigation_directive.target_page}\n"
+                    f"- source={navigation_directive.source}\n"
+                    f"- confidence={navigation_directive.confidence:.2f}\n"
+                    f"- reason={navigation_directive.reason}"
+                ):
+                    yield trace
                 navigation_plan = self._navigation_plan(navigation_directive, state)
+                if trace := trace_event(
+                    "페이지 이동 fast plan 생성\n"
+                    f"- {summarize_plan(navigation_plan)}"
+                ):
+                    yield trace
                 async for ndjson_event in self._dispatcher.dispatch(
                     navigation_plan,
                     state,
@@ -107,6 +133,12 @@ class OrchestrationEngine:
 
             fast_path_plan = self._fast_path_plan(event, state)
             if fast_path_plan:
+                if trace := trace_event(
+                    "LLM planner 생략 fast path 선택\n"
+                    f"- event={event.type.value}\n"
+                    f"- {summarize_plan(fast_path_plan)}"
+                ):
+                    yield trace
                 async for ndjson_event in self._dispatcher.dispatch(
                     fast_path_plan,
                     state,
@@ -117,6 +149,12 @@ class OrchestrationEngine:
                 return
 
             # 3. Build plan via LLM (Orchestrator Stream)
+            if trace := trace_event(
+                "LLM planner 호출\n"
+                f"- event={event.type.value}\n"
+                f"- state={summarize_state(state)}"
+            ):
+                yield trace
             plan = None
             async for ndjson_event in self._orchestrator.run_stream(event, state):
                 import ai_agent.types.domain as domain_models
@@ -127,6 +165,11 @@ class OrchestrationEngine:
                             plan = domain_models.OrchestratorPlan(**plan_data)
                         else:
                             plan = plan_data
+                        if trace := trace_event(
+                            "LLM planner plan 수신\n"
+                            f"- {summarize_plan(plan)}"
+                        ):
+                            yield trace
                 elif ndjson_event.type == NdjsonEventType.AGENT_DELTA:
                     if ndjson_event.channel == "thought":
                         yield ndjson_event
@@ -138,6 +181,12 @@ class OrchestrationEngine:
 
             if plan is None:
                 plan = self._fallback_plan_for_empty_actions(event, state)
+                if plan is not None:
+                    if trace := trace_event(
+                        "planner 결과 없음: fallback plan 적용\n"
+                        f"- {summarize_plan(plan)}"
+                    ):
+                        yield trace
 
             if plan is None:
                 yield NdjsonEvent(
@@ -152,8 +201,18 @@ class OrchestrationEngine:
                 fallback_plan = self._fallback_plan_for_empty_actions(event, state)
                 if fallback_plan is not None:
                     plan = fallback_plan
+                    if trace := trace_event(
+                        "planner actions 비어 있음: fallback plan 적용\n"
+                        f"- {summarize_plan(plan)}"
+                    ):
+                        yield trace
 
             # 4. Execute actions (ToolDispatcher)
+            if trace := trace_event(
+                "ToolDispatcher 실행 시작\n"
+                f"- {summarize_plan(plan)}"
+            ):
+                yield trace
             dispatched = False
             async for ndjson_event in self._dispatcher.dispatch(
                 plan,

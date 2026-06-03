@@ -557,6 +557,57 @@ async def test_orchestration_engine_fast_paths_mcq_ox_grading_without_planner():
 
 
 @pytest.mark.asyncio
+async def test_orchestration_engine_emits_verbose_thought_trace_when_enabled(monkeypatch):
+    monkeypatch.setenv("AI_SERVICE_TRACE_THOUGHTS", "true")
+
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class ExplodingBridge:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("planner should not be called for MCQ/OX fast path")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-1",
+        page_number=1,
+        quiz_type="OX_Problem",
+        questions=[{"answer": {"value": "O"}}, {"answer": {"value": "X"}}],
+    ))
+    engine = OrchestrationEngine(FakeStore(state), bridge=ExplodingBridge())  # type: ignore[arg-type]
+
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.QUIZ_SUBMITTED,
+                payload={"answers": [{"answer": "O"}, {"answer": "X"}], "quiz_type": "OX_Problem"},
+            ),
+        )
+    ]
+
+    thought_text = "\n".join(
+        event.delta or ""
+        for event in events
+        if event.type == NdjsonEventType.AGENT_DELTA and event.channel == "thought"
+    )
+    assert "이벤트 수신 및 상태 반영" in thought_text
+    assert "LLM planner 생략 fast path 선택" in thought_text
+    assert "PlanVerifier 검증 완료" in thought_text
+    assert "AUTO_GRADE_MCQ_OX 시작" in thought_text
+    assert "AUTO_GRADE_MCQ_OX 결과" in thought_text
+    assert "nextWidget=NEXT_PAGE_DECISION" in thought_text
+
+
+@pytest.mark.asyncio
 async def test_orchestration_engine_grading_pass_emits_next_page_decision():
     class FakeStore:
         def __init__(self, state):
@@ -608,10 +659,20 @@ async def test_orchestration_engine_grading_pass_emits_next_page_decision():
     ]
 
     done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    pass_messages = [
+        event.delta or ""
+        for event in events
+        if event.type == NdjsonEventType.AGENT_DELTA
+        and event.agent == "grader"
+        and event.channel == "main"
+    ]
     assert done.data["grading"]["total_score"] == 0.6
     assert done.data["passed"] is True
     assert done.data["passScoreRatio"] == 0.6
     assert done.data["ui"] == {"widget": "NEXT_PAGE_DECISION"}
+    assert any("통과" in message for message in pass_messages)
+    assert any("틀린 문항" in message for message in pass_messages)
+    assert any("4번 문항" in message and "5번 문항" in message for message in pass_messages)
     assert state.active_intervention is None
 
 
@@ -2778,6 +2839,67 @@ async def test_bridge_exam_studio_missing_context_stream_returns_done_fallback()
     assert done["reason"] == "MISSING_CONTEXT"
     assert done["confidence"] == "LOW"
     assert "MISSING_CONTEXT" in done["warnings"]
+
+
+def test_bridge_exam_studio_current_draft_accepts_null_missing_and_object(monkeypatch):
+    captured_drafts = []
+
+    class FakeExamStudioResponse:
+        answerMarkdown = "시험 초안을 준비했습니다."
+
+        def model_dump(self, mode="json"):
+            return {
+                "answerMarkdown": self.answerMarkdown,
+                "operations": [],
+                "source": "AI",
+                "fallbackUsed": False,
+                "reason": None,
+                "confidence": "MEDIUM",
+                "warnings": [],
+            }
+
+    async def fake_run_exam_studio_chat(request):
+        captured_drafts.append(request.currentDraft)
+        return FakeExamStudioResponse()
+
+    monkeypatch.delenv("AI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(bridge_agents, "run_exam_studio_chat", fake_run_exam_studio_chat)
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    payloads = [
+        {"message": "첫 시험 초안 만들어줘", "currentDraft": None},
+        {"message": "첫 시험 초안 만들어줘"},
+        {"message": "제목을 중간고사로 바꿔줘", "currentDraft": {"title": "기말고사"}},
+    ]
+
+    for payload in payloads:
+        response = client.post("/bridge/exam_studio/chat_stream", json=payload)
+        assert response.status_code == 200
+        assert _read_ndjson(response)[-1]["type"] == "done"
+
+    assert captured_drafts == [{}, {}, {"title": "기말고사"}]
+
+
+def test_bridge_exam_studio_current_draft_rejects_non_object(monkeypatch):
+    async def fake_run_exam_studio_chat(request):
+        raise AssertionError("invalid currentDraft should not reach handler")
+
+    monkeypatch.delenv("AI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(bridge_agents, "run_exam_studio_chat", fake_run_exam_studio_chat)
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/bridge/exam_studio/chat_stream",
+        json={"message": "첫 시험 초안 만들어줘", "currentDraft": []},
+    )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

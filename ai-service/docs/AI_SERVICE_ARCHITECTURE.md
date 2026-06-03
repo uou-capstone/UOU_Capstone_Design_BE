@@ -581,6 +581,7 @@ CORS는 env 기반 allowlist를 사용한다.
 
 ```bash
 GEMINI_API_KEY=...
+AI_SERVICE_TRACE_THOUGHTS=false
 AI_SECRET_KEY=...
 APP_ENV=local
 CORS_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
@@ -591,6 +592,8 @@ EXAM_STUDIO_PDF_TEXT_MAX_CHARS=500000
 REDIS_HOST=localhost
 REDIS_PORT=6379
 ```
+
+`AI_SERVICE_TRACE_THOUGHTS=true`는 통합학습 테스트용 상세 trace 플래그다. 켜면 thought 채널에 이벤트, 상태 반영, planner plan, verifier 보정, tool context, 채점 결과, 다음 widget 결정이 순차적으로 스트리밍된다. 모델 내부 사고 원문이 아니라 디버깅 가능한 실행 로그이며, 일반 운영에서는 `false`를 권장한다.
 
 ## 저장소 상태와 책임 경계
 
