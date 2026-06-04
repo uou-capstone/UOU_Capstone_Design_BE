@@ -1101,6 +1101,9 @@ public class CourseStudentReportService {
             return ReportStatus.INSUFFICIENT_DATA;
         }
         Double avg = scoreSummary.getAverageScorePercent();
+        if (avg == null) {
+            return ReportStatus.INSUFFICIENT_DATA;
+        }
 
         boolean hasNeedsImprovement = competencies.stream()
                 .anyMatch(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()));
@@ -1186,7 +1189,7 @@ public class CourseStudentReportService {
 
     private String buildHeadline(ScoreSummaryDto scoreSummary, ReportStatus reportStatus) {
         Double avg = scoreSummary.getAverageScorePercent();
-        if (reportStatus == ReportStatus.INSUFFICIENT_DATA) {
+        if (reportStatus == ReportStatus.INSUFFICIENT_DATA || avg == null) {
             return "분석 가능한 학습 데이터가 더 필요합니다.";
         }
         if (reportStatus == ReportStatus.EXCELLING) {

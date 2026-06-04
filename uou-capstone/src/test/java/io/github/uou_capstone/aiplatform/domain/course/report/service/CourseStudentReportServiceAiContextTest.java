@@ -371,6 +371,34 @@ class CourseStudentReportServiceAiContextTest {
     }
 
     @Test
+    void detail_marksInsufficientData_whenExamResultHasNoValidScore() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        ExamSession session = ExamSession.builder()
+                .lecture(null).material(null).displayName(null).user(studentUser)
+                .examType(ExamType.FIVE_CHOICE).targetCount(10).build();
+        ExamResult resultWithoutScore = ExamResult.builder()
+                .examSession(session)
+                .submission(null)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(resultWithoutScore, "id", 7L);
+        ReflectionTestUtils.setField(resultWithoutScore, "completedAt", LocalDateTime.now());
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(resultWithoutScore));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getActivitySummary().getExamAttemptCount()).isEqualTo(1);
+        assertThat(res.getScoreSummary().getAverageScorePercent()).isNull();
+        assertThat(res.getOverallScorePercent()).isNull();
+        assertThat(res.getReportStatus()).isEqualTo("insufficient_data");
+        assertThat(res.getHeadline()).doesNotContain("0.0");
+    }
+
+    @Test
     void aiContext_throwsForbidden_forNonOwnerTeacher() {
         Teacher other = Teacher.builder().schoolName("o").department("o").build();
         ReflectionTestUtils.setField(other, "id", OTHER_TEACHER_ID);
