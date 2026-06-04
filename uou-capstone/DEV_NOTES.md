@@ -4,6 +4,36 @@
 
 ---
 
+## [2026-06-04] 강의실 삭제 시 learning 세션 FK 실패
+
+### 증상
+
+`DELETE /api/courses/{courseId}` 요청에서 강의실 하위 강의를 삭제하려 할 때 `learning_chat_sessions.lecture_id` FK 때문에 MySQL `Cannot delete or update a parent row` 오류가 발생했다. 같은 원인으로 개별 강의 삭제도 학습 세션이 남아 있으면 실패할 수 있었다.
+
+### 원인
+
+강의실/강의 삭제 흐름은 material, exam, generation 데이터만 lecture 삭제 전에 정리했다. v3 learning 채팅 이력과 evidence 테이블은 `lectures`, `material`, `learning_chat_sessions`를 FK로 참조하지만 삭제 순서에 포함되지 않았다.
+
+### 조치
+
+- learning 하위 데이터 삭제 순서를 `session evidence -> integrated evidence -> chat messages -> chat sessions`로 고정한 정리 서비스를 추가했다.
+- 강의실 삭제와 개별 강의 삭제 모두 기존 lecture 하위 데이터 삭제 전에 learning 정리를 먼저 수행하도록 연결했다.
+- 삭제 순서 회귀를 막는 단위 테스트를 추가했다.
+
+### 검증
+
+- `./gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningDataCleanupServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.service.CourseServiceDeleteTest --tests io.github.uou_capstone.aiplatform.domain.course.lecture.service.LectureServiceDeleteTest --no-daemon`
+- `spring-lint`: 이번 변경 파일 기준 위반 없음
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningDataCleanupService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/*Repository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/service/CourseService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/lecture/service/LectureService.java`
+
+---
+
 ## [2026-06-03] Report Criteria Assistant Chat Spring 프록시 추가
 
 ### 증상
