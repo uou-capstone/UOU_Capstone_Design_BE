@@ -274,9 +274,10 @@ flowchart LR
 ### 8.3 오케스트레이터가 자율적으로 시험 시점 결정
 
 1. 설명이 끝난다.
-2. 오케스트레이터는 현재 페이지 중요도, 최근 점수, 기존 퀴즈 시도 횟수, 약점 개념을 평가한다.
-3. 퀴즈가 필요하면 `PROMPT_BINARY_DECISION(QUIZ_DECISION)` 또는 직접 `GENERATE_QUIZ_*`를 선택한다.
-4. 퀴즈 생성 시 학생의 `preferredQuizTypes`, `targetDifficulty`, `weaknesses`가 문제 생성에 반영된다.
+2. 오케스트레이터는 현재 페이지에서 이미 퀴즈를 진행했는지 확인한다.
+3. 아직 퀴즈 활동이 없으면 `PROMPT_BINARY_DECISION(QUIZ_DECISION)`으로 먼저 학생에게 진행 여부를 묻는다.
+4. 학생이 수락하면 `OPEN_QUIZ_TYPE_PICKER` 또는 `QUIZ_TYPE_SELECTED` 흐름을 통해 실제 `GENERATE_QUIZ_*`가 실행된다.
+5. 퀴즈 생성 시 학생의 `preferredQuizTypes`, `targetDifficulty`, `weaknesses`가 문제 생성에 반영된다.
 
 ### 8.4 시험 결과가 나쁘면 복습 루프
 
@@ -316,7 +317,7 @@ sequenceDiagram
   U->>W: 예
   W->>E: START_EXPLANATION_DECISION
   E->>O: updated state
-  O-->>E: EXPLAIN_PAGE + QUIZ_DECISION(or skip)
+  O-->>E: EXPLAIN_PAGE + QUIZ_DECISION
   E->>D: execute tools
   D->>EX: runStream
   EX->>B: /bridge/explain_page_stream

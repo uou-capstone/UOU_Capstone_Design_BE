@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
@@ -20,10 +21,11 @@ from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
 _HEARTBEAT_INTERVAL = 10.0
 
 GRADING_SYSTEM_PROMPT = """# [Role]
-당신은 전문 채점관입니다. 학생의 단답형/서술형 답변을 공정하게 채점해야 합니다.
+당신은 MergeEduAgent의 전문 채점관입니다. 학생의 단답형/서술형 답변을 공정하고 엄격하게 채점해야 합니다.
 
 # [Task]
-주어진 강의 자료(PDF 및 텍스트), 문제 정보, 학생 답변을 검토하여 채점 결과를 JSON 형식으로 반환하세요.
+주어진 강의 자료, 문제 정보, 채점 기준, 학생 답변을 검토하여 채점 결과를 JSON 형식으로 반환하세요.
+점수는 문제의 의도, modelAnswer/referenceAnswer, rubricMarkdown, 강의 자료 근거를 우선 기준으로 삼으세요.
 
 # [Output Format]
 반드시 아래 JSON 형식만 출력하세요. 마크다운 코드블록 없이 순수 JSON만 반환하세요.
@@ -49,10 +51,208 @@ GRADING_SYSTEM_PROMPT = """# [Role]
 - reason: 해당 점수를 부여한 채점 근거 (필수)
 - feedback: 학생에게 전달할 구체적이고 건설적인 피드백 (필수)
 - deduction_reason: 점수가 1.0 미만인 경우 감점 사유 (만점이면 빈 문자열 "")
+- 학생 답변이 핵심 용어만 맞고 원리 설명이 부족하면 부분 점수로 처리하세요.
+- 강의 자료에 없는 내용을 맞는 것처럼 인정하지 마세요.
+- feedback에는 학생이 다음에 보충해야 할 개념을 짧게 포함하세요.
+- 오답이 반복될 가능성이 있으면 reason 또는 feedback에 오개념 후보를 분명히 남기세요.
+- 한국어로 작성하되 필요한 전문 용어는 영어 원문을 괄호로 병기할 수 있습니다.
 - 반드시 위 JSON 형식만 출력, 다른 텍스트 없이
 """
 
 PASS_SCORE_RATIO = 0.6
+
+
+class GradingParseError(ValueError):
+    """Raised when an LLM grading response cannot be trusted as grading data."""
+
+
+def _extract_json_object_text(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise GradingParseError("empty grading response")
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return cleaned
+
+    start = cleaned.find("{")
+    if start < 0:
+        raise GradingParseError("grading response does not contain a JSON object")
+
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(cleaned)):
+        char = cleaned[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return cleaned[start:index + 1].strip()
+
+    raise GradingParseError("grading response JSON object is incomplete")
+
+
+def _parse_json_response(text: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(_extract_json_object_text(text))
+    except json.JSONDecodeError as exc:
+        raise GradingParseError(f"invalid grading JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise GradingParseError("grading response root must be a JSON object")
+    return parsed
+
+
+def _score_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(1.0, max(0.0, score))
+
+
+def _normalize_llm_grading_result(parsed: Dict[str, Any], expected_count: int) -> Dict[str, Any]:
+    raw_results = parsed.get("results")
+    if not isinstance(raw_results, list):
+        raise GradingParseError("grading response missing results[]")
+
+    results: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw_results):
+        if not isinstance(item, dict):
+            raise GradingParseError(f"grading result {index} is not an object")
+        score = _score_float(item.get("score"))
+        results.append({
+            "question_index": int(item.get("question_index", index) or index),
+            "score": score,
+            "passed": bool(item.get("passed", score >= PASS_SCORE_RATIO)),
+            "reason": str(item.get("reason") or "채점 근거가 제공되지 않았습니다."),
+            "feedback": str(item.get("feedback") or "피드백이 제공되지 않았습니다."),
+            "deduction_reason": str(item.get("deduction_reason") or ""),
+        })
+
+    if expected_count and len(results) != expected_count:
+        raise GradingParseError(
+            f"grading result count mismatch: expected {expected_count}, got {len(results)}"
+        )
+
+    total_score = parsed.get("total_score")
+    if total_score is None:
+        total_score = sum(item["score"] for item in results) / max(len(results), 1)
+    normalized_total = _score_float(total_score, default=0.0)
+    return {
+        "results": results,
+        "total_score": normalized_total,
+        "overall_feedback": str(parsed.get("overall_feedback") or "채점이 완료되었습니다."),
+    }
+
+
+def _extract_problem_answer(problem: Dict[str, Any]) -> Any:
+    for key in (
+        "answer",
+        "correct_answer",
+        "correctAnswer",
+        "correct_choice_id",
+        "correctChoiceId",
+        "correct_choice",
+        "correct",
+        "solution",
+    ):
+        if key in problem and problem[key] is not None:
+            return _extract_answer_value(problem[key])
+
+    for choice_key in ("choices", "options"):
+        choices = problem.get(choice_key)
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            is_correct_choice = (
+                choice.get("isCorrect")
+                or choice.get("isAnswer")
+                or choice.get("is_answer")
+                or choice.get("correct")
+                or choice.get("answer") is True
+            )
+            if is_correct_choice:
+                return _extract_answer_value(choice)
+
+    return None
+
+
+def _extract_user_answer(user_answer: Any) -> Any:
+    return _extract_answer_value(user_answer)
+
+
+def _extract_answer_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        for key in (
+            "answer",
+            "value",
+            "choiceId",
+            "choice_id",
+            "selectedChoiceId",
+            "selected_choice_id",
+            "selected",
+            "selectedOption",
+            "selected_option",
+            "option",
+            "id",
+            "label",
+            "content",
+        ):
+            if key in value and value[key] is not None:
+                return _extract_answer_value(value[key])
+    return value
+
+
+def _normalize_answer(value: Any) -> str:
+    value = _extract_answer_value(value)
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "O" if value else "X"
+
+    text = str(value).strip()
+    upper = text.upper()
+    compact = "".join(upper.split())
+
+    ox_aliases = {
+        "TRUE": "O",
+        "T": "O",
+        "YES": "O",
+        "Y": "O",
+        "O": "O",
+        "○": "O",
+        "〇": "O",
+        "맞음": "O",
+        "참": "O",
+        "정답": "O",
+        "FALSE": "X",
+        "F": "X",
+        "NO": "X",
+        "N": "X",
+        "X": "X",
+        "×": "X",
+        "틀림": "X",
+        "거짓": "X",
+        "오답": "X",
+    }
+    return ox_aliases.get(compact, compact)
 
 
 class GraderAgent:
@@ -129,7 +329,9 @@ class GraderAgent:
             yield NdjsonEvent(
                 type=NdjsonEventType.ERROR,
                 agent="grader",
+                code="GRADING_FAILED",
                 message=f"채점 실패: {exc}",
+                details=[{"reason": str(exc)}],
             )
 
     def _grade_auto(
@@ -138,21 +340,19 @@ class GraderAgent:
         user_answers: List[Any],
     ) -> Dict[str, Any]:
         """MCQ/OX 자동 채점 (서버 내부 정답 비교)"""
-        if len(problems) != len(user_answers):
-            raise ValueError(
-                f"문제 수({len(problems)})와 답안 수({len(user_answers)})가 일치하지 않습니다."
-            )
+        answers = user_answers if isinstance(user_answers, list) else []
+        answer_count_mismatch = len(problems) != len(answers)
 
         results = []
         correct_count = 0
 
-        for idx, (problem, user_answer) in enumerate(zip(problems, user_answers)):
-            correct = problem.get("answer") or problem.get("correct_answer")
-            # dict 형식 {"index": i, "answer": "..."} 또는 단순 문자열 모두 처리
-            answer_str = (
-                user_answer.get("answer", "") if isinstance(user_answer, dict) else str(user_answer)
-            )
-            is_correct = answer_str.strip().upper() == str(correct).strip().upper()
+        for idx, problem in enumerate(problems):
+            user_answer = answers[idx] if idx < len(answers) else None
+            correct = _extract_problem_answer(problem)
+            answer = _extract_user_answer(user_answer)
+            correct_str = "" if correct is None else str(correct)
+            answer_str = "" if answer is None else str(answer)
+            is_correct = _normalize_answer(answer) == _normalize_answer(correct)
             if is_correct:
                 correct_count += 1
 
@@ -160,17 +360,25 @@ class GraderAgent:
                 "question_index": idx,
                 "score": 1.0 if is_correct else 0.0,
                 "passed": is_correct,
-                "feedback": "정답입니다!" if is_correct else f"오답입니다. 정답은 '{correct}' 입니다.",
+                "feedback": "정답입니다!" if is_correct else (
+                    "미응답입니다. 답안을 선택한 뒤 다시 제출해 주세요."
+                    if answer is None else f"오답입니다. 정답은 '{correct_str}' 입니다."
+                ),
                 "user_answer": answer_str,
-                "correct_answer": str(correct),
+                "correct_answer": correct_str,
             })
 
         total = correct_count / max(len(problems), 1)
-        return {
+        result = {
             "results": results,
             "total_score": total,
             "overall_feedback": f"{len(problems)}문항 중 {correct_count}문항 정답 ({total*100:.0f}점)",
         }
+        if answer_count_mismatch:
+            result["warnings"] = [
+                f"ANSWER_COUNT_MISMATCH: expected={len(problems)}, received={len(answers)}"
+            ]
+        return result
 
     async def _grade_llm(
         self,
@@ -183,8 +391,6 @@ class GraderAgent:
         단답/서술형 Gemini AI 채점.
         pdf_path가 있으면 PDF를 Gemini에 직접 전달하여 정확도를 높입니다.
         """
-        import re
-
         problems_text = json.dumps(problems, ensure_ascii=False, indent=2)
         answers_text = json.dumps(
             [{"index": i, "answer": a} for i, a in enumerate(user_answers)],
@@ -197,6 +403,8 @@ class GraderAgent:
             f"{problems_text}\n\n"
             f"[학생 답변]\n{answers_text}\n\n"
             "위 학생 답변을 채점하고 지정된 JSON 형식으로 결과를 반환해주세요.\n"
+            "문제에 rubricMarkdown, modelAnswerMarkdown, referenceAnswer, answer가 있으면 그 순서로 우선 참고하세요.\n"
+            "feedback은 학생에게 그대로 보여줄 수 있는 자연스러운 한국어로 작성하세요.\n"
             "반드시 순수 JSON만 반환하고, 마크다운 코드블록은 사용하지 마세요."
         )
 
@@ -218,18 +426,13 @@ class GraderAgent:
             ]
 
         response_text = await self._bridge.generate(contents)
-
         try:
-            cleaned = re.sub(r"```json\s*", "", response_text)
-            cleaned = re.sub(r"```\s*$", "", cleaned).strip()
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            return {
-                "results": [],
-                "total_score": 0.0,
-                "overall_feedback": "채점 결과를 파싱할 수 없습니다.",
-                "raw": response_text,
-            }
+            return _normalize_llm_grading_result(
+                _parse_json_response(response_text),
+                expected_count=len(problems),
+            )
+        except GradingParseError as exc:
+            raise GradingParseError(f"GRADING_PARSE_FAILED: {exc}") from exc
 
     async def run(
         self,

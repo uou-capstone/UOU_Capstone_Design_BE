@@ -9,6 +9,7 @@ Session Router
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
@@ -19,6 +20,8 @@ from ai_agent.v3.engine.OrchestrationEngine import OrchestrationEngine
 from ai_agent.types.domain import AppEvent, AppEventType
 from app.core.session_store import session_store
 from app.core.path_validator import validate_pdf_path_optional
+from app.services.error_mapping import stable_error_type
+from app.services.session_state_service import fresh_state_for_pdf, same_material_path
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +71,23 @@ async def get_or_create_session(
 
     state = await session_store.get_or_create(sid, lecture_id)
 
-    if pdf_path and not state.pdf_path:
-        state.pdf_path = validate_pdf_path_optional(pdf_path)
-        await session_store.set(state)
+    if pdf_path:
+        safe_pdf_path = validate_pdf_path_optional(pdf_path)
+        if safe_pdf_path and not state.pdf_path:
+            state.pdf_path = safe_pdf_path
+            state.ai_status_connected = True
+            state.updated_at = datetime.now(timezone.utc).isoformat()
+            await session_store.set(state)
+        elif safe_pdf_path and not same_material_path(state.pdf_path, safe_pdf_path):
+            logger.info(
+                "학습 세션 PDF 변경 감지: session_id=%d lecture_id=%d old=%s new=%s — 세션 상태 초기화",
+                state.session_id,
+                lecture_id,
+                state.pdf_path,
+                safe_pdf_path,
+            )
+            state = fresh_state_for_pdf(state, lecture_id, safe_pdf_path)
+            await session_store.set(state)
 
     return SessionResponse(
         session_id=state.session_id,
@@ -152,7 +169,13 @@ async def handle_event_stream(
                 yield ndjson_event.to_ndjson_line()
         except Exception as exc:
             from ai_agent.types.domain import NdjsonEvent, NdjsonEventType
-            err = NdjsonEvent(type=NdjsonEventType.ERROR, agent="system", message=str(exc))
+            err = NdjsonEvent(
+                type=NdjsonEventType.ERROR,
+                agent="system",
+                code="SESSION_STREAM_FAILED",
+                message="학습 세션 스트림 처리 중 오류가 발생했습니다.",
+                details=[{"errorType": stable_error_type(exc)}],
+            )
             yield err.to_ndjson_line()
 
     return StreamingResponse(

@@ -103,6 +103,13 @@ def _redis_key(pdf_path: str) -> str:
     return f"fa:file_api:{h}"
 
 
+def _redis_file_ref_key(pdf_path: str, fingerprint: str | None = None) -> str:
+    """Redis key for a fingerprint-aware Gemini Files API reference."""
+    raw = fingerprint or pdf_path
+    h = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    return f"fa:file_ref:{h}"
+
+
 class GeminiBridgeClient:
     """
     Gemini API 호출을 담당하는 중앙 브리지 클라이언트.
@@ -334,6 +341,110 @@ class GeminiBridgeClient:
 
         return await self._load_via_file_api(pdf_path)
 
+    async def load_pdf_file_ref_part(
+        self,
+        pdf_path: str,
+        *,
+        fingerprint: str | None = None,
+    ) -> tuple[types.Part, Dict[str, Any]]:
+        """
+        QA 보조 근거용으로 Gemini Files API URI part를 우선 생성한다.
+
+        `load_pdf_part()`는 작은 PDF를 인라인 바이트로 보내지만, 페이지 텍스트
+        추출이 약한 QA에서는 레퍼런스처럼 원본 PDF fileRef를 같이 넘기는 편이
+        유리하다. 업로드 실패 시 소형 PDF는 inline Part.from_bytes로 폴백할 수
+        있고, 대용량 PDF는 inline fallback 없이 예외를 올려 상위에서 기존 page
+        text/index QA로 재시도하게 한다.
+        """
+        p = pathlib.Path(pdf_path)
+        if not p.exists():
+            raise FileNotFoundError(f"PDF 파일 없음: {pdf_path}")
+
+        stat = p.stat()
+        mtime = stat.st_mtime
+        cache_id = f"{pdf_path}:{fingerprint or stat.st_mtime_ns}"
+        rkey = _redis_file_ref_key(pdf_path, fingerprint)
+        lock = _get_upload_lock(cache_id)
+
+        async with lock:
+            uri = await self._get_cached_uri(rkey, cache_id, mtime)
+            if uri:
+                metadata = {
+                    "fileName": p.name,
+                    "fileUri": uri,
+                    "mimeType": "application/pdf",
+                    "source": "FILE_API_CACHE",
+                    "fingerprint": fingerprint,
+                }
+                return types.Part.from_uri(file_uri=uri, mime_type="application/pdf"), metadata
+
+            size_kb = stat.st_size // 1024
+            logger.info("[FileAPI] QA fileRef 업로드 시작: %s (%d KB)", pdf_path, size_kb)
+            try:
+                uploaded = await asyncio.to_thread(
+                    self._client.files.upload, file=pdf_path
+                )
+                uri = uploaded.uri
+                await self._set_cached_uri(rkey, cache_id, uri, mtime)
+                metadata = {
+                    "fileName": getattr(uploaded, "name", None) or p.name,
+                    "fileUri": uri,
+                    "mimeType": getattr(uploaded, "mime_type", None) or "application/pdf",
+                    "source": "FILE_API",
+                    "fingerprint": fingerprint,
+                    "uploadedAt": time.time(),
+                }
+                logger.info("[FileAPI] QA fileRef 업로드 완료: %s", uri)
+                return types.Part.from_uri(
+                    file_uri=uri,
+                    mime_type=metadata["mimeType"],
+                ), metadata
+            except Exception as exc:
+                if stat.st_size >= _PDF_INLINE_THRESHOLD:
+                    logger.warning(
+                        "[FileAPI] QA fileRef 업로드 실패, 대용량 PDF inline fallback 생략: %s (%s)",
+                        pdf_path, exc,
+                    )
+                    raise RuntimeError("FILE_API_UPLOAD_FAILED") from exc
+                logger.warning(
+                    "[FileAPI] QA fileRef 업로드 실패 → 소형 PDF Part.from_bytes 폴백: %s (%s)",
+                    pdf_path, exc,
+                )
+                data = await asyncio.to_thread(p.read_bytes)
+                metadata = {
+                    "fileName": p.name,
+                    "fileUri": None,
+                    "mimeType": "application/pdf",
+                    "source": "INLINE_FALLBACK",
+                    "fingerprint": fingerprint,
+                    "fallbackReason": "FILE_API_UPLOAD_FAILED",
+                }
+                return types.Part.from_bytes(data=data, mime_type="application/pdf"), metadata
+
+    async def invalidate_pdf_file_ref_cache(
+        self,
+        pdf_path: str,
+        *,
+        fingerprint: str | None = None,
+    ) -> None:
+        """Remove cached Gemini Files API URI for a PDF/fingerprint pair."""
+        try:
+            p = pathlib.Path(pdf_path)
+            stat = p.stat()
+            cache_id = f"{pdf_path}:{fingerprint or stat.st_mtime_ns}"
+        except Exception:
+            cache_id = f"{pdf_path}:{fingerprint or ''}"
+        rkey = _redis_file_ref_key(pdf_path, fingerprint)
+
+        r = self._get_redis()
+        if r:
+            try:
+                await r.delete(rkey)
+            except Exception as exc:
+                logger.warning("[FileAPI] Redis fileRef cache 삭제 오류: %s", exc)
+
+        _file_api_mem_cache.pop(cache_id, None)
+
     async def _load_via_file_api(self, pdf_path: str) -> types.Part:
         mtime = pathlib.Path(pdf_path).stat().st_mtime
         rkey = _redis_key(pdf_path)
@@ -350,7 +461,7 @@ class GeminiBridgeClient:
             logger.info("[FileAPI] 업로드 시작: %s (%d KB)", pdf_path, size_kb)
             try:
                 uploaded = await asyncio.to_thread(
-                    self._client.files.upload, path=pdf_path
+                    self._client.files.upload, file=pdf_path
                 )
                 uri = uploaded.uri
                 await self._set_cached_uri(rkey, pdf_path, uri, mtime)

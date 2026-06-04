@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,9 @@ class QuizRecord(BaseModel):
     score: Optional[float] = None
     passed: Optional[bool] = None
     graded_at: Optional[str] = None
+    coverage_start_page: Optional[int] = None
+    coverage_end_page: Optional[int] = None
+    source_request: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +116,21 @@ _MESSAGE_WINDOW = 100  # 최근 메시지만 유지 (Redis 비대화 방지)
 class SessionState(BaseModel):
     session_id: int
     lecture_id: int
-    current_page: int = 0
+    current_page: int = 1
     pages: Dict[int, PageState] = Field(default_factory=dict)
     quiz_history: List[QuizRecord] = Field(default_factory=list)
     learner: LearnerModel = Field(default_factory=LearnerModel)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
+    qa_threads: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    integrated_memory: Dict[str, Any] = Field(default_factory=dict)
+    active_intervention: Optional[Dict[str, Any]] = None
+    pending_quiz_request: Optional[Dict[str, Any]] = None
+    quiz_assessments: List[Dict[str, Any]] = Field(default_factory=list)
+    conversation_summary: Optional[str] = None
+    page_index_path: Optional[str] = None
+    gemini_file_ref: Optional[Dict[str, Any]] = None
+    pdf_fingerprint: Optional[str] = None
+    plan_verification_warnings: List[Dict[str, Any]] = Field(default_factory=list)
     waiting_for_answer: bool = False
     current_question_id: Optional[str] = None
     pdf_path: Optional[str] = None
@@ -126,6 +139,8 @@ class SessionState(BaseModel):
     updated_at: Optional[str] = None
 
     def get_current_page_state(self) -> PageState:
+        if self.current_page < 1:
+            self.current_page = 1
         if self.current_page not in self.pages:
             self.pages[self.current_page] = PageState(page_number=self.current_page)
         return self.pages[self.current_page]
@@ -156,10 +171,23 @@ class ToolName(str, Enum):
     GENERATE_QUIZ_FIVE_CHOICE = "GENERATE_QUIZ_FIVE_CHOICE"
     GENERATE_QUIZ_OX = "GENERATE_QUIZ_OX"
     GENERATE_QUIZ_SHORT = "GENERATE_QUIZ_SHORT"
+    GENERATE_QUIZ_ESSAY = "GENERATE_QUIZ_ESSAY"
     GENERATE_QUIZ_FLASH = "GENERATE_QUIZ_FLASH"
     AUTO_GRADE_MCQ_OX = "AUTO_GRADE_MCQ_OX"
     GRADE_SHORT_OR_ESSAY = "GRADE_SHORT_OR_ESSAY"
+    REPAIR_MISCONCEPTION = "REPAIR_MISCONCEPTION"
     WRITE_FEEDBACK_ENTRY = "WRITE_FEEDBACK_ENTRY"
+
+
+def _strip_exact_enum_prefix(value: Any, prefix: str) -> Any:
+    if not isinstance(value, str):
+        return value
+    if not value.startswith(prefix):
+        return value
+    suffix = value[len(prefix):]
+    if not suffix or "." in suffix:
+        return value
+    return suffix
 
 
 class OrchestratorAction(BaseModel):
@@ -169,9 +197,48 @@ class OrchestratorAction(BaseModel):
     message: Optional[str] = None
     ui_state: Optional[Dict[str, Any]] = None
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_action_type_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "ActionType.")
+
+    @field_validator("tool", mode="before")
+    @classmethod
+    def normalize_tool_name_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "ToolName.")
+
+
+class PedagogyMode(str, Enum):
+    EXPLAIN_FIRST = "EXPLAIN_FIRST"
+    DIAGNOSE = "DIAGNOSE"
+    MISCONCEPTION_REPAIR = "MISCONCEPTION_REPAIR"
+    MINIMAL_HINT = "MINIMAL_HINT"
+    CHECK_READINESS = "CHECK_READINESS"
+    HOLD_BACK = "HOLD_BACK"
+    SRL_REFLECTION = "SRL_REFLECTION"
+    ADVANCE = "ADVANCE"
+
+
+class PedagogyPolicy(BaseModel):
+    mode: PedagogyMode = PedagogyMode.ADVANCE
+    reason: Optional[str] = None
+    allow_direct_answer: bool = True
+    hint_depth: int = 0
+    intervention_budget: int = 2
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_mode_prefix(cls, value: Any) -> Any:
+        return _strip_exact_enum_prefix(value, "PedagogyMode.")
+
 
 class OrchestratorPlan(BaseModel):
+    schema_version: str = "v1"
     actions: List[OrchestratorAction] = Field(default_factory=list)
+    memory_write: Dict[str, Any] = Field(default_factory=dict)
+    pedagogy_policy: PedagogyPolicy = Field(default_factory=PedagogyPolicy)
+    stop: bool = False
+    verification_warnings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +247,7 @@ class OrchestratorPlan(BaseModel):
 
 class NdjsonEventType(str, Enum):
     AGENT_DELTA = "agent_delta"   # 텍스트 스트리밍 (channel: "thought"|"main")
+    NAVIGATION = "navigation"     # PDF 뷰어 페이지 이동 지시
     DONE = "done"
     ERROR = "error"
     HEARTBEAT = "heartbeat"       # 연결 유지용 keep-alive (클라이언트가 무시해도 됨)
@@ -194,6 +262,11 @@ class NdjsonEvent(BaseModel):
     data: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
     final: Optional[bool] = None   # done 이벤트에서 True
+    # navigation 이벤트 전용 필드
+    targetPage: Optional[int] = None
+    reason: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Optional[str] = None
     # error 이벤트 전용 구조화 필드
     code: Optional[str] = None                      # 에러 코드 (예: QUIZ_PROFILE_VALIDATION_FAILED)
     details: Optional[List[Dict[str, Any]]] = None  # 필드별 상세 오류 목록
