@@ -19,6 +19,10 @@ import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 
 
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
+
+import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
+
 
 
 
@@ -55,6 +59,12 @@ import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultReposi
 
 
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
+
+import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
+
+import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
+
 
 
 
@@ -201,6 +211,10 @@ public class ExamSubmissionService {
     private final ObjectMapper objectMapper;  // JSON 변환용
     private final TeacherNotificationPublisher teacherNotificationPublisher;
 
+
+    private final AssessmentRepository assessmentRepository;
+
+    private final SubmissionRepository submissionRepository;
 
 
 
@@ -561,6 +575,8 @@ public class ExamSubmissionService {
 
         GradingResponseDto gradingResult = examGradingService.gradeAndSaveResult(examResult, userAnswers);
 
+        syncAssessmentSubmission(examSession, currentUser, examResult);
+
 
 
         log.info("시험 응시 완료: examResultId={}, totalScore={}/{}", 
@@ -631,6 +647,24 @@ public class ExamSubmissionService {
 
     }
 
+
+    private void syncAssessmentSubmission(ExamSession examSession, User currentUser, ExamResult examResult) {
+        assessmentRepository.findByExamSession_Id(examSession.getId())
+                .ifPresent(assessment -> {
+                    Student student = currentUser.getStudent();
+                    if (student == null) {
+                        throw new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND);
+                    }
+
+                    Submission submission = submissionRepository.findByStudentAndAssessment(student, assessment)
+                            .orElseGet(() -> Submission.builder()
+                                    .assessment(assessment)
+                                    .student(student)
+                                    .build());
+                    submission.updateExamResult(examResult);
+                    submissionRepository.save(submission);
+                });
+    }
 
 
 
