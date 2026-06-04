@@ -55,6 +55,7 @@ public class ExamStudioService {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("pdfPath", ctx.filePath());
+        body.put("pdf_path", ctx.filePath());
         body.put("courseId", courseId);
         body.put("lectureId", ctx.lectureId());
         body.put("materialId", ctx.materialId());
@@ -83,7 +84,7 @@ public class ExamStudioService {
         if (req.getMessage() != null) {
             body.put("message", req.getMessage());
         }
-        body.put("currentDraft", req.getCurrentDraft());
+        body.put("currentDraft", req.getCurrentDraft() == null ? Map.of() : req.getCurrentDraft());
         body.put("currentKstIso", req.getCurrentKstIso());
         body.put("timeZone", req.getTimeZone());
         body.put("sourceText", req.getSourceText());
