@@ -75,20 +75,20 @@ public class NotificationService {
     @Transactional(readOnly = true)
     public PageResponse<NotificationItemDto> getMyNotifications(Pageable rawPageable) {
         Pageable pageable = PageableSupport.validate(rawPageable, SORT_WHITELIST, DEFAULT_SORT);
-        Long userId = currentUserResolver.getUser().getId();
+        Long userId = currentUserResolver.getUserId();
         Page<Notification> page = notificationRepository.findByUserId(userId, pageable);
         return PageResponse.of(page.map(NotificationItemDto::new));
     }
 
     @Transactional(readOnly = true)
     public long getUnreadCount() {
-        Long userId = currentUserResolver.getUser().getId();
+        Long userId = currentUserResolver.getUserId();
         return notificationRepository.countByUserIdAndReadAtIsNull(userId);
     }
 
     @Transactional
     public void markAsRead(Long notificationId) {
-        Long userId = currentUserResolver.getUser().getId();
+        Long userId = currentUserResolver.getUserId();
         Notification n = notificationRepository.findByIdAndUserId(notificationId, userId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
         n.markRead(LocalDateTime.now());
@@ -96,7 +96,7 @@ public class NotificationService {
 
     @Transactional
     public void markAllAsRead() {
-        Long userId = currentUserResolver.getUser().getId();
+        Long userId = currentUserResolver.getUserId();
         notificationRepository.markAllAsReadByUserId(userId, LocalDateTime.now());
     }
 }
