@@ -44,7 +44,7 @@ public class ClassroomReport extends BaseTimeEntity {
     @Column(name = "coaching_priorities_json", columnDefinition = "LONGTEXT")
     private String coachingPrioritiesJson;
 
-    @Column(length = 20)
+    @Column(length = 100)
     private String source;
 
     @Column(name = "fallback_used", nullable = false)
