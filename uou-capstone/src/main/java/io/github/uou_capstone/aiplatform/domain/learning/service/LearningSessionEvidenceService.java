@@ -64,10 +64,16 @@ public class LearningSessionEvidenceService {
         }
 
         Long materialId = firstNonNull(asLong(evidenceMap.get("materialId")), asLong(evidenceMap.get("material_id")));
+        Map<?, ?> quiz = asMap(evidenceMap.get("quiz"));
+        Map<?, ?> grading = asMap(evidenceMap.get("grading"));
+        Map<?, ?> diagnosis = asMap(evidenceMap.get("diagnosis"));
+
         LocalDateTime occurredAt = parseDateTime(firstNonBlank(
                 asString(evidenceMap.get("occurredAt")),
                 asString(evidenceMap.get("occurred_at")),
-                asString(evidenceMap.get("timestamp"))
+                asString(evidenceMap.get("timestamp")),
+                asString(evidenceMap.get("createdAt")),
+                asString(evidenceMap.get("created_at"))
         ));
 
         LearningSessionEvidence evidence = LearningSessionEvidence.builder()
@@ -88,21 +94,35 @@ public class LearningSessionEvidenceService {
                 ))
                 .quizType(firstNonBlank(
                         asString(evidenceMap.get("quizType")),
-                        asString(evidenceMap.get("quiz_type"))
+                        asString(evidenceMap.get("quiz_type")),
+                        asString(quiz.get("quizType")),
+                        asString(quiz.get("quiz_type"))
                 ))
                 .scoreRatio(firstNonNull(
                         asDouble(evidenceMap.get("scoreRatio")),
-                        asDouble(evidenceMap.get("score_ratio"))
+                        asDouble(evidenceMap.get("score_ratio")),
+                        asDouble(grading.get("scoreRatio")),
+                        asDouble(grading.get("score_ratio"))
                 ))
-                .passed(asBoolean(evidenceMap.get("passed")))
+                .passed(firstNonNull(
+                        asBoolean(evidenceMap.get("passed")),
+                        asBoolean(grading.get("passed"))
+                ))
                 .weakConcepts(asStringList(firstNonNull(
                         evidenceMap.get("weakConcepts"),
-                        evidenceMap.get("weak_concepts")
+                        evidenceMap.get("weak_concepts"),
+                        diagnosis.get("weakConcepts"),
+                        diagnosis.get("weak_concepts")
                 )))
                 .wrongItems(asObjectList(firstNonNull(
                         evidenceMap.get("wrongItems"),
                         evidenceMap.get("wrong_items"),
-                        evidenceMap.get("missedQuestions")
+                        evidenceMap.get("missedQuestions"),
+                        evidenceMap.get("missed_questions"),
+                        grading.get("wrongItems"),
+                        grading.get("wrong_items"),
+                        grading.get("missedQuestions"),
+                        grading.get("missed_questions")
                 )))
                 .evidence(new LinkedHashMap<>(evidenceMap))
                 .occurredAt(occurredAt == null ? LocalDateTime.now() : occurredAt)
@@ -171,6 +191,10 @@ public class LearningSessionEvidenceService {
             return List.of();
         }
         return List.copyOf(raw);
+    }
+
+    private static Map<?, ?> asMap(Object value) {
+        return value instanceof Map<?, ?> map ? map : Map.of();
     }
 
     private static Long asLong(Object value) {

@@ -91,7 +91,7 @@ public class CourseStudentReportService {
     private static final double AI_EXCELLENT_THRESHOLD = 90.0;
     private static final double AI_WEAK_CONCEPT_SCORE_THRESHOLD = 70.0;
     private static final Set<String> RESOLVED_INTERVENTION_EVENTS = Set.of(
-            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "RESOLVED");
+            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "MISCONCEPTION_REPAIR_COMPLETED", "RESOLVED");
 
     private static final double STRONG_THRESHOLD = 85.0;
     private static final double WATCH_THRESHOLD = 70.0;
@@ -338,11 +338,11 @@ public class CourseStudentReportService {
                 .sessionId(evidence.getSession() != null ? evidence.getSession().getId() : null)
                 .pageNumber(evidence.getPageNumber())
                 .eventType(evidence.getEventType())
-                .quizType(evidence.getQuizType())
-                .scoreRatio(evidence.getScoreRatio())
-                .passed(evidence.getPassed())
-                .weakConcepts(evidence.getWeakConcepts() == null ? List.of() : evidence.getWeakConcepts())
-                .wrongItems(evidence.getWrongItems() == null ? List.of() : evidence.getWrongItems())
+                .quizType(effectiveQuizType(evidence))
+                .scoreRatio(effectiveScoreRatio(evidence))
+                .passed(effectivePassed(evidence))
+                .weakConcepts(effectiveWeakConcepts(evidence))
+                .wrongItems(effectiveWrongItems(evidence))
                 .evidence(evidence.getEvidence() == null ? Map.of() : evidence.getEvidence())
                 .occurredAt(evidence.getOccurredAt())
                 .build();
@@ -350,17 +350,17 @@ public class CourseStudentReportService {
 
     private AiIntegratedLearningSummaryDto buildIntegratedLearningSummary(List<LearningSessionEvidence> evidence) {
         long quizAttemptCount = evidence.stream()
-                .filter(e -> firstNonBlank(e.getQuizType()) != null || e.getScoreRatio() != null)
+                .filter(e -> firstNonBlank(effectiveQuizType(e)) != null || effectiveScoreRatio(e) != null)
                 .count();
         long passCount = evidence.stream()
-                .filter(e -> Boolean.TRUE.equals(e.getPassed()))
+                .filter(e -> Boolean.TRUE.equals(effectivePassed(e)))
                 .count();
         long failCount = evidence.stream()
-                .filter(e -> Boolean.FALSE.equals(e.getPassed()))
+                .filter(e -> Boolean.FALSE.equals(effectivePassed(e)))
                 .count();
 
         List<Double> scoreRatios = evidence.stream()
-                .map(LearningSessionEvidence::getScoreRatio)
+                .map(this::effectiveScoreRatio)
                 .filter(Objects::nonNull)
                 .toList();
         Double averageScoreRatio = scoreRatios.isEmpty()
@@ -370,10 +370,7 @@ public class CourseStudentReportService {
         Map<String, Long> weakConceptCounts = new LinkedHashMap<>();
         Map<String, Long> resolvedConceptCounts = new LinkedHashMap<>();
         for (LearningSessionEvidence item : evidence) {
-            if (item.getWeakConcepts() == null) {
-                continue;
-            }
-            for (String concept : item.getWeakConcepts()) {
+            for (String concept : effectiveWeakConcepts(item)) {
                 if (concept != null && !concept.isBlank()) {
                     if (RESOLVED_INTERVENTION_EVENTS.contains(item.getEventType())) {
                         resolvedConceptCounts.merge(concept, 1L, Long::sum);
@@ -406,6 +403,80 @@ public class CourseStudentReportService {
                 .resolvedConcepts(resolvedConcepts)
                 .latestActivityAt(latestActivityAt)
                 .build();
+    }
+
+    private String effectiveQuizType(LearningSessionEvidence evidence) {
+        Map<?, ?> quiz = nestedMap(evidence.getEvidence(), "quiz");
+        return firstNonBlank(
+                evidence.getQuizType(),
+                asString(rawValue(evidence, "quizType")),
+                asString(rawValue(evidence, "quiz_type")),
+                asString(quiz.get("quizType")),
+                asString(quiz.get("quiz_type"))
+        );
+    }
+
+    private Double effectiveScoreRatio(LearningSessionEvidence evidence) {
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        Double value = firstNonNull(
+                evidence.getScoreRatio(),
+                asDouble(rawValue(evidence, "scoreRatio")),
+                asDouble(rawValue(evidence, "score_ratio")),
+                asDouble(grading.get("scoreRatio")),
+                asDouble(grading.get("score_ratio"))
+        );
+        return value == null ? null : round3(value);
+    }
+
+    private Boolean effectivePassed(LearningSessionEvidence evidence) {
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        return firstNonNull(
+                evidence.getPassed(),
+                asBoolean(rawValue(evidence, "passed")),
+                asBoolean(grading.get("passed"))
+        );
+    }
+
+    private List<String> effectiveWeakConcepts(LearningSessionEvidence evidence) {
+        if (evidence.getWeakConcepts() != null && !evidence.getWeakConcepts().isEmpty()) {
+            return evidence.getWeakConcepts();
+        }
+        Map<?, ?> diagnosis = nestedMap(evidence.getEvidence(), "diagnosis");
+        return asStringList(firstNonNull(
+                rawValue(evidence, "weakConcepts"),
+                rawValue(evidence, "weak_concepts"),
+                diagnosis.get("weakConcepts"),
+                diagnosis.get("weak_concepts")
+        ));
+    }
+
+    private List<Object> effectiveWrongItems(LearningSessionEvidence evidence) {
+        if (evidence.getWrongItems() != null && !evidence.getWrongItems().isEmpty()) {
+            return evidence.getWrongItems();
+        }
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        return asObjectList(firstNonNull(
+                rawValue(evidence, "wrongItems"),
+                rawValue(evidence, "wrong_items"),
+                rawValue(evidence, "missedQuestions"),
+                rawValue(evidence, "missed_questions"),
+                grading.get("wrongItems"),
+                grading.get("wrong_items"),
+                grading.get("missedQuestions"),
+                grading.get("missed_questions")
+        ));
+    }
+
+    private Object rawValue(LearningSessionEvidence evidence, String key) {
+        return evidence.getEvidence() == null ? null : evidence.getEvidence().get(key);
+    }
+
+    private Map<?, ?> nestedMap(Map<String, Object> source, String key) {
+        if (source == null) {
+            return Map.of();
+        }
+        Object value = source.get(key);
+        return value instanceof Map<?, ?> map ? map : Map.of();
     }
 
     private AiScoreSummaryDto toAiScoreSummary(ScoreSummaryDto base, List<ExamResult> examResults) {
@@ -938,8 +1009,63 @@ public class CourseStudentReportService {
         }
     }
 
+    private static Double asDouble(Object value) {
+        if (value instanceof Number n) {
+            return n.doubleValue();
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            try {
+                return Double.parseDouble(s);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Boolean asBoolean(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            return Boolean.parseBoolean(s);
+        }
+        return null;
+    }
+
+    private static List<String> asStringList(Object value) {
+        if (!(value instanceof List<?> raw)) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (Object item : raw) {
+            String text = asString(item);
+            if (text != null && !text.isBlank()) {
+                result.add(text);
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<Object> asObjectList(Object value) {
+        if (!(value instanceof List<?> raw)) {
+            return List.of();
+        }
+        return List.copyOf(raw);
+    }
+
     private static String asString(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    @SafeVarargs
+    private static <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static String firstNonBlank(String... values) {

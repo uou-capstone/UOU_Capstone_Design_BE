@@ -371,6 +371,76 @@ class CourseStudentReportServiceAiContextTest {
     }
 
     @Test
+    void detail_summarizesNestedRawIntegratedLearningEvidence() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(anyLong(), anyLong())).thenReturn(List.of());
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Lecture lecture = Lecture.builder()
+                .course(course)
+                .title("lecture")
+                .weekNumber(1)
+                .description("d")
+                .build();
+        ReflectionTestUtils.setField(lecture, "id", 38L);
+        LearningChatSession session = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(session, "id", 27L);
+
+        LearningSessionEvidence quiz = LearningSessionEvidence.builder()
+                .evidenceId("evidence-4")
+                .course(course)
+                .lecture(lecture)
+                .student(student)
+                .session(session)
+                .pageNumber(3)
+                .eventType("QUIZ_GRADED")
+                .evidence(Map.of(
+                        "type", "learning_evidence",
+                        "quiz", Map.of("quizType", "OX_Problem"),
+                        "grading", Map.of("scoreRatio", 0.4, "passed", false, "wrongItems", List.of(Map.of("id", 1))),
+                        "diagnosis", Map.of("weakConcepts", List.of("분수 통분"))))
+                .occurredAt(LocalDateTime.of(2026, 1, 4, 0, 0))
+                .build();
+        LearningSessionEvidence repaired = LearningSessionEvidence.builder()
+                .evidenceId("evidence-5")
+                .course(course)
+                .lecture(lecture)
+                .student(student)
+                .session(session)
+                .pageNumber(3)
+                .eventType("MISCONCEPTION_REPAIR_COMPLETED")
+                .evidence(Map.of(
+                        "type", "learning_evidence",
+                        "diagnosis", Map.of("weakConcepts", List.of("분수 통분"))))
+                .occurredAt(LocalDateTime.of(2026, 1, 5, 0, 0))
+                .build();
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(repaired, quiz));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getLearningEvidence()).hasSize(2);
+        AiLearningEvidenceDto quizDto = res.getLearningEvidence().stream()
+                .filter(e -> "evidence-4".equals(e.getEvidenceId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(quizDto.getQuizType()).isEqualTo("OX_Problem");
+        assertThat(quizDto.getScoreRatio()).isEqualTo(0.4);
+        assertThat(quizDto.getPassed()).isFalse();
+        assertThat(quizDto.getWeakConcepts()).containsExactly("분수 통분");
+        assertThat(quizDto.getWrongItems()).hasSize(1);
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getAverageScoreRatio()).isEqualTo(0.4);
+        assertThat(res.getIntegratedLearningSummary().getWeakConcepts()).containsExactly("분수 통분");
+        assertThat(res.getIntegratedLearningSummary().getResolvedConcepts()).containsExactly("분수 통분");
+    }
+
+    @Test
     void detail_marksInsufficientData_whenExamResultHasNoValidScore() {
         primeOwnerAndEnrollment();
         when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);

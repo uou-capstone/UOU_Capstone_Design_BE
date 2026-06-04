@@ -84,6 +84,44 @@ class LearningSessionEvidenceServiceTest {
     }
 
     @Test
+    void saveFromStreamLine_savesNestedFastApiLearningEvidence() {
+        ReflectionTestUtils.setField(service, "objectMapper", objectMapper);
+
+        Long sessionId = 5L;
+        Long lectureId = 100L;
+        Student student = Student.builder().grade(1).classNumber("1-1").build();
+        ReflectionTestUtils.setField(student, "id", 50L);
+        User user = User.builder().email("s@example.com").password("p").fullName("s").build();
+        ReflectionTestUtils.setField(user, "student", student);
+
+        Course courseRef = Course.builder().teacher(null).title("c").description("d").invitationCode("i").build();
+        Lecture lectureRef = Lecture.builder().course(courseRef).title("l").weekNumber(1).description("d").build();
+        LearningChatSession sessionRef = LearningChatSession.builder().lecture(lectureRef).user(user).build();
+
+        when(entityManager.getReference(Course.class, 10L)).thenReturn(courseRef);
+        when(entityManager.getReference(Lecture.class, lectureId)).thenReturn(lectureRef);
+        when(entityManager.getReference(Student.class, 50L)).thenReturn(student);
+        when(entityManager.getReference(LearningChatSession.class, sessionId)).thenReturn(sessionRef);
+
+        String line = """
+                {"type":"done","data":{"learningEvidence":{"type":"learning_evidence","evidenceId":"ev-2","courseId":10,"pageNumber":4,"eventType":"QUIZ_GRADED","quiz":{"quizId":"q-1","quizType":"OX_Problem"},"grading":{"scoreRatio":0.4,"passed":false,"wrongItems":[{"id":2}]},"diagnosis":{"weakConcepts":["분수 통분"]},"createdAt":"2026-01-03T04:05:06Z"}}}
+                """.trim();
+
+        service.saveFromStreamLine(line, sessionId, lectureId, user);
+
+        ArgumentCaptor<LearningSessionEvidence> captor = ArgumentCaptor.forClass(LearningSessionEvidence.class);
+        verify(evidenceRepository).saveAndFlush(captor.capture());
+        LearningSessionEvidence saved = captor.getValue();
+        assertThat(saved.getEvidenceId()).isEqualTo("ev-2");
+        assertThat(saved.getQuizType()).isEqualTo("OX_Problem");
+        assertThat(saved.getScoreRatio()).isEqualTo(0.4);
+        assertThat(saved.getPassed()).isFalse();
+        assertThat(saved.getWeakConcepts()).containsExactly("분수 통분");
+        assertThat(saved.getWrongItems()).hasSize(1);
+        assertThat(saved.getOccurredAt()).isEqualTo(LocalDateTime.of(2026, 1, 3, 4, 5, 6));
+    }
+
+    @Test
     void saveFromStreamLine_ignoresDoneWithoutLearningEvidenceType() {
         ReflectionTestUtils.setField(service, "objectMapper", objectMapper);
 

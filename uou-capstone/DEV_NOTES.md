@@ -2113,3 +2113,33 @@ The frontend intermittently showed the server as offline and failed to load `/ap
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthService.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/security/jwt/RefreshTokenStore.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthServiceTest.java`
+
+---
+
+## [2026-06-04] 통합학습 근거 중첩 payload 리포트 집계
+
+### Symptoms
+
+통합학습에서 퀴즈를 채점하고 복습 학습까지 진행했는데 학생 리포트의 통합학습 요약이 `퀴즈 시도 0회`, 약점/해결 개념 없음으로 표시됐다. `learningEvidence`가 내려왔더라도 평균 점수와 통과/미통과 집계가 비어 있었다.
+
+### Cause
+
+FastAPI v3가 내려주는 근거는 `quiz.quizType`, `grading.scoreRatio`, `grading.passed`, `diagnosis.weakConcepts`, `createdAt`처럼 중첩 구조다. Spring 저장 로직은 루트의 `quizType`, `scoreRatio`, `passed`, `weakConcepts`, `occurredAt`만 읽어 핵심 컬럼을 비워 저장했고, 리포트 집계도 컬럼 값만 기준으로 계산했다. 복습 완료 이벤트명 `MISCONCEPTION_REPAIR_COMPLETED`도 해결 개념 이벤트 목록에 없었다.
+
+### Fix
+
+- `LearningSessionEvidenceService`가 FastAPI 중첩 payload를 읽어 quiz type, score ratio, passed, wrong items, weak concepts, createdAt을 정규화해 저장하도록 보강했다.
+- `CourseStudentReportService`가 기존에 저장된 raw `evidence_json`의 중첩 값도 fallback으로 읽어 `learningEvidence`와 `integratedLearningSummary`를 계산하도록 수정했다.
+- `MISCONCEPTION_REPAIR_COMPLETED`를 해결 개념 집계 이벤트에 포함했다.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionEvidenceServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceServiceTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
