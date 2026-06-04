@@ -401,6 +401,13 @@ public class ExamGenerationService {
         io.github.uou_capstone.aiplatform.util.AuthorizationUtil.requireLectureOwner(currentUser, session.getLecture());
 
         cacheService.deleteExamSessionCache(examSessionId);
+
+        List<ExamQuestion> questions = examQuestionRepository.findByExamSession(session);
+        if (!questions.isEmpty()) {
+            examQuestionRepository.deleteAll(questions);
+            examQuestionRepository.flush();
+        }
+
         examSessionRepository.delete(session);
         examSessionRepository.flush();
     }

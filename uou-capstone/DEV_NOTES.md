@@ -1950,3 +1950,31 @@ FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/a
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionAuthorizationTest.java`
 - `docs/handoff/LEARNING_CHAT_RESTORE_FE.md`
+
+---
+
+## [2026-06-04] Single exam delete FK cleanup
+
+### Symptoms
+
+`DELETE /api/exams/generation/{examSessionId}` failed with MySQL error 1451 when the exam session had generated question rows. The observed FK was `exam_questions.exam_session_id -> exam_sessions.exam_session_id`.
+
+### Cause
+
+Single exam deletion deleted the parent `ExamSession` directly. `ExamQuestion` owns the nullable `examSession` relationship and the DB FK has no `ON DELETE CASCADE`, so existing child rows blocked parent deletion.
+
+### Fix
+
+- `ExamGenerationService.deleteExamSession` now deletes linked `ExamQuestion` rows before deleting the `ExamSession`.
+- Added a unit test that verifies the child rows are deleted and flushed before the parent session delete.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationServiceDeleteTest --no-daemon
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/exam/service/ExamGenerationService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/exam/service/ExamGenerationServiceDeleteTest.java`
+

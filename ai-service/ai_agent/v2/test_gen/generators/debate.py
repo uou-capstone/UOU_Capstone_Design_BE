@@ -17,7 +17,7 @@ from ..schemas import (
 )
 from ..prompts import DEBATE_TOPIC_GENERATOR_SYSTEM_PROMPT
 from ..prompt_utils import inject_schema
-from ..utils import load_lecture_material
+from ..utils import build_lecture_material_contents, load_lecture_material
 
 
 class DebateGenerator(BaseGenerator):
@@ -57,10 +57,8 @@ class DebateGenerator(BaseGenerator):
             )
             
             # 토론은 문맥이 중요하므로 길게 유지
-            lecture_truncated = lecture_material[:20000] if isinstance(lecture_material, str) else lecture_material
-            
             contents = [
-                f"[Lecture Material]\n{lecture_truncated}",
+                *build_lecture_material_contents(lecture_material, text_limit=20000),
                 f"[User Profile]\n{profile.model_dump_json()}",
                 f"[Target Count]\n{count}"
             ]
