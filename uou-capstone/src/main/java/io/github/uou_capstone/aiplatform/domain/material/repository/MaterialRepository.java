@@ -31,6 +31,6 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
     void deleteByLectureCourseId(@Param("courseId") Long courseId);
 
     /** Exam Studio 등 cross-domain 권한 검증용 — lecture + course 까지 JOIN FETCH. */
-    @Query("SELECT m FROM Material m JOIN FETCH m.lecture l JOIN FETCH l.course WHERE m.id = :id")
+    @Query("SELECT m FROM Material m JOIN FETCH m.lecture l JOIN FETCH l.course c JOIN FETCH c.teacher WHERE m.id = :id")
     Optional<Material> findByIdWithLectureAndCourse(@Param("id") Long id);
 }

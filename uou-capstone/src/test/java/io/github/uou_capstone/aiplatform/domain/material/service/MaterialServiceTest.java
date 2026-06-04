@@ -31,6 +31,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import reactor.core.publisher.Mono;
 
 import java.io.IOException;
@@ -57,6 +58,9 @@ class MaterialServiceTest {
     private ExamSessionRepository examSessionRepository;
     private LectureRepository lectureRepository;
     private CurrentUserResolver currentUserResolver;
+    private TeacherRepository teacherRepository;
+    private StudentRepository studentRepository;
+    private EnrollmentRepository enrollmentRepository;
     private FastApiSessionClient fastApiSessionClient;
     private LearningChatPersistenceService learningChatPersistenceService;
     private TransactionOperations transactionOperations;
@@ -71,6 +75,9 @@ class MaterialServiceTest {
         examSessionRepository = mock(ExamSessionRepository.class);
         lectureRepository = mock(LectureRepository.class);
         currentUserResolver = mock(CurrentUserResolver.class);
+        teacherRepository = mock(TeacherRepository.class);
+        studentRepository = mock(StudentRepository.class);
+        enrollmentRepository = mock(EnrollmentRepository.class);
         fastApiSessionClient = mock(FastApiSessionClient.class);
         learningChatPersistenceService = mock(LearningChatPersistenceService.class);
         transactionOperations = mock(TransactionOperations.class);
@@ -81,10 +88,10 @@ class MaterialServiceTest {
                 lectureRepository,
                 mock(UserRepository.class),
                 currentUserResolver,
-                mock(TeacherRepository.class),
+                teacherRepository,
                 uploadWebClient(),
-                mock(StudentRepository.class),
-                mock(EnrollmentRepository.class),
+                studentRepository,
+                enrollmentRepository,
                 mock(CourseRepository.class),
                 fastApiSessionClient,
                 learningChatPersistenceService,
@@ -190,6 +197,21 @@ class MaterialServiceTest {
         verify(examSessionRepository, never()).clearMaterialReference(any());
         verify(fastApiSessionClient, never()).deleteSession(any());
         verify(learningChatPersistenceService, never()).endActiveSessionsByLecture(LECTURE_ID);
+    }
+
+    @Test
+    void streamFile_loadsMaterialWithLectureAndCourseBeforeReturningStreamingBody() {
+        Material material = material();
+        when(materialRepository.findByIdWithLectureAndCourse(MATERIAL_ID)).thenReturn(Optional.of(material));
+        when(currentUserResolver.getUser()).thenReturn(user);
+        when(teacherRepository.findByUser_Id(USER_ID)).thenReturn(Optional.of(teacher));
+        when(studentRepository.findByUser_Id(USER_ID)).thenReturn(Optional.empty());
+
+        StreamingResponseBody body = materialService.streamFile(MATERIAL_ID);
+
+        assertThat(body).isNotNull();
+        verify(materialRepository).findByIdWithLectureAndCourse(MATERIAL_ID);
+        verify(materialRepository, never()).findById(MATERIAL_ID);
     }
 
     private Material material() {
