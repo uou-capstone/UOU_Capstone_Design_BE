@@ -140,7 +140,7 @@ public class CourseService {
 
     @Transactional(readOnly = true)
     public Course getCourseById(Long courseId) { //강의실 id 상세 조회
-        return courseRepository.findById(courseId)
+        return courseRepository.findDetailById(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
     }
 
