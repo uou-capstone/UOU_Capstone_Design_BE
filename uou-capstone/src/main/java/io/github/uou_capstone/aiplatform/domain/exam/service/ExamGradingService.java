@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -218,8 +219,9 @@ public class ExamGradingService {
             }
 
             GradingResponseDto dto = new GradingResponseDto();
-            dto.setTotalScore(readScore(gradingNode.get("total_score")));
-            dto.setMaxScore(readScore(gradingNode.get("max_score")));
+            applyNormalizedScores(dto,
+                    readOptionalScore(gradingNode.get("total_score")),
+                    readOptionalScore(gradingNode.get("max_score")));
             dto.setOverallFeedback(readText(gradingNode.get("overall_feedback")));
             dto.setQuestionGradings(parseQuestionGradings(snakeMapper, gradingNode.get("results")));
 
@@ -294,6 +296,33 @@ public class ExamGradingService {
             questionGradings.add(questionGrading);
         }
         return questionGradings;
+    }
+
+    private void applyNormalizedScores(GradingResponseDto dto, BigDecimal totalScore, BigDecimal maxScore) {
+        if (totalScore == null) {
+            dto.setTotalScore(null);
+            dto.setMaxScore(null);
+            return;
+        }
+        if (maxScore != null && maxScore.signum() > 0) {
+            dto.setTotalScore(totalScore);
+            dto.setMaxScore(maxScore);
+            return;
+        }
+
+        dto.setMaxScore(BigDecimal.valueOf(100));
+        if (totalScore.compareTo(BigDecimal.ONE) <= 0) {
+            dto.setTotalScore(totalScore.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP));
+        } else {
+            dto.setTotalScore(totalScore);
+        }
+    }
+
+    private BigDecimal readOptionalScore(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.decimalValue();
     }
 
     private BigDecimal readScore(JsonNode node) {
