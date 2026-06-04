@@ -1,4 +1,5 @@
 import importlib
+import json
 
 import pytest
 
@@ -333,6 +334,36 @@ async def test_grader_llm_extracts_json_from_fenced_response_with_trailing_text(
     assert result["total_score"] == 0.7
     assert result["results"][0]["score"] == 0.7
     assert result["results"][0]["passed"] is True
+    assert result["results"][0]["user_answer"] == "학생 답변"
+
+
+@pytest.mark.asyncio
+async def test_grader_llm_preserves_structured_user_answer_for_submission_results():
+    class FakeBridge:
+        async def generate(self, contents):
+            return json.dumps({
+                "results": [
+                    {
+                        "question_index": 0,
+                        "score": 0.5,
+                        "passed": False,
+                        "reason": "핵심 개념이 일부 누락되었습니다.",
+                        "feedback": "원리를 함께 설명하세요.",
+                        "deduction_reason": "정의만 작성했습니다.",
+                    }
+                ],
+                "total_score": 0.5,
+                "overall_feedback": "보완이 필요합니다.",
+            }, ensure_ascii=False)
+
+    grader = GraderAgent(FakeBridge())  # type: ignore[arg-type]
+    result = await grader._grade_llm(
+        [{"question_content": "설명하세요"}],
+        [{"answer": "학생이 입력한 서술형 답변"}],
+        "강의 자료",
+    )
+
+    assert result["results"][0]["user_answer"] == "학생이 입력한 서술형 답변"
 
 
 @pytest.mark.asyncio

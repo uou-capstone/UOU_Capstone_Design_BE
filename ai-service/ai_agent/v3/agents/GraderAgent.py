@@ -125,23 +125,39 @@ def _score_float(value: Any, *, default: float = 0.0) -> float:
     return min(1.0, max(0.0, score))
 
 
-def _normalize_llm_grading_result(parsed: Dict[str, Any], expected_count: int) -> Dict[str, Any]:
+def _normalize_llm_grading_result(
+    parsed: Dict[str, Any],
+    expected_count: int,
+    user_answers: Optional[List[Any]] = None,
+) -> Dict[str, Any]:
     raw_results = parsed.get("results")
     if not isinstance(raw_results, list):
         raise GradingParseError("grading response missing results[]")
 
+    answers = user_answers if isinstance(user_answers, list) else []
     results: List[Dict[str, Any]] = []
     for index, item in enumerate(raw_results):
         if not isinstance(item, dict):
             raise GradingParseError(f"grading result {index} is not an object")
         score = _score_float(item.get("score"))
+        question_index = int(item.get("question_index", index) or index)
+        fallback_answer = answers[question_index] if 0 <= question_index < len(answers) else None
+        raw_user_answer = (
+            item.get("user_answer")
+            or item.get("userAnswer")
+            or item.get("student_answer")
+            or item.get("studentAnswer")
+            or fallback_answer
+        )
+        user_answer = _extract_user_answer(raw_user_answer)
         results.append({
-            "question_index": int(item.get("question_index", index) or index),
+            "question_index": question_index,
             "score": score,
             "passed": bool(item.get("passed", score >= PASS_SCORE_RATIO)),
             "reason": str(item.get("reason") or "채점 근거가 제공되지 않았습니다."),
             "feedback": str(item.get("feedback") or "피드백이 제공되지 않았습니다."),
             "deduction_reason": str(item.get("deduction_reason") or ""),
+            "user_answer": "" if user_answer is None else str(user_answer),
         })
 
     if expected_count and len(results) != expected_count:
@@ -430,6 +446,7 @@ class GraderAgent:
             return _normalize_llm_grading_result(
                 _parse_json_response(response_text),
                 expected_count=len(problems),
+                user_answers=user_answers,
             )
         except GradingParseError as exc:
             raise GradingParseError(f"GRADING_PARSE_FAILED: {exc}") from exc
