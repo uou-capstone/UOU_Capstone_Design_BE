@@ -382,7 +382,7 @@ class GeminiBridgeClient:
             logger.info("[FileAPI] QA fileRef 업로드 시작: %s (%d KB)", pdf_path, size_kb)
             try:
                 uploaded = await asyncio.to_thread(
-                    self._client.files.upload, path=pdf_path
+                    self._client.files.upload, file=pdf_path
                 )
                 uri = uploaded.uri
                 await self._set_cached_uri(rkey, cache_id, uri, mtime)
@@ -461,7 +461,7 @@ class GeminiBridgeClient:
             logger.info("[FileAPI] 업로드 시작: %s (%d KB)", pdf_path, size_kb)
             try:
                 uploaded = await asyncio.to_thread(
-                    self._client.files.upload, path=pdf_path
+                    self._client.files.upload, file=pdf_path
                 )
                 uri = uploaded.uri
                 await self._set_cached_uri(rkey, pdf_path, uri, mtime)

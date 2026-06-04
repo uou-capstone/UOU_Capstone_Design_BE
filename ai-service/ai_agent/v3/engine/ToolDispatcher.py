@@ -491,7 +491,7 @@ class ToolDispatcher:
                     if event.type == NdjsonEventType.DONE and event.data:
                         grading = event.data.get("grading", {})
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
-                        event.data = self._with_assessment_data(event.data, assessment, state)
+                        event.data = self._with_assessment_data(event.data, assessment, state, quiz_record)
                         if trace := trace_event(
                             "AUTO_GRADE_MCQ_OX 결과\n"
                             f"- score={event.data.get('total_score')}\n"
@@ -568,7 +568,7 @@ class ToolDispatcher:
                     if event.type == NdjsonEventType.DONE and event.data:
                         grading = event.data.get("grading", {})
                         assessment = self._apply_grading_to_record(quiz_record, grading, user_answers, state)
-                        event.data = self._with_assessment_data(event.data, assessment, state)
+                        event.data = self._with_assessment_data(event.data, assessment, state, quiz_record)
                         if trace := trace_event(
                             "GRADE_SHORT_OR_ESSAY 결과\n"
                             f"- score={event.data.get('total_score')}\n"
@@ -716,6 +716,7 @@ class ToolDispatcher:
                 final=True,
                 data={
                     "activeIntervention": completed or intervention,
+                    "learningEvidence": _build_repair_learning_evidence(state, completed or intervention),
                     "ui": {"widget": "RETEST_DECISION"},
                 },
             )
@@ -769,15 +770,33 @@ class ToolDispatcher:
             [page_state.chapter_title] if page_state.chapter_title else [],
         )
         page_state.status = PageStatus.QUIZ_GRADED
-        return quiz_diagnosis_service.record_assessment(state, record, grading, user_answers)
+        was_retest = (
+            state.active_intervention is not None
+            and int(state.active_intervention.get("pageNumber") or 0) == record.page_number
+        )
+        assessment = quiz_diagnosis_service.record_assessment(state, record, grading, user_answers)
+        assessment["eventType"] = "RETEST_GRADED" if was_retest else "QUIZ_GRADED"
+        return assessment
 
     @staticmethod
     def _with_assessment_data(
         data: Dict[str, Any],
         assessment: Dict[str, Any],
         state: SessionState,
+        record: QuizRecord | None = None,
     ) -> Dict[str, Any]:
-        enriched = {**data, "quizAssessment": assessment, "passScoreRatio": PASS_SCORE_RATIO}
+        enriched = {
+            **data,
+            "quizAssessment": assessment,
+            "passScoreRatio": PASS_SCORE_RATIO,
+        }
+        if record is not None:
+            enriched["learningEvidence"] = _build_quiz_learning_evidence(
+                state=state,
+                record=record,
+                data=data,
+                assessment=assessment,
+            )
         if state.active_intervention:
             enriched["activeIntervention"] = state.active_intervention
         return enriched
@@ -932,6 +951,129 @@ def _stringify_answer(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(item).strip() for item in value if str(item).strip())
     return str(value).strip()
+
+
+def _build_quiz_learning_evidence(
+    *,
+    state: SessionState,
+    record: QuizRecord,
+    data: Dict[str, Any],
+    assessment: Dict[str, Any],
+) -> Dict[str, Any]:
+    grading = data.get("grading") if isinstance(data.get("grading"), dict) else {}
+    score_ratio = _safe_float(
+        assessment.get("score", grading.get("total_score", data.get("total_score"))),
+        0.0,
+    )
+    questions = record.questions if isinstance(record.questions, list) else []
+    wrong_items = _normalize_wrong_items(assessment.get("missedQuestions"))
+    focus_concepts = [
+        str(item).strip()
+        for item in (assessment.get("focusConcepts") or [])
+        if str(item).strip()
+    ]
+    evidence_id = f"learning-{assessment.get('artifactId') or record.quiz_id}"
+    event_type = str(assessment.get("eventType") or "QUIZ_GRADED")
+    intervention = state.active_intervention if isinstance(state.active_intervention, dict) else None
+
+    return {
+        "type": "learning_evidence",
+        "schemaVersion": "v1",
+        "evidenceId": evidence_id,
+        "eventType": event_type,
+        "sessionId": state.session_id,
+        "lectureId": state.lecture_id,
+        "pageNumber": record.page_number,
+        "coverage": {
+            "startPage": record.coverage_start_page or record.page_number,
+            "endPage": record.coverage_end_page or record.page_number,
+            "sourceRequest": record.source_request,
+        },
+        "quiz": {
+            "quizId": record.quiz_id,
+            "quizType": record.quiz_type,
+            "questionCount": len(questions),
+        },
+        "grading": {
+            "score": round(score_ratio * len(questions), 3) if questions else round(score_ratio, 4),
+            "total": len(questions) or None,
+            "scoreRatio": round(score_ratio, 4),
+            "passed": bool(assessment.get("passed")),
+            "passScoreRatio": PASS_SCORE_RATIO,
+            "wrongItems": wrong_items,
+        },
+        "diagnosis": {
+            "weakConcepts": focus_concepts,
+            "interventionStatus": intervention.get("status") if intervention else "NONE",
+            "repairGoal": assessment.get("repairGoal"),
+        },
+        "createdAt": assessment.get("createdAt") or record.graded_at,
+    }
+
+
+def _build_repair_learning_evidence(
+    state: SessionState,
+    intervention: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    if not intervention:
+        return None
+    concepts = [
+        str(item).strip()
+        for item in (intervention.get("focusConcepts") or [])
+        if str(item).strip()
+    ]
+    return {
+        "type": "learning_evidence",
+        "schemaVersion": "v1",
+        "evidenceId": f"learning-repair-{intervention.get('interventionId') or uuid.uuid4().hex[:12]}",
+        "eventType": "MISCONCEPTION_REPAIR_COMPLETED",
+        "sessionId": state.session_id,
+        "lectureId": state.lecture_id,
+        "pageNumber": int(intervention.get("pageNumber") or state.current_page or 1),
+        "coverage": {
+            "startPage": int(intervention.get("pageNumber") or state.current_page or 1),
+            "endPage": int(intervention.get("pageNumber") or state.current_page or 1),
+            "sourceRequest": "오개념 교정",
+        },
+        "quiz": {
+            "quizId": intervention.get("sourceQuizId"),
+            "quizType": None,
+            "questionCount": None,
+        },
+        "grading": {
+            "score": None,
+            "total": None,
+            "scoreRatio": intervention.get("score"),
+            "passed": False,
+            "passScoreRatio": PASS_SCORE_RATIO,
+            "wrongItems": [],
+        },
+        "diagnosis": {
+            "weakConcepts": concepts or [str(intervention.get("focusConcept") or "현재 페이지 핵심 개념")],
+            "interventionStatus": intervention.get("status"),
+            "repairGoal": intervention.get("repairGoal"),
+            "repairSummary": intervention.get("repairSummary"),
+        },
+        "createdAt": intervention.get("completedAt") or intervention.get("updatedAt") or intervention.get("createdAt"),
+    }
+
+
+def _normalize_wrong_items(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "questionIndex": item.get("questionIndex", item.get("question_index")),
+            "question": item.get("question"),
+            "studentAnswer": item.get("userAnswer", item.get("user_answer")),
+            "correctAnswer": item.get("correctAnswer", item.get("correct_answer")),
+            "feedback": item.get("feedback"),
+            "concepts": item.get("concepts") or [],
+        })
+    return out
 
 
 def _active_diagnostic_prompt(state: SessionState) -> str:
