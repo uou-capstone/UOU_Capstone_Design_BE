@@ -64,7 +64,7 @@ class LearningSessionAuthorizationTest {
     private LearningChatPersistenceService chatPersistenceService;
 
     @Mock
-    private LearningIntegratedEvidenceService integratedEvidenceService;
+    private LearningSessionEvidenceService sessionEvidenceService;
 
     @InjectMocks
     private LearningSessionService learningSessionService;
@@ -195,7 +195,7 @@ class LearningSessionAuthorizationTest {
         request.setType("QUIZ_SUBMITTED");
 
         String doneLine = """
-                {"type":"done","data":{"eventKind":"QUIZ_GRADED","learningEvidence":{"sessionId":5,"lectureId":100,"quizId":"quiz-1","scoreRatio":0.2}}}
+                {"type":"done","data":{"learningEvidence":{"type":"learning_evidence","evidenceId":"e-1","sessionId":5,"lectureId":100,"eventType":"QUIZ_GRADED","scoreRatio":0.2}}}
                 """.trim();
 
         when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
@@ -204,14 +204,15 @@ class LearningSessionAuthorizationTest {
         when(chatPersistenceService.getOwnedActiveSession(sessionId, 77L, LECTURE_ID))
                 .thenReturn(LearningChatSession.builder().lecture(lecture).user(currentUser).build());
         when(fastApiSessionClient.streamEvent(eq(sessionId), anyMap())).thenReturn(Flux.just(doneLine));
-        doThrow(new RuntimeException("db down")).when(integratedEvidenceService)
+        doThrow(new RuntimeException("db down")).when(sessionEvidenceService)
                 .saveFromStreamLine(doneLine, sessionId, LECTURE_ID, currentUser);
 
         List<ServerSentEvent<String>> events = learningSessionService.streamSessionEvent(
                 LECTURE_ID, sessionId, request, 2, null, null).collectList().block();
 
         assertThat(events).isNotEmpty();
-        verify(integratedEvidenceService).saveFromStreamLine(doneLine, sessionId, LECTURE_ID, currentUser);
+        verify(sessionEvidenceService, org.mockito.Mockito.timeout(1000))
+                .saveFromStreamLine(doneLine, sessionId, LECTURE_ID, currentUser);
     }
 
     @Test

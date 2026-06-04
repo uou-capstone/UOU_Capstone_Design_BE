@@ -1,6 +1,8 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiIntegratedLearningSummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -18,6 +20,8 @@ public class StudentReportDetailResponse {
     private final List<CompetencyDto> competencies;
     private final SubmissionSummaryDto submissionSummary;
     private final List<EvidenceDto> evidence;
+    private final AiIntegratedLearningSummaryDto integratedLearningSummary;
+    private final List<AiLearningEvidenceDto> learningEvidence;
     private final NarrativeReportDto narrativeReport;
     private final Double overallScorePercent;
     private final String headline;

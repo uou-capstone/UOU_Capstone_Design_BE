@@ -30,6 +30,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,7 +59,7 @@ public class LearningSessionService {
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
     private final LearningChatPersistenceService chatPersistenceService;
-    private final LearningIntegratedEvidenceService integratedEvidenceService;
+    private final LearningSessionEvidenceService sessionEvidenceService;
 
     /**
      * 강의 ID로 학습 세션 조회 또는 신규 생성.
@@ -202,7 +203,12 @@ public class LearningSessionService {
             return;
         }
         try {
-            integratedEvidenceService.saveFromStreamLine(line, sessionId, lectureId, currentUser);
+            Mono.fromRunnable(() -> sessionEvidenceService.saveFromStreamLine(line, sessionId, lectureId, currentUser))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doOnError(e -> log.warn("Integrated learning evidence save skipped: sessionId={}, lectureId={}, reason={}",
+                            sessionId, lectureId, e.getMessage()))
+                    .subscribe(null, ignored -> {
+                    });
         } catch (Exception e) {
             log.warn("Integrated learning evidence save skipped: sessionId={}, lectureId={}, reason={}",
                     sessionId, lectureId, e.getMessage());
