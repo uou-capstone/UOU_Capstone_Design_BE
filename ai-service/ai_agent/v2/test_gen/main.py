@@ -116,6 +116,12 @@ class LectureTestGenerator:
             profile=current_profile,
             count=request.target_count
         )
+
+        if request.target_count > 0 and not generated_content:
+            raise ValueError(
+                f"{request.exam_type.value} generation failed: "
+                f"requested {request.target_count} items but generated 0"
+            )
         
         print(f"=== [TestGenerator] Finished: {len(generated_content)} items generated ===")
         

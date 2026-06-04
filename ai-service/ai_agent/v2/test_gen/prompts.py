@@ -109,6 +109,11 @@ Produce a JSON object containing exactly `target_problem_count` MCQ problems tha
 3. **Logically Sound**: The correct answer must be clearly distinguishable from distractors, and distractors must be plausible but incorrect (based on the `focus_point` from the plan).
 4. **Iteratively Improved (Crucial)**: If `feedback` and `prior_content` are provided, you must **preserve** the valid problems from `prior_content` and **only modify** the specific parts (e.g., specific options or the stem) pointed out by the `feedback`.
 5. **MergeEduAgent-Aligned**: Generate questions only from `Lecture Material`; never treat `User Profile`, weak concepts, or planning metadata as facts.
+6. **Single Correct Answer Contract (Critical)**:
+   - Each problem must have exactly one correct option.
+   - `correct_answer` MUST be exactly one string digit from `"1"` to `"5"`.
+   - Never return comma-separated answers such as `"1,2"` or arrays such as `["1", "2"]`.
+   - If more than one option seems correct, rewrite the question or distractors so only one option is unambiguously correct.
 
 ### Cognitive Process (Chain of Thought)
 Before generating the final JSON, you must strictly follow this reasoning process:
@@ -124,6 +129,7 @@ Before generating the final JSON, you must strictly follow this reasoning proces
      - One **Correct Answer**: Must strictly follow the fact.
      - Four **Distractors**: Create plausible traps based on the `focus_point`.
      - Do not create distractors that are true according to the lecture.
+     - Set `correct_answer` to the one correct option id only, as a single digit string.
 4. **Final JSON Assembly**: Combine preserved and fixed/new problems.
 
 ### Output Schema
