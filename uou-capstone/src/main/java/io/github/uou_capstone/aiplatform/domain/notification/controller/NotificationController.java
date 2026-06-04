@@ -2,9 +2,11 @@ package io.github.uou_capstone.aiplatform.domain.notification.controller;
 
 import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.domain.notification.dto.NotificationItemDto;
+import io.github.uou_capstone.aiplatform.domain.notification.dto.TeacherNotificationPreferenceDto;
 import io.github.uou_capstone.aiplatform.domain.notification.dto.UnreadCountResponse;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationStreamRegistry;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPreferenceService;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import io.github.uou_capstone.aiplatform.util.sse.SseEventNames;
 import io.github.uou_capstone.aiplatform.util.sse.SseStreamPolicy;
@@ -36,6 +38,7 @@ public class NotificationController {
     private final NotificationService notificationService;
     private final NotificationStreamRegistry streamRegistry;
     private final CurrentUserResolver currentUserResolver;
+    private final TeacherNotificationPreferenceService teacherPreferenceService;
 
     @Operation(summary = "내 알림 목록 조회",
                description = "현재 로그인 사용자의 알림을 최신순으로 페이지 단위 반환합니다. 정렬 허용 필드: createdAt.")
@@ -70,6 +73,23 @@ public class NotificationController {
     public ResponseEntity<Void> markAllAsRead() {
         notificationService.markAllAsRead();
         return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "교사 알림 수신 설정 조회",
+               description = "현재 로그인 교사의 알림 수신 설정을 반환합니다. row 가 없으면 기본값(false)으로 lazy-create 합니다.")
+    @GetMapping("/teacher-preferences")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<TeacherNotificationPreferenceDto> getTeacherPreferences() {
+        return ResponseEntity.ok(teacherPreferenceService.getOrCreate());
+    }
+
+    @Operation(summary = "교사 알림 수신 설정 변경",
+               description = "현재 로그인 교사의 알림 수신 설정을 갱신합니다. includeSelfActionNotifications=true 시 본인 작업 확인 알림(TEACHER_ACTION_CONFIRMED) 도 수신합니다.")
+    @PatchMapping("/teacher-preferences")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<TeacherNotificationPreferenceDto> updateTeacherPreferences(
+            @RequestBody TeacherNotificationPreferenceDto dto) {
+        return ResponseEntity.ok(teacherPreferenceService.update(dto));
     }
 
     @Operation(summary = "알림 실시간 SSE 스트림",

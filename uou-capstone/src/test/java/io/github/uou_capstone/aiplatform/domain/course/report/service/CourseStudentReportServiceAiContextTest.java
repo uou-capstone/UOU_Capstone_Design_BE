@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.service;
 
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
 import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
@@ -10,14 +11,22 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyLevel;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceItemDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
+import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
+import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
+import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
 import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
@@ -30,6 +39,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -59,6 +69,7 @@ class CourseStudentReportServiceAiContextTest {
     @Mock private ExamResultRepository examResultRepository;
     @Mock private SubmissionRepository submissionRepository;
     @Mock private AssessmentRepository assessmentRepository;
+    @Mock private LearningSessionEvidenceRepository learningSessionEvidenceRepository;
     @Mock private CurrentUserResolver currentUserResolver;
 
     @InjectMocks
@@ -91,6 +102,9 @@ class CourseStudentReportServiceAiContextTest {
 
         enrollment = Enrollment.builder().student(student).course(course).build();
         ReflectionTestUtils.setField(enrollment, "id", 1L);
+
+        lenient().when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(anyLong(), anyLong()))
+                .thenReturn(List.of());
     }
 
     private void primeOwnerAndEnrollment() {
@@ -98,6 +112,33 @@ class CourseStudentReportServiceAiContextTest {
         when(courseRepository.findById(COURSE_ID)).thenReturn(Optional.of(course));
         when(enrollmentRepository.findByCourseIdAndStudentIdWithUser(COURSE_ID, STUDENT_ID))
                 .thenReturn(Optional.of(enrollment));
+    }
+
+    private void primeOwner() {
+        when(currentUserResolver.getTeacher()).thenReturn(owner);
+        when(courseRepository.findById(COURSE_ID)).thenReturn(Optional.of(course));
+    }
+
+    @Test
+    void studentReportList_rejectsClientPageSizeOver100() {
+        primeOwner();
+
+        assertThatThrownBy(() -> service.getStudentReportList(COURSE_ID, null, null, PageRequest.of(0, 101)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.INVALID_PARAMETER);
+    }
+
+    @Test
+    void classroomAnalysisList_allowsInternalPageSizeOver100() {
+        primeOwner();
+        when(enrollmentRepository.findByCourseIdWithStudentUser(COURSE_ID)).thenReturn(List.of());
+
+        PageResponse<StudentReportListItem> res =
+                service.getStudentReportListForClassroomAnalysis(COURSE_ID, PageRequest.of(0, 1000));
+
+        assertThat(res.getSize()).isEqualTo(1000);
+        assertThat(res.getContent()).isEmpty();
     }
 
     private ExamResult examResultWith(Long id, double scorePercent, Map<String, Object> feedbackJson, String overall) {
@@ -127,6 +168,35 @@ class CourseStudentReportServiceAiContextTest {
         // createdAt 을 id 가 작을수록 더 옛날로 → ASC 정렬 시 id=1 이 index 0.
         ReflectionTestUtils.setField(a, "createdAt", LocalDateTime.of(2026, 1, (int) (long) id, 0, 0));
         return a;
+    }
+
+    private LearningSessionEvidence sessionEvidence(String evidenceId,
+                                                    LearningChatSession session,
+                                                    Lecture lecture,
+                                                    Material material,
+                                                    String eventType,
+                                                    String quizType,
+                                                    Double scoreRatio,
+                                                    Boolean passed,
+                                                    List<String> weakConcepts) {
+        LearningSessionEvidence evidence = LearningSessionEvidence.builder()
+                .evidenceId(evidenceId)
+                .course(course)
+                .lecture(lecture)
+                .material(material)
+                .student(student)
+                .session(session)
+                .pageNumber(5)
+                .eventType(eventType)
+                .quizType(quizType)
+                .scoreRatio(scoreRatio)
+                .passed(passed)
+                .weakConcepts(weakConcepts)
+                .wrongItems(List.of())
+                .evidence(Map.of("type", "learning_evidence"))
+                .occurredAt(LocalDateTime.of(2026, 1, Integer.parseInt(evidenceId.substring(evidenceId.length() - 1)), 0, 0))
+                .build();
+        return evidence;
     }
 
     @Test
@@ -204,6 +274,128 @@ class CourseStudentReportServiceAiContextTest {
 
         assertThat(res.getExistingNarrative().getSummary()).isNotBlank();
         assertThat(res.getReportWarnings()).doesNotContain("feedback_profile_missing", "feedback_profile_invalid");
+    }
+
+    @Test
+    void aiContext_includesIntegratedLearningEvidenceAndSummary() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.findByCourse_Id(COURSE_ID)).thenReturn(List.of());
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(anyLong(), anyLong())).thenReturn(List.of());
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Lecture lecture = Lecture.builder()
+                .course(course)
+                .title("lecture")
+                .weekNumber(1)
+                .description("d")
+                .build();
+        ReflectionTestUtils.setField(lecture, "id", 38L);
+        LearningChatSession session = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(session, "id", 27L);
+        Material material = Material.builder()
+                .lecture(lecture)
+                .displayName("m")
+                .materialType("PDF")
+                .filePath("p")
+                .url(null)
+                .uploadedBy(1L)
+                .build();
+        ReflectionTestUtils.setField(material, "id", 20L);
+
+        LearningSessionEvidence quiz1 = sessionEvidence(
+                "evidence-1", session, lecture, material, "QUIZ_GRADED", "OX_Problem", 0.2, false, List.of("CBR", "VBR"));
+        LearningSessionEvidence quiz2 = sessionEvidence(
+                "evidence-2", session, lecture, material, "QUIZ_GRADED", "OX_Problem", 1.0, true, List.of("CBR"));
+        LearningSessionEvidence resolved = sessionEvidence(
+                "evidence-3", session, lecture, material, "MISCONCEPTION_RESOLVED", null, null, null, List.of("VBR"));
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(resolved, quiz2, quiz1));
+
+        StudentAiReportContextResponse res = service.getStudentAiReportContext(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getLearningEvidence()).hasSize(3);
+        AiLearningEvidenceDto firstQuiz = res.getLearningEvidence().stream()
+                .filter(e -> "evidence-2".equals(e.getEvidenceId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(firstQuiz.getSessionId()).isEqualTo(27L);
+        assertThat(firstQuiz.getLectureId()).isEqualTo(38L);
+        assertThat(firstQuiz.getMaterialId()).isEqualTo(20L);
+        assertThat(firstQuiz.getStudentId()).isEqualTo(STUDENT_ID);
+        assertThat(firstQuiz.getQuizType()).isEqualTo("OX_Problem");
+
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(2);
+        assertThat(res.getIntegratedLearningSummary().getPassCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getAverageScoreRatio()).isEqualTo(0.6);
+        assertThat(res.getIntegratedLearningSummary().getWeakConcepts()).containsExactly("CBR", "VBR");
+        assertThat(res.getIntegratedLearningSummary().getResolvedConcepts()).containsExactly("VBR");
+        assertThat(res.getIntegratedLearningSummary().getLatestActivityAt()).isEqualTo(LocalDateTime.of(2026, 1, 3, 0, 0));
+    }
+
+    @Test
+    void detail_includesIntegratedLearningEvidenceAndSummary() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(anyLong(), anyLong())).thenReturn(List.of());
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Lecture lecture = Lecture.builder()
+                .course(course)
+                .title("lecture")
+                .weekNumber(1)
+                .description("d")
+                .build();
+        ReflectionTestUtils.setField(lecture, "id", 38L);
+        LearningChatSession session = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(session, "id", 27L);
+
+        LearningSessionEvidence quiz = sessionEvidence(
+                "evidence-1", session, lecture, null, "QUIZ_GRADED", "OX_Problem", 0.5, false, List.of("CBR"));
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(quiz));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getLearningEvidence()).hasSize(1);
+        assertThat(res.getLearningEvidence().get(0).getEvidenceId()).isEqualTo("evidence-1");
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+    }
+
+    @Test
+    void detail_marksInsufficientData_whenExamResultHasNoValidScore() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        ExamSession session = ExamSession.builder()
+                .lecture(null).material(null).displayName(null).user(studentUser)
+                .examType(ExamType.FIVE_CHOICE).targetCount(10).build();
+        ExamResult resultWithoutScore = ExamResult.builder()
+                .examSession(session)
+                .submission(null)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(resultWithoutScore, "id", 7L);
+        ReflectionTestUtils.setField(resultWithoutScore, "completedAt", LocalDateTime.now());
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(resultWithoutScore));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getActivitySummary().getExamAttemptCount()).isEqualTo(1);
+        assertThat(res.getScoreSummary().getAverageScorePercent()).isNull();
+        assertThat(res.getOverallScorePercent()).isNull();
+        assertThat(res.getReportStatus()).isEqualTo("insufficient_data");
+        assertThat(res.getHeadline()).doesNotContain("0.0");
     }
 
     @Test

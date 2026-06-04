@@ -28,7 +28,7 @@ public class AuthRateLimitInterceptor implements HandlerInterceptor {
     // check-email 은 GET 이지만 이메일 enumeration 공격 표면이므로 같은 인터셉터로 묶는다.
     private static final Map<String, Integer> LIMITS = Map.of(
             "/api/auth/login", 10,
-            "/api/auth/signup", 5,
+            "/api/auth/signup", 20,
             "/api/auth/refresh", 20,
             "/api/auth/check-email", 30
     );

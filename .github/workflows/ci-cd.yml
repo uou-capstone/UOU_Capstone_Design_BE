@@ -254,20 +254,89 @@ jobs:
       needs.build-spring.result != 'failure' &&
       needs.build-ai.result != 'failure'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          # GHCR_TOKEN / GHCR_USERNAME 은 EC2 셸로 전달되어 deploy.sh 내에서 사용
-          envs: GHCR_TOKEN,GHCR_USERNAME
-          script: |
-            export GHCR_TOKEN="${{ secrets.GHCR_TOKEN }}"
-            export GHCR_USERNAME="${{ github.actor }}"
-            bash /home/ec2-user/UOU_Capstone_design_Be_v3/deploy.sh "${{ github.ref_name }}"
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION || 'ap-northeast-2' }}
+
+      - name: Deploy via AWS Systems Manager
+        env:
+          SSM_TARGET_PROJECT: AITutor
+          SSM_TARGET_ROLE: app
+          DEPLOY_BRANCH: ${{ github.ref_name }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          cat > ssm-parameters.json <<JSON
+          {
+            "commands": [
+              "set -euo pipefail",
+              "export HOME=/root",
+              "git config --system --add safe.directory /home/ec2-user/UOU_Capstone_design_Be_v3",
+              "cd /home/ec2-user/UOU_Capstone_design_Be_v3",
+              "test -f /etc/uou-capstone/deploy.env",
+              "set -a; . /etc/uou-capstone/deploy.env; set +a",
+              "bash deploy.sh '${DEPLOY_BRANCH}'"
+            ]
+          }
+          JSON
+
+          INSTANCE_IDS="$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=${SSM_TARGET_PROJECT}" "Name=tag:Role,Values=${SSM_TARGET_ROLE}" "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].InstanceId" \
+            --output text)"
+
+          if [ -z "$INSTANCE_IDS" ] || [ "$INSTANCE_IDS" = "None" ]; then
+            echo "::error::No running EC2 instances found with tags Project=${SSM_TARGET_PROJECT}, Role=${SSM_TARGET_ROLE}."
+            exit 1
+          fi
+
+          echo "Deploy target instance ids: ${INSTANCE_IDS}"
+
+          COMMAND_ID="$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids $INSTANCE_IDS \
+            --parameters file://ssm-parameters.json \
+            --comment "Deploy ${DEPLOY_BRANCH} ${DEPLOY_SHA}" \
+            --timeout-seconds 1800 \
+            --max-concurrency "1" \
+            --max-errors "0" \
+            --query "Command.CommandId" \
+            --output text)"
+
+          echo "SSM command id: ${COMMAND_ID}"
+
+          for attempt in {1..120}; do
+            STATUS="$(aws ssm list-commands \
+              --command-id "$COMMAND_ID" \
+              --query "Commands[0].Status" \
+              --output text)"
+
+            if [ "$STATUS" = "Success" ]; then
+              break
+            fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelling" ]; then
+              echo "::error::SSM deploy command ended with status: ${STATUS}"
+              aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --output text
+              exit 1
+            fi
+
+            echo "SSM deploy status: ${STATUS} (${attempt}/120)"
+            sleep 10
+          done
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::SSM deploy command did not finish in time. Last status: ${STATUS}"
+            aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --output text
+            exit 1
+          fi
+
+          aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --output text
 
       - name: Print deployment summary
         run: |
@@ -280,9 +349,7 @@ jobs:
           echo "| Spring 빌드 | ${{ needs.build-spring.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| AI 빌드 | ${{ needs.build-ai.result }} |" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "| Spring 엔드포인트 | \`:8080\` |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| AI 엔드포인트 | \`:8000\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Spring 엔드포인트 | https://uouaitutor.duckdns.org |" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "| Spring 엔드포인트 | \`:8081\` |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| AI 엔드포인트 | \`:8001\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Spring 엔드포인트 | https://dev.uouaitutor.duckdns.org |" >> "$GITHUB_STEP_SUMMARY"
           fi

@@ -31,4 +31,12 @@ public interface ExamResultRepository extends JpaRepository<ExamResult, Long> {
             """)
     List<ExamResult> findByCourseIdAndUserIdsWithSession(@Param("courseId") Long courseId,
                                                          @Param("userIds") Collection<Long> userIds);
+
+    @Query("""
+            SELECT er FROM ExamResult er
+            JOIN FETCH er.examSession es
+            JOIN FETCH es.lecture l
+            WHERE l.course.id = :courseId
+            """)
+    List<ExamResult> findByCourseIdWithSession(@Param("courseId") Long courseId);
 }

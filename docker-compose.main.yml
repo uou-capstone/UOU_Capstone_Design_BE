@@ -1,4 +1,4 @@
-# main 브랜치 배포용 Compose (EC2 — 포트 8080/8000)
+# main 브랜치 배포용 Compose (EC2 — backend localhost 8080, AI internal 8000)
 #
 # 사전 준비:
 #   cp env/main.env.example env/main.env
@@ -57,7 +57,7 @@ services:
     image: ghcr.io/${GHCR_ORG:?GHCR_ORG is not set. Check env/main.env}/main-service:${SPRING_IMAGE_TAG:-main-latest}
     container_name: main-backend
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       # 내부 서비스 디스커버리 (compose 네트워크 내 컨테이너명 고정)
       MYSQL_HOST: main-mysql
@@ -87,8 +87,10 @@ services:
   main-ai:
     image: ghcr.io/${GHCR_ORG:?GHCR_ORG is not set. Check env/main.env}/ai-service:${AI_IMAGE_TAG:-main-latest}
     container_name: main-ai
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
+    volumes:
+      - main-ai-uploads:/app/uploads
     environment:
       REDIS_HOST: main-redis
       REDIS_PORT: "6379"
@@ -98,8 +100,8 @@ services:
       - main-network
     restart: always
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
-             "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -109,6 +111,8 @@ volumes:
   main-mysql-data:
     driver: local
   main-redis-data:
+    driver: local
+  main-ai-uploads:
     driver: local
 
 networks:

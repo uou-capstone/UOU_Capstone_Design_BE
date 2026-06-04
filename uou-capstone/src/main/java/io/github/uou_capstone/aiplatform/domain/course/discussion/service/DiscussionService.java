@@ -8,10 +8,13 @@ import io.github.uou_capstone.aiplatform.domain.course.discussion.dto.Discussion
 import io.github.uou_capstone.aiplatform.domain.course.discussion.dto.DiscussionListItemResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.discussion.dto.DiscussionResponseDto;
 import io.github.uou_capstone.aiplatform.domain.course.discussion.dto.DiscussionUpdateRequestDto;
+import io.github.uou_capstone.aiplatform.common.util.NotificationBodyFormatter;
 import io.github.uou_capstone.aiplatform.domain.course.discussion.entity.Discussion;
 import io.github.uou_capstone.aiplatform.domain.course.discussion.repository.DiscussionRepository;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
+import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
@@ -33,9 +36,12 @@ public class DiscussionService {
             Sort.Order.desc("createdAt")
     );
 
+    private static final int BODY_SUMMARY_LEN = 100;
+
     private final DiscussionRepository discussionRepository;
     private final CourseAccessService courseAccessService;
     private final CurrentUserResolver currentUserResolver;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     @Transactional
     public DiscussionResponseDto createDiscussion(Long courseId, DiscussionCreateRequestDto dto) {
@@ -52,6 +58,18 @@ public class DiscussionService {
                         .pinned(dto.getPinned())
                         .allowComments(dto.getAllowComments())
                         .build()
+        );
+
+        // 담당 교사 알림 — 본인이 작성자면 Publisher 내부에서 자기 작업 분기로 변환
+        teacherNotificationPublisher.notifyCourseTeacher(
+                course,
+                currentUser,
+                NotificationType.DISCUSSION_CREATED,
+                "새 토론 게시글",
+                currentUser.getFullName() + ": "
+                        + NotificationBodyFormatter.summarize(dto.getTitle(), BODY_SUMMARY_LEN),
+                "DISCUSSION",
+                saved.getId()
         );
 
         return new DiscussionResponseDto(saved);

@@ -1,6 +1,9 @@
 package io.github.uou_capstone.aiplatform.domain.learning.controller;
 
 import io.github.uou_capstone.aiplatform.domain.learning.dto.SessionEventRequest;
+import io.github.uou_capstone.aiplatform.common.dto.PageResponse;
+import io.github.uou_capstone.aiplatform.domain.learning.dto.LearningChatMessageResponse;
+import io.github.uou_capstone.aiplatform.domain.learning.dto.LearningChatSessionResponse;
 import io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -8,6 +11,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
@@ -16,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,6 +42,28 @@ import java.util.Map;
 public class LearningSessionController {
 
     private final LearningSessionService learningSessionService;
+
+    @Operation(
+            summary = "학습 채팅 세션 목록 조회",
+            description = "현재 사용자의 특정 강의 학습 채팅 세션 목록을 최신순으로 조회합니다."
+    )
+    @GetMapping
+    @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
+    public ResponseEntity<PageResponse<LearningChatSessionResponse>> getChatSessions(
+            @RequestParam Long lectureId,
+            @PageableDefault(size = 20, sort = "lastMessageAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(learningSessionService.getChatSessions(lectureId, pageable));
+    }
+
+    @Operation(
+            summary = "학습 채팅 메시지 조회",
+            description = "현재 사용자의 학습 채팅 세션 메시지를 오래된 순으로 조회합니다."
+    )
+    @GetMapping("/{sessionId}/messages")
+    @PreAuthorize("hasAuthority('STUDENT') or hasAuthority('TEACHER')")
+    public ResponseEntity<List<LearningChatMessageResponse>> getChatMessages(@PathVariable Long sessionId) {
+        return ResponseEntity.ok(learningSessionService.getChatMessages(sessionId));
+    }
 
     /**
      * 학습 세션 조회 또는 생성

@@ -19,6 +19,7 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.CourseReposito
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
@@ -48,6 +49,7 @@ public class CourseJoinRequestService {
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
     private final NotificationService notificationService;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
     private final DistributedLockService distributedLockService;
     private final TransactionTemplate transactionTemplate;
     private final CourseAuditLogger auditLogger;
@@ -97,6 +99,19 @@ public class CourseJoinRequestService {
                         .course(course)
                         .build()
         );
+
+        // 담당 교사에게 가입 요청 알림 (학생이 actor 이므로 자기 작업 분기는 발생하지 않음)
+        teacherNotificationPublisher.notifyCourseTeacher(
+                course,
+                student.getUser(),
+                NotificationType.COURSE_JOIN_REQUESTED,
+                "새 강의실 가입 요청",
+                "%s 학생이 %s 강의실 가입을 요청했습니다."
+                        .formatted(student.getUser().getFullName(), course.getTitle()),
+                "course",
+                course.getId()
+        );
+
         return new CourseJoinRequestResponseDto(saved);
     }
 

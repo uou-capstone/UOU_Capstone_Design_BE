@@ -20,7 +20,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -99,8 +98,12 @@ public class FastApiDelegatorClient {
                 .bodyToFlux(String.class)
                 .filter(line -> !line.isBlank())
                 .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
-                .map(this::parseLectureStreamLine)
-                .filter(Objects::nonNull);
+                .<LectureStreamChunk>handle((line, sink) -> {
+                    LectureStreamChunk chunk = parseLectureStreamLine(line);
+                    if (chunk != null) {
+                        sink.next(chunk);
+                    }
+                });
     }
 
     private Map<String, Object> callLectureGenerate(Map<String, Object> payload, String secretKey) {
@@ -125,8 +128,12 @@ public class FastApiDelegatorClient {
                 .bodyToFlux(String.class)
                 .filter(line -> !line.isBlank())
                 .filter(line -> !NdjsonLineFilters.isHeartbeatLine(objectMapper, line))
-                .map(this::parseLectureStreamLine)
-                .filter(Objects::nonNull)
+                .<LectureStreamChunk>handle((line, sink) -> {
+                    LectureStreamChunk chunk = parseLectureStreamLine(line);
+                    if (chunk != null) {
+                        sink.next(chunk);
+                    }
+                })
                 .filter(c -> c.kind() == LectureStreamChunk.Kind.MAIN)
                 .map(LectureStreamChunk::delta)
                 .filter(text -> text != null && !text.isBlank())

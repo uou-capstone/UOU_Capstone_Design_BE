@@ -4,6 +4,253 @@
 
 ---
 
+## [2026-06-03] Report Criteria Assistant Chat Spring 프록시 추가
+
+### 증상
+
+FastAPI `develop` 문서에는 `POST /bridge/report/criteria_assistant_chat_stream` 이 추가되어 있었지만, Spring 공개 API에는 추천형 `POST /api/courses/{courseId}/reports/criteria/assistant/stream` 만 있었다. FE가 "개념 이해도 기준 하나 추가해줘" 같은 자연어 변경 요청을 operation 제안으로 받으려면 Spring에서 chat bridge를 프록시할 엔드포인트가 필요했다.
+
+### 원인
+
+초기 MergeEdu bridge 연동 당시 Report Criteria는 `criterion_suggestion`을 여러 번 내려주는 추천형 스트림만 구현했다. 이후 FastAPI 쪽에 `message/messages`, `history`, `currentProposal` 기반으로 `draftCriterion`, `reviseCriterion`, `createCriterion`, `updateCriterion`, `deleteCriterion`, `messageOnly` operation을 반환하는 chat endpoint가 추가됐지만 Spring `FastApiBridgeClient`와 criteria controller/service에는 대응 메서드가 없었다.
+
+### 조치
+
+- `POST /api/courses/{courseId}/reports/criteria/assistant/chat/stream` 을 추가하고 `TEACHER` 권한 + SSE 헤더를 기존 assistant stream과 동일하게 적용했다.
+- `CriteriaAssistantChatRequest` 를 추가해 `message` 또는 `messages[]` 중 하나를 필수 검증하고, `history`, `currentProposal`, `model`, `responseJsonSchema` 를 FastAPI로 전달한다.
+- `CourseReportCriteriaAssistantService.streamChat` 이 강의명과 현재 DB 추가 평가항목을 모아 `/bridge/report/criteria_assistant_chat_stream` 으로 forward한다. DB 기준은 FastAPI가 수정 불가 대상으로 취급하지 않도록 `existingCriteria[]`가 아니라 `additionalCriteria[]`로 전달한다.
+- `FastApiBridgeClient.reportCriteriaAssistantChatStream` 을 추가하고 streaming WebClient를 사용하도록 고정했다.
+
+### 검증
+
+- `./gradlew.bat test --tests io.github.uou_capstone.aiplatform.integration.fastapi.FastApiBridgeClientTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaAssistantServiceTest --no-daemon`
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClient.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/controller/CourseReportCriteriaController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/service/CourseReportCriteriaAssistantService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/dto/CriteriaAssistantChatRequest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClientTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/service/CourseReportCriteriaAssistantServiceTest.java`
+
+---
+
+## [2026-05-12] 교사 알림 확장 — 학생 이벤트 8종 + 자기 작업 토글
+
+### 배경
+
+알림 인프라(`Notification`/`NotificationService`/SSE)는 학생/교사 공통이지만, 발행 지점은 **학생을 향한 8종**(`COURSE_JOIN_*`, `COURSE_MEMBER_*`, `NOTICE_*`, `DISCUSSION_COMMENT_RECEIVED`)뿐이었다. 교사 입장에서 자신의 강의실에 일어난 일(가입 요청·새 토론글·과제·시험 제출·AI 생성 결과)을 알 수 없어 매번 페이지를 들어가 확인해야 했다.
+
+### 변경 — 핵심
+
+#### `NotificationType` enum 9종 추가
+
+학생/공통 8종은 그대로. 교사용 신규:
+`COURSE_JOIN_REQUESTED`, `DISCUSSION_CREATED`, `DISCUSSION_COMMENTED`, `NOTICE_COMMENTED`, `ASSESSMENT_SUBMITTED`, `EXAM_SUBMITTED`, `AI_GENERATION_COMPLETED`, `AI_GENERATION_FAILED`, `TEACHER_ACTION_CONFIRMED`.
+
+#### `TeacherNotificationPreference` 엔티티 + 토글 1개
+
+`teacher_notification_preferences` 테이블 신설 (Teacher OneToOne, `include_self_action_notifications` bit, 기본 `false`).
+- `false`: 학생/시스템 이벤트만 수신.
+- `true`: 본인 작업 시 추가로 `TEACHER_ACTION_CONFIRMED` 알림 수신.
+- 조회 시 row 없으면 lazy-create.
+
+#### `TeacherNotificationPublisher` 단일 경유 헬퍼
+
+도메인 서비스가 직접 `NotificationService` 를 호출하던 패턴 대신:
+- `notifyCourseTeacher(course, actor, …)` — actor 가 교사 본인이면 `TEACHER_ACTION_CONFIRMED` 로 자동 변환 후 설정 ON 시에만 발행. 아니면 일반 알림 그대로.
+- `notifySelfAction(teacher, …)` — 설정 ON 시에만 발행.
+
+이 단일 지점에서 자기 작업 분기를 처리해 도메인 코드는 "담당 교사에게 알리고 싶다" 만 신경쓰면 됨.
+
+#### REST API 2종
+
+`NotificationController` 에 추가, 둘 다 `@PreAuthorize("hasAuthority('TEACHER')")`:
+- `GET  /api/notifications/teacher-preferences`
+- `PATCH /api/notifications/teacher-preferences`
+
+응답/요청 DTO: `{ "includeSelfActionNotifications": boolean }`.
+
+#### 자동 발행 지점 7개
+
+| 도메인 | 메서드 | 발행 |
+|---|---|---|
+| `CourseJoinRequestService.persistPendingJoinRequest` | save 직후 | `COURSE_JOIN_REQUESTED` |
+| `DiscussionService.createDiscussion` | save 직후 | `DISCUSSION_CREATED` (작성자가 교사면 자동 분기) |
+| `DiscussionCommentService.createComment` | save 직후 | `DISCUSSION_COMMENTED` (parent 작성자가 곧 담당 교사면 중복 방지) |
+| `NoticeCommentService.createComment` | save 직후 | `NOTICE_COMMENTED` (parent 작성자가 곧 담당 교사면 중복 방지) |
+| `SubmissionService.createSubmission` | save 직후 | `ASSESSMENT_SUBMITTED` |
+| `ExamSubmissionService.submitExam` | 채점 결과 저장 직후 | `EXAM_SUBMITTED` |
+| `MaterialGenerationService.processPhase3To5Async` | try 완료 / catch 실패 | `AI_GENERATION_COMPLETED` / `AI_GENERATION_FAILED` (resourceType=`material`) |
+| `ExamGenerationService.generateExamAsync` | try 완료 / catch 실패 | `AI_GENERATION_COMPLETED` / `AI_GENERATION_FAILED` (resourceType=`exam`) |
+
+AI 생성 알림은 actor=null 로 호출 — 요청자가 곧 담당 교사라도 비동기 결과 통지는 항상 받아야 하므로 자기 작업 분기 미발동.
+
+### Flyway V4 — `notifications.type` 컬럼 정렬
+
+`V4__teacher_notification_prefs_and_type_widen.sql`:
+1. `ALTER TABLE notifications MODIFY COLUMN type VARCHAR(40)` — V1 baseline 의 `ENUM(...)` 을 VARCHAR로 정렬. NotificationType.java 의 주석/설계 의도(`@Enumerated(STRING)` + varchar(40))와 일치. 이후 enum 값 추가 시 DDL 변경 영원히 불필요.
+2. `teacher_notification_preferences` 테이블 생성.
+
+### 회귀 보호
+
+- 기존 학생 알림 8종 발행 코드는 그대로 유지 → 기존 학생 흐름 무영향.
+- 기존 테스트 4종 (`CourseJoinRequestServiceTest`, `Discussion[Comment]ServiceTest`, `NoticeCommentServiceTest`) 에 `@Mock TeacherNotificationPublisher` 1줄 추가 — 동작 검증은 그대로.
+- 신규 테스트 2종: `TeacherNotificationPreferenceServiceTest` (lazy-create / TEACHER 권한 차단 / `isSelfActionNotificationsEnabled`), `TeacherNotificationPublisherTest` (actor 분기 / opt-in/out / null 안전성).
+- `./gradlew test --no-daemon` 전체 통과 (Spring 컨텍스트 로드 + V4 마이그레이션 적용 검증 포함).
+
+### FE 인계
+
+`docs/handoff/TEACHER_NOTIFICATION_FE.md` — 새 alert 타입 라우팅 매핑 + 설정 API 사용 예시 + 검증 시나리오.
+
+### Open Items
+
+- `TEACHER_ACTION_CONFIRMED` 의 명시 발행 지점(강의실/강의/공지/자료/평가 본인 CRUD 완료) 은 초기엔 좁게 시작 — 사용자 피드백 후 확장 검토.
+- 멀티 인스턴스 환경에서 SSE 분배는 여전히 in-memory `NotificationStreamRegistry` 단일 노드 한정. Redis Pub/Sub 분배는 별도 라운드 (학생 알림과 동일 제약).
+
+---
+
+## [2026-05-11] FastAPI `/bridge/*` 인증 + MergeEdu 신규 4종 도메인
+
+### 배경
+
+FastAPI 측에서 `feat/refactor` 브랜치에 신규 MergeEdu Agent `/bridge/*` 계약을 확정 (`ai-service/docs/BRIDGE_AGENT_ENDPOINTS.md`, `ai-service/docs/SPRING_BRIDGE_AUTH_INTEGRATION.md`). 운영/공유 환경부터 모든 `/bridge/*` 요청에 `X-AI-SECRET-KEY` 헤더가 요구된다. Spring 측 WebClient에는 헤더 주입 코드가 전혀 없는 상태였다.
+
+MERGEEDU 5종 모두 신설 (초기엔 4종 + 후속에 5번째 추가):
+1. Discussion AI Assistant
+2. Exam Studio (PDF Context + Chat)
+3. Report Criteria CRUD + AI Assistant
+4. Classroom Report (sync + stream)
+5. Student Report Chatbot — FastAPI 팀 인계 항목으로 미루었다가 같은 라운드에 추가.
+
+### 인프라 변경
+
+#### `WebClientConfig` — secret-key 전역 헤더 + prod 시작 실패 가드
+
+`aiServiceWebClient` / `aiServiceStreamingWebClient` 양쪽에 `defaultHeader("X-AI-SECRET-KEY", ...)` 적용. `@PostConstruct validateAiSecretKey()` 추가:
+- 활성 프로필에 `prod` / `production` 포함 시 secret이 blank/placeholder 면 `IllegalStateException` 으로 부팅 실패.
+- placeholder 목록: `YOUR_SUPER_SECRET_AI_KEY_12345`, `YOUR_AI_SECRET_KEY`, `CHANGE_ME`, `changeme`, `placeholder`.
+- local/test 는 blank/placeholder 도 경고 로그만.
+
+환경변수 명명: Spring 측은 기존 `AI_SERVICE_SECRET_KEY` 유지 (기존 yml 정합). FastAPI 측 `AI_SECRET_KEY` 와 **값은 같지만 변수명은 다름** — docker-compose / k8s 매핑에서 같은 값을 두 변수에 주입 필요.
+
+#### `application.yml` — 공통 ai.service.* 기본 선언
+
+`AI_SERVICE_BASE_URL` / `AI_SERVICE_SECRET_KEY` 환경변수의 기본 선언(공백). 프로필별 yml은 그대로.
+
+### `FastApiBridgeClient` — 신규 6 메서드 추가
+
+기존 4 메서드(`testGenGenerate`, `quizResult`, `gradeResult`, `streamQuiz`)는 그대로 유지. 신규는 모두 `/bridge/*` prefix (기존 `/api/v3/bridge/*` 와 별개 계약).
+
+| 메서드 | Path | WebClient |
+|---|---|---|
+| `discussionAssistantStream` | `POST /bridge/discussion_assistant_stream` | streaming |
+| `examStudioPdfContext` | `POST /bridge/exam_studio/pdf_context` | json |
+| `examStudioChatStream` | `POST /bridge/exam_studio/chat_stream` | streaming |
+| `reportCriteriaAssistantStream` | `POST /bridge/report/criteria_assistant_stream` | streaming |
+| `reportClassroomAnalyze` | `POST /bridge/report/classroom_analyze` | json |
+| `reportClassroomAnalyzeStream` | `POST /bridge/report/classroom_analyze_stream` | streaming |
+
+스트리밍 메서드는 `aiServiceStreamingWebClient` (HTTP/1.1 강제 + 256KB 버퍼) 주입. 기존 `streamQuiz`는 여전히 `aiServiceWebClient` 사용 — 후속 정리 후보 (Open Items).
+
+### `SseStreamSupport.wrapNdjsonByType` — NDJSON type → SSE event name 매핑
+
+기존 `wrapNdjson`은 모든 라인을 `event: message` 단일 이름으로 래핑. 신규 4종은 클라이언트가 `thought_delta` / `answer_delta` / `criterion_suggestion` / `done` / `error` 를 분기해야 하므로 신규 헬퍼 추가:
+- NDJSON line의 `type` 필드를 SSE event name으로 매핑.
+- 파싱 실패 라인은 `event: message` + `{"raw": "..."}` fallback.
+- **`error` 라인의 `details.errorType` 은 서버 로그에만 기록하고 SSE forward에서 제거** — CLAUDE.md "prod 에러 응답에 내부 정보 노출 금지" 준수.
+- FastAPI 가 자체 `done` 라인을 emit 하므로 호출자는 `SseStreamPolicy.appendDoneOnComplete(false)` 권장.
+
+### 도메인 4종 신규
+
+#### 1) `domain/course/discussion/assistant/`
+
+- `POST /api/courses/{cid}/discussions/assistant/stream` (SSE) — 학생/교사
+- `DiscussionAssistantService` 가 최근 5개 discussion (`findTop5ByCourseOrderByCreatedAtDesc`) + topic/category/previousDraft 컨텍스트 빌드 → FastAPI 호출 → SSE forward.
+- 권한: `CourseAccessService.loadCourseAsParticipant`.
+
+#### 2) `domain/exam/studio/`
+
+- `POST /api/courses/{cid}/exam-studio/pdf-context` (JSON) — Material 의 PDF 를 FastAPI 에 등록, contextId 발급.
+- `POST /api/courses/{cid}/exam-studio/chat/stream` (SSE) — contextId 와 메시지로 AI 대화.
+- `MaterialRepository.findByIdWithLectureAndCourse` 신규 (JOIN FETCH) — material → lecture → course 권한 체크 한 쿼리.
+- 권한: 교사 (`loadCourseAsTeacher`).
+- **MVP 한계**: `contextId` 만료(`PROCESS_MEMORY` cache TTL/재시작/multi-worker 라우팅) 시 자동 재발급 retry 미구현 — FE 측 contextId 재발급 흐름으로 위임 (TODO).
+
+#### 3) `domain/course/report/criteria/`
+
+- CRUD: GET/POST/PATCH/DELETE `/api/courses/{cid}/reports/criteria[/{id}]`
+- AI 추천: `POST .../criteria/assistant/stream` (SSE) — `criterion_suggestion` 중간 이벤트 multi-emit.
+- `CourseReportCriterion` 엔티티 신규 (`course_report_criteria` 테이블, V3).
+- `weight` 범위 0–100 (FastAPI 미정 → 우리 측 결정).
+- `language` 기본 `"ko"`, `desiredCount` 기본 3.
+- 권한: 교사.
+
+#### 5) `domain/course/report/studentchat/` *(후속 추가)*
+
+- `POST /api/courses/{cid}/reports/students/{sid}/chat/stream` (SSE) — 교사가 학생 리포트로 follow-up 질문.
+- `StudentReportChatController` 메서드는 `CourseReportController`에 추가.
+- `StudentReportChatService` 가 기존 `CourseStudentReportService.getStudentAiReportContext` + `getStudentReportDetail` 호출 결과를 묶어 FastAPI `/bridge/report/student_chat_stream` 으로 forward (대화 이력 미저장 — FE 가 매 요청 `messages[]` 전달).
+- `FastApiBridgeClient.studentReportChatStream` 신규.
+- Request DTO `@AssertTrue` 로 `question` 또는 `messages` 중 하나 필수 검증.
+- 권한: 교사 (`CourseStudentReportService` 내부 검증).
+
+#### 4) `domain/course/report/classroom/`
+
+- `GET /api/courses/{cid}/reports/classroom` — 저장된 분석 결과 1행 조회 (미생성 시 204).
+- `POST .../classroom/analyze` (JSON) / `POST .../classroom/analyze/stream` (SSE) — FastAPI 분석 호출 후 UPSERT.
+- `ClassroomReport` 엔티티 신규 (`classroom_reports` 테이블, course_id UNIQUE, V3).
+- `ClassroomReportPersister` 별도 빈으로 분리 — `@Transactional` self-call 회피.
+- 스트림 경로: `doOnNext` 에서 `event: done` 수신 시 `data.data` 추출하여 UPSERT.
+- 권한: 교사.
+- **MVP 한계**: 학생 데이터는 `getStudentReportList(... PageRequest.of(0, 1000))` 로 collect — 1000명 이상 강의실은 일부만 포함, 경고 로그만. 페이지 분할은 후속.
+
+### Flyway V3 마이그레이션
+
+`src/main/resources/db/migration/V3__report_criteria_and_classroom.sql` — 2개 테이블 일괄:
+- `course_report_criteria` — `criterion_id`, `course_id` (FK ON DELETE CASCADE), `label`/`description`/`weight`, BaseTime 컬럼.
+- `classroom_reports` — `classroom_report_id`, `course_id` (FK + UNIQUE), `summary_markdown`/`highlights_json`/`risks_json`/`coaching_priorities_json` (LONGTEXT JSON), `source`/`fallback_used`/`fallback_reason`/`confidence`, `generated_at`.
+
+### CLAUDE.md 금지 패턴 준수 확인
+
+- `userRepository.findByEmail(` 직접 호출 — 신규 코드 없음 ✅
+- `RuntimeException` — 신규 코드 없음, 모두 `BusinessException(CommonErrorCode.AI_SERVER_ERROR)` ✅
+- `@Transactional` + `WebClient.block()` — 모든 FastAPI 호출 메서드는 `@Transactional` **없음**. `ClassroomReportPersister.upsert(@Transactional)` 는 DB UPSERT 만 (block 호출 없음) ✅
+- prod SSE 응답에 `errorType` / stack trace 노출 — `wrapNdjsonByType` 가 `details.errorType` 자동 strip ✅
+- CORS origin 하드코딩 — 변경 없음 ✅
+
+### FastAPI 팀 인계 사항
+
+별도 메모로 전달할 항목 (사용자 요청):
+
+1. **~~`/bridge/report/student_chat_stream` (Student Report Chatbot)~~** — *후속 추가로 같은 라운드에 구현 완료.* `StudentReportChatService` 가 context + report DTO 묶어 FastAPI 에 forward. 대화 이력 미저장.
+2. **Spring 가정값** (FastAPI 측 확정 필요):
+   - Discussion 컨텍스트 이전 게시글 — Spring 5개 가정.
+   - Criteria `weight` 0–100, `desiredCount` 3, `language` `"ko"`.
+   - Classroom 캐싱: 1 course = 1 row UPSERT, 새 학생 추가 시 invalidate 없음 (수동 재생성).
+   - 학생 100명+ 시 배치 분할 미구현 (현재 1000개 한계).
+3. **NDJSON `details.errorType` 처리**: Spring 은 내부 로그용으로만 사용, SSE forward 시 제거. FastAPI 가 raw exception class name 을 넣어도 사용자에게 노출되지 않음.
+
+### Open Items (후속 PR 후보)
+
+1. `streamQuiz`(기존)를 `aiServiceStreamingWebClient` 로 이전 — 일관성.
+2. Exam Studio `contextId` 만료 자동 재발급 retry 1회.
+3. Exam Studio `pdfPath` vs `pdfText` 자동 결정 (운영 공유 볼륨 보장 여부에 따라).
+4. Classroom Report 학생 수 100명+ 배치 분할 — 현재 1000개 페이지 fetch 후 forward.
+5. Student Report Chatbot 대화 이력 영속화 (현재는 stateless — FE 가 messages 매번 보냄).
+
+### 관련 파일
+
+- 인프라: `config/WebClientConfig.java`, `application.yml`
+- Bridge: `integration/fastapi/FastApiBridgeClient.java`, `util/sse/SseStreamSupport.java`
+- 신규 도메인: `domain/course/discussion/assistant/`, `domain/exam/studio/`, `domain/course/report/criteria/`, `domain/course/report/classroom/`, `domain/course/report/studentchat/`
+- 컨트롤러 확장: `domain/course/report/controller/CourseReportController.java`
+- 마이그레이션: `db/migration/V3__report_criteria_and_classroom.sql`
+- 인계 문서: `docs/handoff/MERGEEDU_AGENT_FEATURES.md` (FastAPI 합의 사항 기록)
+
+---
+
 ## [2026-05-09] 학생-선생 상호작용 기능 신규 도입 — Notice / Discussion / Attendance
 
 ### 배경
@@ -1425,3 +1672,444 @@ Spring Boot 3.4 BOM 이 버전 관리하므로 명시 불필요.
 - PR
   - `feat/flyway-baseline → feat/v3-springboot` (2026-05-08, commit `5f0b702`)
 
+
+---
+
+## [2026-05-31] 강의학습 에이전트 채팅 저장
+
+### 증상
+
+FE에서 강의학습 화면의 사용자-에이전트 채팅을 새로고침/재진입 후 복원할 수 있는 저장 기능을 요구했다. 기존 v3 학습 세션은 Spring이 FastAPI 세션/SSE를 프록시하는 구조라 Spring DB에는 채팅 세션이나 메시지가 남지 않았다.
+
+### 원인
+
+통합 학습 세션 상태는 FastAPI Redis 세션에 임시로 유지되고, Spring `LearningSessionService`는 `USER_MESSAGE` 요청과 `agent_delta` 응답을 저장하지 않고 그대로 전달만 했다. FastAPI의 `SAVE_AND_EXIT`도 Spring 영속 저장과 연결되어 있지 않아 FE가 신뢰할 장기 조회 API가 없었다.
+
+### 조치
+
+Spring DB에 `learning_chat_sessions` / `learning_chat_messages`를 추가하고, 강의학습 세션 생성 시 채팅 세션을 생성하도록 연결했다. `USER_MESSAGE`는 사용자 메시지로 저장하고, SSE 응답 중 `agent_delta.channel="main"`만 모아 `done` 완료 시 에이전트 메시지로 저장한다. FE 조회용으로 강의별 채팅 세션 목록과 세션별 메시지 조회 API도 추가했다.
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/controller/LearningSessionController.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `uou-capstone/src/main/resources/db/migration/V6__learning_chat_history.sql`
+- `uou-capstone/FRONTEND_V2_V3_API.md`
+
+---
+## [2026-05-20] 출석 세션 시간 스키마를 문자열 계약으로 고정
+
+### 배경
+
+FE에서 `POST /api/courses/{courseId}/attendance/sessions` 호출 시 `Content-Type: application/json` 상태에서 `startTime` / `endTime`을 Swagger가 제안한 객체 형태(`{ "hour": 10, "minute": 0, "second": 0, "nano": 0 }`)로 보내면 400이 발생한다고 제보했다.
+
+BE DTO 필드는 `LocalTime`이므로 Jackson은 ISO 계열 문자열 값을 기대한다. 객체 형태의 시간 값은 컨트롤러/서비스 계층에 진입하기 전 request body 역직렬화 단계에서 실패하고, `GlobalExceptionHandler`에 의해 일반 JSON 파싱 오류 응답으로 매핑된다.
+
+### 결정
+
+공개 API 계약은 문자열 시간 형식으로 유지한다.
+
+```json
+{
+  "startTime": "10:00:00",
+  "endTime": "12:00:00"
+}
+```
+
+기존 FE 인수인계 문서와 동일한 계약이며, 두 번째 요청 형태를 추가하지 않는다.
+
+### 변경
+
+- 출석 세션 요청/응답 시간 필드에 `@JsonFormat(shape = STRING, pattern = "HH:mm:ss")`를 명시했다.
+- Swagger UI가 `{hour, minute, second, nano}` 객체 형태를 제안하지 않도록 `@Schema(type = "string", format = "time", example = "...")`를 명시했다.
+- `AttendanceSessionTimeFormatTest`를 추가해 문자열 입력은 성공하고, 출력은 `HH:mm:ss`로 유지되며, 객체 형태 시간 입력은 거부되는지 검증했다.
+
+---
+
+## [2026-05-21] 강의실 createdAt 응답 계약 안정화
+
+### 배경
+
+FE에서 강의실 생성/상세 응답에 생성 일자가 안정적으로 포함되는지, JSON 필드명이 `createdAt`인지 `created_at`인지 확인을 요청했다.
+
+`POST /api/courses`와 `GET /api/courses/{courseId}`는 모두 `CourseResponseDto`를 반환하며, DTO에는 이미 `createdAt` 필드가 노출되어 있었다. 다만 `BaseTimeEntity`의 `@CreatedDate` / `@LastModifiedDate`는 Spring Data JPA Auditing에 의존하는데, 애플리케이션 설정에서 JPA Auditing이 활성화되어 있지 않았다. 따라서 응답 필드는 존재하지만 저장 후 값이 `null`일 수 있었다.
+
+### 결정
+
+공개 응답 계약은 camelCase로 고정한다.
+
+```json
+{
+  "createdAt": "2026-05-20T10:30:15"
+}
+```
+
+Spring API 응답에서는 `created_at`을 사용하지 않는다.
+
+### 변경
+
+- `@EnableJpaAuditing`을 가진 `JpaAuditingConfig`를 추가해 `Course.createdAt` / `updatedAt`이 persist 시점에 채워지도록 했다.
+- `CourseResponseDtoTest`를 확장해 DTO 매핑과 JSON 직렬화 필드명이 `created_at`이 아니라 `createdAt`인지 검증했다.
+- `CourseAuditingTest`를 추가해 저장된 `Course` row의 audit timestamp가 null이 아닌지 검증했다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseResponseDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.repository.CourseAuditingTest --no-daemon
+.\gradlew.bat test --tests io.github.uou_capstone.UouCapstoneApplicationTests --no-daemon
+```
+
+---
+
+## [2026-05-22] FE 확인 항목: 시험 노출/알림 시간/수강 등록시간 계약 정리
+
+### 배경
+
+FE에서 다음 세 가지 확인을 요청했다.
+
+- 학생 계정의 `GET /api/courses/{courseId}/contents` 응답에 교사가 생성한 시험 세션이 `lectures[].examSessions`로 내려오는지.
+- `GET /api/notifications`와 `/api/notifications/stream` 알림 항목에 화면 표시 가능한 `createdAt` 시간이 포함되는지.
+- `GET /api/courses/{courseId}/students` 응답에서 보장되는 등록시간 필드가 무엇인지.
+
+### 결정
+
+- 시험 세션 목록은 별도 공개/비공개 필드를 추가하지 않고, 강의실 참가자 권한(담당 교사 또는 ACTIVE 수강생)으로 조회 가능하게 한다. 학생이 실제 시험 상세를 열 수 있는 조건은 기존처럼 `status=READY`다.
+- 알림 시간은 REST/SSE 모두 `createdAt` camelCase, ISO offset date-time UTC 형식으로 고정한다.
+- 학생 목록 등록시간 공식 필드는 `enrolledAt` camelCase, ISO offset date-time UTC 형식으로 고정한다.
+
+### 변경
+
+- `CourseService.getCourseContents` 권한 검사를 `CourseAccessService.loadCourseAsParticipant`로 통일해 학생은 ACTIVE 수강생일 때만 시험 세션 목록을 받도록 했다.
+- `NotificationItemDto.createdAt`을 `OffsetDateTime` UTC로 변경하고, SSE payload도 같은 값을 사용하도록 했다. 감사 시간이 아직 비어 있는 객체에서도 null이 내려가지 않도록 fallback을 둔다.
+- `CourseStudentItemDto.enrolledAt`에 Swagger `date-time` 스키마를 명시해 FE 계약을 문서화했다.
+- 테스트 추가/보강:
+  - `CourseServiceContentsTest`
+  - `NotificationItemDtoTest`
+  - `CourseStudentItemDtoTest`
+  - `NotificationServiceTest`의 stream push DTO `createdAt` 검증
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.service.CourseServiceContentsTest --tests io.github.uou_capstone.aiplatform.domain.notification.dto.NotificationItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.course.dto.CourseStudentItemDtoTest --tests io.github.uou_capstone.aiplatform.domain.notification.service.NotificationServiceTest --no-daemon
+.\gradlew.bat test --no-daemon
+```
+
+---
+
+## [2026-05-31] 강의실 종합분석 내부 Pageable 제한 분리
+
+### 증상
+
+FE는 Swagger 명세에 맞춰 `POST /api/courses/{courseId}/reports/classroom/analyze`와 `POST /api/courses/{courseId}/reports/classroom/analyze/stream`을 body 없이 호출했다. 동기 분석은 `size 는 100 이하이어야 합니다.` 오류를 반환했고, 스트리밍 분석은 FastAPI 호출 전에 payload 생성 단계에서 실패해 SSE 요청이 500으로 종료될 수 있었다.
+
+### 원인
+
+분석 API 자체는 path parameter만 받지만, BE 내부 `ClassroomReportService.preparePayload`가 학생 리포트 목록을 재사용하면서 `PageRequest.of(0, 1000)`을 전달했다. 이 호출이 외부 학생 목록 API와 동일한 `CourseStudentReportService.getStudentReportList` 경로를 타면서 `PageableSupport.validate`의 클라이언트 요청용 `size <= 100` 검증에 걸렸다.
+
+### 조치
+
+- 외부 학생 리포트 목록 API는 기존 `size <= 100` 검증을 유지했다.
+- 강의실 종합분석 payload 수집 전용 `getStudentReportListForClassroomAnalysis`를 추가해 내부 `PageRequest.of(0, 1000)`은 클라이언트 pageable 검증을 타지 않도록 분리했다.
+- 두 경로가 동일한 집계 로직을 쓰도록 내부 공통 메서드로 학생 리포트 목록 생성 로직을 모았다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/classroom/service/ClassroomReportService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
+
+---
+
+## [2026-05-31] 리포트 화면 FE 연동 데이터 보강
+
+### 증상
+
+리포트 페이지 개편 후 FE 화면은 기존 학생 리포트 API만으로 기본 렌더링은 가능했지만, 상단 기준 적용 현황, 학생 활동 지표, 강의실 학습 흐름, 학생 리포트 챗봇 이전 대화 복원 영역은 임시값 또는 FE 가공값에 의존해야 했다.
+
+### 원인
+
+기존 BE 리포트 API는 학생 목록/상세 리포트와 강의실 AI 리포트 저장 조회 중심이었다. 기준 요약, 학생별 활동 요약, 강의별 flow 집계, report-chat 전용 history 저장/조회 계약이 분리되어 있지 않았고, 학생 상세 응답도 headline/bullet/코칭 인사이트처럼 FE 본문 카드가 직접 쓰는 필드를 별도로 노출하지 않았다.
+
+### 조치
+
+- `GET /api/courses/{courseId}/reports/criteria/summary`를 추가해 기본 항목 수, 추가 기준 수, 적용 상태, 기준 반영 시각을 반환한다.
+- `GET /api/courses/{courseId}/reports/students/{studentId}` 응답에 종합 점수, headline, summary bullets, 강점/보완/코칭/추천 액션, 생성/수정 시각 필드를 추가했다.
+- `GET /api/courses/{courseId}/reports/students/{studentId}/activity-summary`와 `GET /api/courses/{courseId}/reports/classroom/flow`를 추가해 기존 저장 데이터 기반 활동/flow 집계를 제공한다.
+- report-chat 전용 세션/메시지 테이블과 `GET /api/courses/{courseId}/reports/students/{studentId}/chat/history`를 추가하고, 기존 `chat/stream`은 optional `sessionId`를 받아 user/assistant 메시지를 저장하도록 보강했다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest
+.\gradlew.bat test --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/controller/CourseReportCriteriaController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseReportSupplementService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatService.java`
+- `src/main/resources/db/migration/V7__student_report_chat_history.sql`
+
+---
+
+## [2026-06-01] 리포트 API FE 계약 값 안정화
+
+### 증상
+
+리포트 페이지 FE 연동 확인 과정에서 `criteriaStatus`와 `classroom/flow.riskLevel`이 임의 문자열처럼 보였고, `overallScorePercent` 산식과 `chat/history` 응답 규모 제어 방식이 API 계약에 명확히 고정되어 있지 않았다. FE는 배지/문구/복원 UI를 안정적으로 매핑하기 위해 값 목록과 정렬/페이지네이션 규칙이 필요했다.
+
+### 원인
+
+초기 보강 구현은 현재 화면에 필요한 데이터를 먼저 제공하는 데 집중해 `criteriaStatus`를 `DEFAULT/APPLIED`, `riskLevel`을 `NORMAL/WATCH`로 반환했다. 또한 학생 리포트 챗봇 기록은 전체 배열로 내려주고 있었고, 점수 필드는 기존 집계 로직을 재사용했지만 FE 문서에는 산식이 따로 적혀 있지 않았다.
+
+### 조치
+
+- `criteriaStatus` 고정 값 목록을 `NONE`, `ACTIVE`, `STALE`, `REFLECTING`으로 정리하고 현재 구현은 기준 없음 `NONE`, 기준 있음 `ACTIVE`를 반환하도록 변경했다.
+- `classroom/flow.riskLevel` 고정 값 목록을 `LOW`, `MEDIUM`, `HIGH`, `INSUFFICIENT_DATA`로 정리하고 `riskReasons`는 문자열 배열로 유지했다.
+- `chat/history`를 `PageResponse`로 변경하고 `page`, `size`, optional `sessionId` 필터를 지원하도록 했다. 기본 정렬은 FE 복원에 맞게 `createdAt ASC`, `id ASC`로 고정했다.
+- `overallScorePercent` 산식을 FE 문서에 명시했다. 현재 산식은 강의 내 유효한 시험 결과별 `totalScore / maxScore * 100`의 산술 평균이며, 제출률/질문/참여도/역량 점수는 아직 가중치에 포함하지 않는다.
+
+### 검증
+
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+.\gradlew.bat test --no-daemon
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/criteria/dto/CriteriaStatus.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/ClassroomFlowRiskLevel.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentchat/service/StudentReportChatPersistenceService.java`
+- `FRONTEND_V2_V3_API.md`
+
+---
+
+## [2026-06-01] 회원가입 rate limit 완화
+
+### 증상
+
+배포 서버에서 테스트 학생 계정을 연속 생성할 때 `/api/auth/signup` 요청이 5회 이후 `429 Too Many Requests`로 차단되었다. 수강 신청 테스트 데이터처럼 여러 학생 계정을 한 번에 준비해야 하는 경우 1분 단위로 작업이 끊겼다.
+
+### 원인
+
+`AuthRateLimitInterceptor`가 인증 API별 IP 기반 제한을 적용하며, `/api/auth/signup`만 분당 5회로 설정되어 있었다. 테스트/시연 데이터 생성에는 낮은 값이었다.
+
+### 조치
+
+회원가입 요청 제한을 IP 기준 분당 20회로 완화했다. 로그인, refresh, 이메일 중복 확인 제한은 기존 값을 유지했다.
+
+### 검증
+
+```powershell
+.\gradlew test --no-daemon
+```
+
+### 관련 파일
+
+- `uou-capstone/src/main/java/io/github/uou_capstone/aiplatform/config/AuthRateLimitInterceptor.java`
+
+---
+
+## [2026-06-01] 통합학습 재입장 시 채팅 히스토리 복원
+
+### 증상
+
+통합학습 중 브라우저 뒤로가기나 라우트 이동 후 같은 강의에 다시 들어가면, 이전에 에이전트와 학습했던 메시지가 사라지고 FE 화면에 `메시지가 없습니다` 빈 상태가 표시됐다.
+
+### 원인
+
+`POST /api/learning/sessions/{lectureId}`가 `sessionId` 없이 호출될 때마다 Spring 채팅 세션을 새로 생성했다. 기존 메시지는 DB에 저장돼 있었지만, 재입장 응답의 `chatSessionId`가 새 빈 세션을 가리켜 FE가 `/messages`를 조회해도 이전 대화가 복원되지 않았다.
+
+### 조치
+
+- `sessionId`가 명시되지 않은 일반 강의 진입 요청에서는 같은 사용자 + 같은 강의의 종료되지 않은 최신 `LearningChatSession`을 먼저 재사용하도록 변경했다.
+- 기존 active 세션이 없을 때만 새 채팅 세션을 생성한다.
+- FE가 `chatSessionId`로 메시지 히스토리를 조회하고, 의도적 종료가 아닌 뒤로가기에서는 `SAVE_AND_EXIT`를 보내지 않도록 handoff 가이드를 추가했다.
+
+### 검증
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionAuthorizationTest
+```
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/LearningChatSessionRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionAuthorizationTest.java`
+- `docs/handoff/LEARNING_CHAT_RESTORE_FE.md`
+
+---
+
+## [2026-06-04] Integrated learning stale PDF context cleanup
+
+### Symptoms
+
+After a lecture PDF was deleted or replaced, the integrated learning agent could still answer from the previous PDF/session context. The issue appeared when the FastAPI Redis session retained old `pdf_path`, messages, page state, quiz history, QA threads, or integrated memory.
+
+### Cause
+
+Spring already called `DELETE /api/v3/session/{lectureId}` after material changes, but the FastAPI route deletes by `session_id`, not by `lectureId`. Spring v3 learning sessions now use the Spring `chatSessionId` as the FastAPI `session_id`, so `lectureId` and `chatSessionId` can differ. In that case the Redis key `fa:session:{chatSessionId}` was left intact. Also, an already-ended Spring chat session could still be used for event streaming if FE reused an old `chatSessionId`.
+
+### Fix
+
+- Material cleanup now fetches active Spring `LearningChatSession` ids for the lecture and deletes each matching FastAPI session id.
+- Spring no longer calls the FastAPI delete endpoint with `lectureId`; FastAPI `DELETE /api/v3/session/{id}` is treated as a `session_id` delete.
+- Learning session creation with an explicit `sessionId` and event streaming now require an active owned chat session, so stale ended sessions are rejected before calling FastAPI.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.material.service.MaterialServiceTest --tests io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClientTest --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionAuthorizationTest
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/material/service/MaterialService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/LearningChatSessionRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningChatPersistenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiSessionClient.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/material/service/MaterialServiceTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionAuthorizationTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiSessionClientTest.java`
+
+---
+
+## [2026-06-04] Single exam delete FK cleanup
+
+### Symptoms
+
+`DELETE /api/exams/generation/{examSessionId}` failed with MySQL error 1451 when the exam session had generated question rows. The observed FK was `exam_questions.exam_session_id -> exam_sessions.exam_session_id`.
+
+### Cause
+
+Single exam deletion deleted the parent `ExamSession` directly. `ExamQuestion` owns the nullable `examSession` relationship and the DB FK has no `ON DELETE CASCADE`, so existing child rows blocked parent deletion.
+
+### Fix
+
+- `ExamGenerationService.deleteExamSession` now deletes linked `ExamQuestion` rows before deleting the `ExamSession`.
+- Added a unit test that verifies the child rows are deleted and flushed before the parent session delete.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationServiceDeleteTest --no-daemon
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/exam/service/ExamGenerationService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/exam/service/ExamGenerationServiceDeleteTest.java`
+
+---
+
+## [2026-06-04] AI test generation PDF context attachment
+
+### Symptoms
+
+Tests generated by the AI test generation agent could be unrelated to the lecture PDF. The issue appeared when Spring sent a PDF path such as `/app/uploads/...pdf` as `lecture_content` and the v2 test generators produced questions without grounding on the actual PDF content.
+
+### Cause
+
+`load_lecture_material` uploaded PDF paths to Gemini but returned the uploaded file object to the generators. The generators then interpolated that object into a string like `[Lecture Material]\n{lecture_truncated}`, so Gemini received a string representation of the file object rather than a real PDF content part.
+
+### Fix
+
+- PDF lecture material is normalized to a Gemini `types.Part` created from the uploaded file URI.
+- v2 test generators now build Gemini `contents` with the PDF part attached directly instead of stringifying it.
+- Inline text lecture material still follows the existing truncation limits, and a regression test verifies PDF parts are preserved in the Gemini contents.
+
+### Verification
+```powershell
+& 'C:\Users\russe\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m py_compile ai_agent/v2/test_gen/utils.py ai_agent/v2/test_gen/generators/base.py ai_agent/v2/test_gen/generators/five_choice.py ai_agent/v2/test_gen/generators/ox_problem.py ai_agent/v2/test_gen/generators/flash_card.py ai_agent/v2/test_gen/generators/short_answer.py ai_agent/v2/test_gen/generators/debate.py tests/test_test_gen_pdf_material.py
+```
+
+### Related Files
+
+- `ai-service/ai_agent/v2/test_gen/utils.py`
+- `ai-service/ai_agent/v2/test_gen/generators/base.py`
+- `ai-service/ai_agent/v2/test_gen/generators/five_choice.py`
+- `ai-service/ai_agent/v2/test_gen/generators/ox_problem.py`
+- `ai-service/ai_agent/v2/test_gen/generators/flash_card.py`
+- `ai-service/ai_agent/v2/test_gen/generators/short_answer.py`
+- `ai-service/ai_agent/v2/test_gen/generators/debate.py`
+- `ai-service/tests/test_test_gen_pdf_material.py`
+
+---
+
+## [2026-06-04] 통합학습 근거 리포트 반영
+
+### Symptoms
+
+통합학습 퀴즈, 재시험, 오개념 교정 결과가 FastAPI `done.data.learningEvidence`로 내려와도 Spring에서 별도 저장하지 않아 학생 리포트와 AI 분석 컨텍스트에 통합학습 이해도 점검 결과가 반영되지 않았다.
+
+### Cause
+
+기존 학습 SSE 프록시는 FastAPI NDJSON 라인을 SSE로 전달하는 역할만 수행했고, 리포트 집계는 시험 결과와 제출 이력 중심으로 구성되어 있었다. 통합학습 근거를 안정적으로 저장할 테이블과 최근 근거 조회/요약 로직이 부족했다.
+
+### Fix
+
+- `learning_session_evidence` 테이블을 추가해 `evidenceId`, 강의/자료/학생/세션, 점수, 통과 여부, 취약 개념, 오답 항목, 원본 evidence JSON을 저장한다.
+- `/api/learning/sessions/{sessionId}/event`에서 `done.data.learningEvidence.type == "learning_evidence"` 라인을 감지해 `boundedElastic`에서 비동기 저장한다.
+- 저장 실패나 중복 `evidenceId`는 SSE 응답을 깨지 않도록 로그만 남기고 무시한다.
+- 학생 상세 리포트와 AI 분석 컨텍스트에 `integratedLearningSummary`, `learningEvidence`를 추가하고 최근 50건 기준으로 요약한다.
+
+### Verification
+```powershell
+.\gradlew.bat compileJava --no-daemon
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionAuthorizationTest --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionEvidenceServiceTest --no-daemon
+```
+
+### Related Files
+
+- `src/main/resources/db/migration/V10__learning_session_evidence.sql`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/entity/LearningSessionEvidence.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/StudentReportDetailResponse.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/ai/AiLearningEvidenceDto.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/dto/ai/AiIntegratedLearningSummaryDto.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceServiceTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
+
+---
+
+## [2026-06-04] Refresh token rotation duplicate request handling
+
+### Symptoms
+
+The frontend intermittently showed the server as offline and failed to load `/api/users/me` even though `/api/health` responded successfully. The issue appeared around access-token expiry when several authenticated requests, such as `/api/users/me` and `/api/courses`, failed at the same time and triggered refresh requests concurrently.
+
+### Cause
+
+`AuthService.refreshToken` rotated refresh tokens by checking the old refresh `jti`, deleting it, and issuing new tokens. When multiple browser requests reused the same old refresh token at nearly the same time, the first request succeeded and deleted the old `jti`; the second request then saw the old `jti` as missing and treated it as replay, revoking all refresh tokens for that user.
+
+### Fix
+
+- Refresh rotation now consumes the old `jti` atomically through `RefreshTokenStore.consume`.
+- Successful rotation stores the newly issued access/refresh pair for a short 10-second grace window keyed by the old `jti`.
+- Duplicate refresh requests inside that window receive the same new token pair instead of revoking the user's refresh tokens. Requests outside the grace window still follow the replay-detection path.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.user.service.AuthServiceTest --tests io.github.uou_capstone.aiplatform.security.jwt.JwtTokenProviderTest
+.\gradlew.bat test --no-daemon
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/security/jwt/RefreshTokenStore.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthServiceTest.java`

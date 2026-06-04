@@ -1,5 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.attendance.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,7 +23,15 @@ public class AttendanceSessionUpdateRequestDto {
     private String title;
 
     private LocalDate sessionDate;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "HH:mm:ss")
+    @Schema(type = "string", format = "time", example = "10:00:00",
+            description = "출석 회차 시작 시간 (HH:mm:ss)")
     private LocalTime startTime;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "HH:mm:ss")
+    @Schema(type = "string", format = "time", example = "12:00:00",
+            description = "출석 회차 종료 시간 (HH:mm:ss)")
     private LocalTime endTime;
 
     private Long lectureId;

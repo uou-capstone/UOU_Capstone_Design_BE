@@ -26,6 +26,8 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetenc
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyLevel;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCourseInfoDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceItemDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiIntegratedLearningSummaryDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiNarrativeDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
@@ -35,6 +37,8 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.CourseReposito
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
+import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.SubmissionStatus;
 import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
@@ -86,6 +90,8 @@ public class CourseStudentReportService {
     private static final double AI_TREND_DELTA = 5.0;
     private static final double AI_EXCELLENT_THRESHOLD = 90.0;
     private static final double AI_WEAK_CONCEPT_SCORE_THRESHOLD = 70.0;
+    private static final Set<String> RESOLVED_INTERVENTION_EVENTS = Set.of(
+            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "RESOLVED");
 
     private static final double STRONG_THRESHOLD = 85.0;
     private static final double WATCH_THRESHOLD = 70.0;
@@ -105,6 +111,7 @@ public class CourseStudentReportService {
     private final ExamResultRepository examResultRepository;
     private final SubmissionRepository submissionRepository;
     private final AssessmentRepository assessmentRepository;
+    private final LearningSessionEvidenceRepository learningSessionEvidenceRepository;
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional(readOnly = true)
@@ -114,7 +121,20 @@ public class CourseStudentReportService {
                                                                     Pageable rawPageable) {
         loadCourseAsOwner(courseId);
         Pageable pageable = PageableSupport.validate(rawPageable, REPORT_SORT_WHITELIST, REPORT_DEFAULT_SORT);
+        return getStudentReportListInternal(courseId, q, statusFilter, pageable);
+    }
 
+    @Transactional(readOnly = true)
+    public PageResponse<StudentReportListItem> getStudentReportListForClassroomAnalysis(Long courseId,
+                                                                                        Pageable pageable) {
+        loadCourseAsOwner(courseId);
+        return getStudentReportListInternal(courseId, null, null, pageable);
+    }
+
+    private PageResponse<StudentReportListItem> getStudentReportListInternal(Long courseId,
+                                                                            String q,
+                                                                            String statusFilter,
+                                                                            Pageable pageable) {
         List<Enrollment> enrollments = enrollmentRepository.findByCourseIdWithStudentUser(courseId);
         if (enrollments.isEmpty()) {
             return PageResponse.empty(pageable);
@@ -174,8 +194,17 @@ public class CourseStudentReportService {
         ActivitySummaryDto activitySummary = computeActivitySummary(examResults, submissions);
         SubmissionSummaryDto submissionSummary = computeSubmissionSummary(courseId, submissions);
         List<EvidenceDto> evidence = buildEvidence(examResults, submissions);
+        List<LearningSessionEvidence> sessionEvidence =
+                learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(
+                        courseId, student.getId());
+        List<AiLearningEvidenceDto> learningEvidence = sessionEvidence.stream()
+                .map(this::toAiLearningEvidence)
+                .toList();
+        AiIntegratedLearningSummaryDto integratedLearningSummary =
+                buildIntegratedLearningSummary(sessionEvidence);
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
+        LocalDateTime reportTimestamp = activitySummary.getLatestActivityAt();
 
         return StudentReportDetailResponse.builder()
                 .student(StudentInfoDto.builder()
@@ -193,7 +222,18 @@ public class CourseStudentReportService {
                 .competencies(competencies)
                 .submissionSummary(submissionSummary)
                 .evidence(evidence)
+                .integratedLearningSummary(integratedLearningSummary)
+                .learningEvidence(learningEvidence)
                 .narrativeReport(narrative)
+                .overallScorePercent(scoreSummary.getAverageScorePercent())
+                .headline(buildHeadline(scoreSummary, reportStatus))
+                .summaryBullets(buildSummaryBullets(activitySummary, scoreSummary, submissionSummary, reportStatus))
+                .strengths(narrative.getStrengths())
+                .improvementPoints(narrative.getImprovements())
+                .coachingInsights(buildCoachingInsights(competencies, submissionSummary, reportStatus))
+                .recommendedActions(narrative.getNextSteps())
+                .generatedAt(reportTimestamp)
+                .updatedAt(reportTimestamp)
                 .reportStatus(reportStatus.value())
                 .reportWarnings(warnings)
                 .build();
@@ -248,6 +288,14 @@ public class CourseStudentReportService {
         List<AiCompetencyDto> competencies = toAiCompetencies(baseCompetencies, examResults);
 
         List<AiEvidenceItemDto> evidence = buildAiEvidence(examResults, submissions);
+        List<LearningSessionEvidence> sessionEvidence =
+                learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(
+                        courseId, student.getId());
+        List<AiLearningEvidenceDto> learningEvidence = sessionEvidence.stream()
+                .map(this::toAiLearningEvidence)
+                .toList();
+        AiIntegratedLearningSummaryDto integratedLearningSummary =
+                buildIntegratedLearningSummary(sessionEvidence);
 
         ReportStatus reportStatus = computeReportStatus(examResults.size(), baseScore, baseCompetencies);
         NarrativeReportDto baseNarrative = buildNarrative(baseScore, baseCompetencies, reportStatus);
@@ -273,8 +321,90 @@ public class CourseStudentReportService {
                 .assessments(assessments)
                 .competencies(competencies)
                 .evidence(evidence)
+                .learningEvidence(learningEvidence)
+                .integratedLearningSummary(integratedLearningSummary)
                 .existingNarrative(narrative)
                 .reportWarnings(warnings)
+                .build();
+    }
+
+    private AiLearningEvidenceDto toAiLearningEvidence(LearningSessionEvidence evidence) {
+        return AiLearningEvidenceDto.builder()
+                .evidenceId(evidence.getEvidenceId())
+                .courseId(evidence.getCourse() != null ? evidence.getCourse().getId() : null)
+                .lectureId(evidence.getLecture() != null ? evidence.getLecture().getId() : null)
+                .materialId(evidence.getMaterial() != null ? evidence.getMaterial().getId() : null)
+                .studentId(evidence.getStudent() != null ? evidence.getStudent().getId() : null)
+                .sessionId(evidence.getSession() != null ? evidence.getSession().getId() : null)
+                .pageNumber(evidence.getPageNumber())
+                .eventType(evidence.getEventType())
+                .quizType(evidence.getQuizType())
+                .scoreRatio(evidence.getScoreRatio())
+                .passed(evidence.getPassed())
+                .weakConcepts(evidence.getWeakConcepts() == null ? List.of() : evidence.getWeakConcepts())
+                .wrongItems(evidence.getWrongItems() == null ? List.of() : evidence.getWrongItems())
+                .evidence(evidence.getEvidence() == null ? Map.of() : evidence.getEvidence())
+                .occurredAt(evidence.getOccurredAt())
+                .build();
+    }
+
+    private AiIntegratedLearningSummaryDto buildIntegratedLearningSummary(List<LearningSessionEvidence> evidence) {
+        long quizAttemptCount = evidence.stream()
+                .filter(e -> firstNonBlank(e.getQuizType()) != null || e.getScoreRatio() != null)
+                .count();
+        long passCount = evidence.stream()
+                .filter(e -> Boolean.TRUE.equals(e.getPassed()))
+                .count();
+        long failCount = evidence.stream()
+                .filter(e -> Boolean.FALSE.equals(e.getPassed()))
+                .count();
+
+        List<Double> scoreRatios = evidence.stream()
+                .map(LearningSessionEvidence::getScoreRatio)
+                .filter(Objects::nonNull)
+                .toList();
+        Double averageScoreRatio = scoreRatios.isEmpty()
+                ? null
+                : round3(scoreRatios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
+
+        Map<String, Long> weakConceptCounts = new LinkedHashMap<>();
+        Map<String, Long> resolvedConceptCounts = new LinkedHashMap<>();
+        for (LearningSessionEvidence item : evidence) {
+            if (item.getWeakConcepts() == null) {
+                continue;
+            }
+            for (String concept : item.getWeakConcepts()) {
+                if (concept != null && !concept.isBlank()) {
+                    if (RESOLVED_INTERVENTION_EVENTS.contains(item.getEventType())) {
+                        resolvedConceptCounts.merge(concept, 1L, Long::sum);
+                    } else {
+                        weakConceptCounts.merge(concept, 1L, Long::sum);
+                    }
+                }
+            }
+        }
+        List<String> weakConcepts = weakConceptCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(Map.Entry::getKey)
+                .toList();
+        List<String> resolvedConcepts = resolvedConceptCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(Map.Entry::getKey)
+                .toList();
+        LocalDateTime latestActivityAt = evidence.stream()
+                .map(LearningSessionEvidence::getOccurredAt)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+
+        return AiIntegratedLearningSummaryDto.builder()
+                .quizAttemptCount(quizAttemptCount)
+                .passCount(passCount)
+                .failCount(failCount)
+                .averageScoreRatio(averageScoreRatio)
+                .weakConcepts(weakConcepts)
+                .resolvedConcepts(resolvedConcepts)
+                .latestActivityAt(latestActivityAt)
                 .build();
     }
 
@@ -971,6 +1101,9 @@ public class CourseStudentReportService {
             return ReportStatus.INSUFFICIENT_DATA;
         }
         Double avg = scoreSummary.getAverageScorePercent();
+        if (avg == null) {
+            return ReportStatus.INSUFFICIENT_DATA;
+        }
 
         boolean hasNeedsImprovement = competencies.stream()
                 .anyMatch(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()));
@@ -1052,6 +1185,61 @@ public class CourseStudentReportService {
                 .improvements(improvements)
                 .nextSteps(nextSteps.subList(0, Math.min(nextSteps.size(), NARRATIVE_LIST_SIZE)))
                 .build();
+    }
+
+    private String buildHeadline(ScoreSummaryDto scoreSummary, ReportStatus reportStatus) {
+        Double avg = scoreSummary.getAverageScorePercent();
+        if (reportStatus == ReportStatus.INSUFFICIENT_DATA || avg == null) {
+            return "분석 가능한 학습 데이터가 더 필요합니다.";
+        }
+        if (reportStatus == ReportStatus.EXCELLING) {
+            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+        }
+        if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
+            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg == null ? 0.0 : avg);
+        }
+        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg == null ? 0.0 : avg);
+    }
+
+    private List<String> buildSummaryBullets(ActivitySummaryDto activitySummary,
+                                             ScoreSummaryDto scoreSummary,
+                                             SubmissionSummaryDto submissionSummary,
+                                             ReportStatus reportStatus) {
+        List<String> bullets = new ArrayList<>();
+        Double avg = scoreSummary.getAverageScorePercent();
+        if (avg != null) {
+            bullets.add(String.format("종합 점수 %.1f점", avg));
+        }
+        bullets.add(String.format("시험 응시 %d회, 제출 %d건",
+                activitySummary.getExamAttemptCount(), activitySummary.getSubmissionCount()));
+        if (submissionSummary.getMissingCount() > 0) {
+            bullets.add(String.format("미제출 %d건 확인", submissionSummary.getMissingCount()));
+        }
+        bullets.add("리포트 상태: " + reportStatus.value());
+        return bullets;
+    }
+
+    private List<String> buildCoachingInsights(List<CompetencyDto> competencies,
+                                               SubmissionSummaryDto submissionSummary,
+                                               ReportStatus reportStatus) {
+        List<String> insights = new ArrayList<>();
+        competencies.stream()
+                .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
+                .findFirst()
+                .ifPresent(c -> insights.add(c.getLabel() + " 영역을 우선 점검하세요."));
+        competencies.stream()
+                .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
+                .findFirst()
+                .ifPresent(c -> insights.add(c.getLabel() + " 강점을 심화 문제로 확장할 수 있습니다."));
+        if (submissionSummary.getMissingCount() > 0) {
+            insights.add("미제출 과제를 먼저 정리하면 리포트 신뢰도가 올라갑니다.");
+        }
+        if (insights.isEmpty()) {
+            insights.add(reportStatus == ReportStatus.INSUFFICIENT_DATA
+                    ? "응시와 제출 데이터를 확보한 뒤 세부 코칭을 제공할 수 있습니다."
+                    : "현재 흐름을 유지하면서 최근 오답 근거를 함께 확인하세요.");
+        }
+        return insights.stream().limit(3).toList();
     }
 
     // ===========================================================

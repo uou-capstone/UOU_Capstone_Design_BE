@@ -19,6 +19,12 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.CourseReposito
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 
 
+import io.github.uou_capstone.aiplatform.domain.learning.service.LearningChatPersistenceService;
+
+
+import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+
+
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
 
 
@@ -49,6 +55,9 @@ import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.domain.user.repository.UserRepository;
 
 
+import io.github.uou_capstone.aiplatform.integration.fastapi.FastApiSessionClient;
+
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -65,7 +74,7 @@ import reactor.core.publisher.Mono;
 import org.springframework.stereotype.Service;
 
 
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 
 import org.springframework.web.multipart.MultipartFile;
@@ -83,6 +92,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 
 import java.io.IOException;
+import java.util.LinkedHashSet;
+import java.util.List;
 
 
 
@@ -96,6 +107,8 @@ public class MaterialService {
 
 
     private final MaterialRepository materialRepository;
+
+    private final ExamSessionRepository examSessionRepository;
 
     private final LectureRepository lectureRepository;
 
@@ -112,6 +125,12 @@ public class MaterialService {
     private final EnrollmentRepository enrollmentRepository;
 
     private final CourseRepository courseRepository;
+
+    private final FastApiSessionClient fastApiSessionClient;
+
+    private final LearningChatPersistenceService learningChatPersistenceService;
+
+    private final TransactionOperations transactionOperations;
 
 
 
@@ -179,13 +198,16 @@ public class MaterialService {
 
         // 3. DB 쓰기만 트랜잭션 안에서 수행
 
-        return saveUploadedMaterial(lectureId, lecture, currentUser, file.getOriginalFilename(), aiResponse.getPath());
+        Material material = transactionOperations.execute(status ->
+                saveUploadedMaterial(lectureId, lecture, currentUser, file.getOriginalFilename(), aiResponse.getPath()));
+        cleanupLearningSessionAfterMaterialChange(lectureId);
+        return material;
 
     }
 
-    @Transactional
-    protected Material saveUploadedMaterial(Long lectureId, Lecture lecture, User uploader,
-                                            String displayName, String filePath) {
+    private Material saveUploadedMaterial(Long lectureId, Lecture lecture, User uploader,
+                                          String displayName, String filePath) {
+        examSessionRepository.clearMaterialReferencesByLectureAndType(lectureId, "PDF");
         materialRepository.deleteByLecture_IdAndMaterialType(lectureId, "PDF");
 
         Material material = Material.builder()
@@ -201,9 +223,12 @@ public class MaterialService {
 
 
 
-    @Transactional
-
     public void deleteMaterial(Long materialId) {
+        Long lectureId = transactionOperations.execute(status -> deleteMaterialInTransaction(materialId));
+        cleanupLearningSessionAfterMaterialChange(lectureId);
+    }
+
+    private Long deleteMaterialInTransaction(Long materialId) {
 
         // 1. 자료 조회
 
@@ -231,10 +256,55 @@ public class MaterialService {
 
         // 3. 자료 삭제 (flush로 즉시 DB 반영, 이후 contents 조회에서 제외 보장)
 
+        Long lectureId = material.getLecture().getId();
+
+        examSessionRepository.clearMaterialReference(materialId);
+
         materialRepository.delete(material);
 
         materialRepository.flush();
 
+        return lectureId;
+
+    }
+
+    private void cleanupLearningSessionAfterMaterialChange(Long lectureId) {
+        invalidateFastApiLearningSessions(lectureId);
+
+        try {
+            int ended = learningChatPersistenceService.endActiveSessionsByLecture(lectureId);
+            if (ended > 0) {
+                log.info("Spring learning chat sessions ended after material change: lectureId={}, count={}",
+                        lectureId, ended);
+            }
+        } catch (Exception e) {
+            log.warn("Spring learning chat session ending failed after material change: lectureId={}, err={}",
+                    lectureId, e.getMessage());
+        }
+    }
+
+    private void invalidateFastApiLearningSessions(Long lectureId) {
+        LinkedHashSet<Long> sessionIds = new LinkedHashSet<>();
+        try {
+            List<Long> activeSessionIds = learningChatPersistenceService.getActiveSessionIdsByLecture(lectureId);
+            if (activeSessionIds != null) {
+                sessionIds.addAll(activeSessionIds);
+            }
+        } catch (Exception e) {
+            log.warn("Spring active learning chat session id lookup failed after material change: lectureId={}, err={}",
+                    lectureId, e.getMessage());
+        }
+
+        for (Long sessionId : sessionIds) {
+            try {
+                fastApiSessionClient.deleteSession(sessionId).block();
+                log.info("FastAPI learning session invalidated after material change: lectureId={}, sessionId={}",
+                        lectureId, sessionId);
+            } catch (Exception e) {
+                log.warn("FastAPI learning session invalidate failed after material change: lectureId={}, sessionId={}, err={}",
+                        lectureId, sessionId, e.getMessage());
+            }
+        }
     }
 
 

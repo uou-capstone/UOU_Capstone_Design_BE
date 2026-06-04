@@ -58,6 +58,13 @@ public class FastApiSessionClient {
                 });
     }
 
+    public Mono<Void> deleteSession(Long sessionId) {
+        return aiServiceWebClient.delete()
+                .uri("/api/v3/session/{sessionId}", sessionId)
+                .retrieve()
+                .bodyToMono(Void.class);
+    }
+
     public Flux<String> streamEvent(Long sessionId, Map<String, Object> eventBody) {
         return aiServiceStreamingWebClient.post()
                 .uri("/api/v3/session/{sessionId}/event/stream", sessionId)

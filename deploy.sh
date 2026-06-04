@@ -19,9 +19,12 @@ set -euo pipefail
 REPO_DIR="/home/ec2-user/UOU_Capstone_design_Be_v3"
 TARGET_BRANCH="${1:-develop}"
 NGINX_CONF="${NGINX_CONF:-/etc/nginx/conf.d/uouaitutor.conf}"
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-/etc/uou-capstone/deploy.env}"
 
 echo "[deploy] 브랜치: ${TARGET_BRANCH}"
 echo "[deploy] 저장소 디렉토리: ${REPO_DIR}"
+
+git config --system --add safe.directory "$REPO_DIR" 2>/dev/null || true
 
 # ── 저장소 최신화 ─────────────────────────────────────────────
 # git pull 대신 fetch + checkout + reset 사용.
@@ -33,6 +36,16 @@ git checkout "$TARGET_BRANCH"
 git reset --hard "origin/$TARGET_BRANCH"
 
 # ── GHCR 로그인 ───────────────────────────────────────────────
+if [ -f "$DEPLOY_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$DEPLOY_ENV_FILE"
+  set +a
+fi
+
+: "${GHCR_TOKEN:?GHCR_TOKEN is required. Set it in /etc/uou-capstone/deploy.env or the environment.}"
+: "${GHCR_USERNAME:?GHCR_USERNAME is required. Set it in /etc/uou-capstone/deploy.env or the environment.}"
+
 echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 echo "[deploy] GHCR 로그인 완료"
 

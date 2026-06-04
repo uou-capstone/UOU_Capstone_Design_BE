@@ -4,6 +4,7 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.dto.LectureResponseDto;
 import lombok.Getter;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -14,6 +15,7 @@ public class CourseResponseDto { // 강의실 조회 응답 DTO
     private final String title;
     private final String description;
     private final String teacherName;
+    private final LocalDateTime createdAt;
     private final String invitationCode; // 인증코드 추가
     private final List<LectureResponseDto> lectures;
 
@@ -22,6 +24,7 @@ public class CourseResponseDto { // 강의실 조회 응답 DTO
         this.title = course.getTitle();
         this.description = course.getDescription();
         this.teacherName = course.getTeacher().getUser().getFullName();
+        this.createdAt = course.getCreatedAt();
         this.invitationCode = course.getInvitationCode(); // 엔티티에서 가져옴
         this.lectures = course.getLectures().stream()
                 .map(LectureResponseDto::new)

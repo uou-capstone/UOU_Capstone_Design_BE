@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface LectureRepository extends JpaRepository<Lecture, Long> {
@@ -15,4 +16,8 @@ public interface LectureRepository extends JpaRepository<Lecture, Long> {
      */
     @Query("SELECT l FROM Lecture l JOIN FETCH l.course c JOIN FETCH c.teacher WHERE l.id = :id")
     Optional<Lecture> findByIdWithCourse(@Param("id") Long id);
+
+    List<Lecture> findByCourseIdOrderByWeekNumberAscIdAsc(Long courseId);
+
+    long countByCourseId(Long courseId);
 }

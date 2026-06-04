@@ -30,8 +30,8 @@ public class ExamQuestion extends BaseTimeEntity {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "assessment_id", nullable = false)
-    private Assessment assessment;
+    @JoinColumn(name = "assessment_id", nullable = true)
+    private Assessment assessment;  // v2(ExamSession) 흐름에서는 NULL (V5 마이그레이션 적용)
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "exam_session_id")

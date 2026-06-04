@@ -45,7 +45,21 @@
   - `pdfPath`: 세션 초기 연결 시 사용할 PDF 경로 (생략 시 서버가 강의의 최신 PDF 경로를 조회해 전달할 수 있음)
   - `sessionId`: 기존 세션 재사용 ID
 - 응답 예시 필드:
-  - `session_id`, `lecture_id`, `current_page`, `ai_status_connected`, `created_at`, `updated_at`
+  - `session_id`, `chatSessionId`, `lecture_id`, `current_page`, `ai_status_connected`, `created_at`, `updated_at`
+  - `chatSessionId`는 Spring DB에 저장되는 채팅 세션 ID이며, 이후 이벤트 전송/메시지 조회에 사용한다.
+
+### 저장된 채팅 조회
+- `GET /api/learning/sessions?lectureId={lectureId}`
+  - 권한: `STUDENT` 또는 `TEACHER`
+  - 응답: `PageResponse`
+  - 정렬 허용 필드: `lastMessageAt`, `createdAt`
+  - item 필드: `chatSessionId`, `lectureId`, `title`, `lastMessageAt`, `endedAt`, `createdAt`
+- `GET /api/learning/sessions/{chatSessionId}/messages`
+  - 권한: `STUDENT` 또는 `TEACHER`
+  - 응답: 오래된 순 배열
+  - item 필드: `messageId`, `role`(`USER`/`ASSISTANT`), `content`, `pageNumber`, `createdAt`
+
+저장 범위는 채팅 UI 복원용 대화 메시지로 한정한다. `USER_MESSAGE`의 사용자 질문과 에이전트 본문 응답(`agent_delta.channel="main"`)만 저장하며, thought/heartbeat/UI 위젯/퀴즈 payload는 채팅 메시지에 저장하지 않는다.
 
 ### 이벤트 전송 + SSE 스트리밍 (주 진입점)
 - `POST /api/learning/sessions/{sessionId}/event`
@@ -345,3 +359,44 @@ const reader = res.body.getReader();
 8. 권한 에러(401/403) 공통 핸들러 적용.
 9. 강의실 입장: `POST /api/courses/{courseId}/enroll` 호출부 **즉시 제거** (404). `/join?code=`는 호환만 유지, 신규는 `/join-requests` 사용 (`docs/handoff/COURSE_JOIN_REQUEST_FE.md`).
 10. 경로/필드 추가 변경 시 Swagger 및 **`llm_multi_agent` Bridge·Session 문서** 기준으로 확인.
+---
+
+## Report API additions
+
+Base path: `/api/courses/{courseId}/reports`
+Auth: `TEACHER`
+
+### Criteria summary
+- `GET /criteria/summary`
+- Response fields: `baseItemCount`, `additionalItemCount`, `activeCriteriaCount`, `criteriaStatus`, `criteriaReflectedAt`
+- `criteriaStatus` fixed values: `NONE`, `ACTIVE`, `STALE`, `REFLECTING`
+  - Current behavior: `NONE` when no custom criteria exist, otherwise `ACTIVE`
+
+### Student report detail additions
+- `GET /students/{studentId}`
+- Existing response remains compatible.
+- Added fields: `overallScorePercent`, `headline`, `summaryBullets`, `strengths`, `improvementPoints`, `coachingInsights`, `recommendedActions`, `generatedAt`, `updatedAt`
+- `overallScorePercent` formula: average of completed exam result percentages in the course.
+  - Per result: `totalScore / maxScore * 100`
+  - Course student score: arithmetic average of valid result percentages
+  - Submissions, questions, participation, and competency buckets are not weighted into this field yet
+
+### Student activity summary
+- `GET /students/{studentId}/activity-summary`
+- Response fields: `questionCount`, `examAttemptCount`, `submissionCount`, `missingSubmissionCount`, `lectureProgressPercent`, `pageCoverage`, `categoryCoverage`
+- `lectureProgressPercent` is based on lectures with stored learning chat sessions. If there are no lectures it is `null`.
+
+### Classroom learning flow
+- `GET /classroom/flow`
+- Response fields: `courseId`, `items`
+- Item fields: `lectureId`, `week`, `title`, `materialCount`, `learningProgressPercent`, `averageScorePercent`, `questionCount`, `quizCount`, `participationRatePercent`, `riskLevel`, `riskReasons`
+- `riskLevel` fixed values: `LOW`, `MEDIUM`, `HIGH`, `INSUFFICIENT_DATA`
+- `riskReasons` is a string array. Current reason values include `LOW_AVERAGE_SCORE`, `LOW_PARTICIPATION`, `NO_ACTIVITY`
+
+### Student report chat history
+- `GET /students/{studentId}/chat/history?page=0&size=50&sessionId={sessionId}`
+- `sessionId` is optional. If omitted, all report chat messages for that student in the course are returned.
+- Response shape: `PageResponse`
+- Response item fields: `sessionId`, `role`, `message`, `createdAt`
+- Default sort: `createdAt ASC`, then `id ASC`; this is the recommended order for FE restore
+- `POST /students/{studentId}/chat/stream` accepts optional `sessionId`. If omitted, Spring creates a new report chat session and emits an initial `event: session` containing `sessionId`.

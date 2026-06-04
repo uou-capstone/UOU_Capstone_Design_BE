@@ -16,6 +16,7 @@ import io.github.uou_capstone.aiplatform.domain.course.notice.repository.NoticeR
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.NotificationService;
+import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 import io.github.uou_capstone.aiplatform.domain.user.entity.User;
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,7 @@ public class NoticeCommentService {
     private final CourseAccessService courseAccessService;
     private final CurrentUserResolver currentUserResolver;
     private final NotificationService notificationService;
+    private final TeacherNotificationPublisher teacherNotificationPublisher;
 
     @Transactional
     public NoticeCommentResponseDto createComment(Long courseId,
@@ -75,8 +77,10 @@ public class NoticeCommentService {
         );
 
         // 답글이고 부모 작성자가 본인이 아니면 답글 알림 발송
+        Long parentAuthorUserId = null;
         if (parent != null) {
             User parentAuthor = parent.getAuthor();
+            parentAuthorUserId = parentAuthor.getId();
             if (!parentAuthor.getId().equals(currentUser.getId())) {
                 String body = currentUser.getFullName() + ": "
                         + NotificationBodyFormatter.summarize(dto.getContentMarkdown(), BODY_SUMMARY_LEN);
@@ -89,6 +93,27 @@ public class NoticeCommentService {
                         notice.getId()
                 );
             }
+        }
+
+        // 강의실 담당 교사 알림 — 위 답글 알림이 이미 담당 교사에게 갔다면 중복 방지
+        Long teacherUserId = course.getTeacher() != null && course.getTeacher().getUser() != null
+                ? course.getTeacher().getUser().getId() : null;
+        boolean alreadyNotifiedTeacher = parentAuthorUserId != null
+                && teacherUserId != null
+                && !parentAuthorUserId.equals(currentUser.getId())
+                && parentAuthorUserId.equals(teacherUserId);
+        if (!alreadyNotifiedTeacher) {
+            String teacherBody = currentUser.getFullName() + ": "
+                    + NotificationBodyFormatter.summarize(dto.getContentMarkdown(), BODY_SUMMARY_LEN);
+            teacherNotificationPublisher.notifyCourseTeacher(
+                    course,
+                    currentUser,
+                    NotificationType.NOTICE_COMMENTED,
+                    "공지 새 댓글",
+                    teacherBody,
+                    RESOURCE_TYPE,
+                    notice.getId()
+            );
         }
 
         return new NoticeCommentResponseDto(saved);

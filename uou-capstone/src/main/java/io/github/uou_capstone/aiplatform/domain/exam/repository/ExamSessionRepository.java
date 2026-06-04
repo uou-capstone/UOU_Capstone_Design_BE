@@ -22,9 +22,29 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
     @Query("DELETE FROM ExamSession es WHERE es.lecture.id = :lectureId")
     void deleteByLectureId(@Param("lectureId") Long lectureId);
 
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE ExamSession es SET es.material = null WHERE es.material.id = :materialId")
+    int clearMaterialReference(@Param("materialId") Long materialId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ExamSession es
+            SET es.material = null
+            WHERE es.material.id IN (
+                SELECT m.id
+                FROM Material m
+                WHERE m.lecture.id = :lectureId
+                  AND m.materialType = :materialType
+            )
+            """)
+    int clearMaterialReferencesByLectureAndType(@Param("lectureId") Long lectureId,
+                                                @Param("materialType") String materialType);
+
     List<ExamSession> findByLecture(Lecture lecture);
 
     List<ExamSession> findByLecture_IdIn(java.util.Collection<Long> lectureIds);
+
+    List<ExamSession> findByLecture_Course_Id(Long courseId);
     
     List<ExamSession> findByLectureAndExamType(Lecture lecture, ExamType examType);
     

@@ -2,6 +2,7 @@ package io.github.uou_capstone.aiplatform.domain.notification.service;
 
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.notification.dto.NotificationItemDto;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.Notification;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.repository.NotificationRepository;
@@ -74,7 +75,9 @@ class NotificationServiceTest {
         notificationService.notify(user, NotificationType.COURSE_JOIN_APPROVED,
                 "t", "b", "course", 1L);
 
-        verify(streamRegistry).push(eq(7L), any());
+        ArgumentCaptor<NotificationItemDto> captor = ArgumentCaptor.forClass(NotificationItemDto.class);
+        verify(streamRegistry).push(eq(7L), captor.capture());
+        assertThat(captor.getValue().getCreatedAt()).isNotNull();
     }
 
     @Test

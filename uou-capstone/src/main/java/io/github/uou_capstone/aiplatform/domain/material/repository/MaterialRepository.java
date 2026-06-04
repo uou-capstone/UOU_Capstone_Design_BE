@@ -29,4 +29,8 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from Material m where m.lecture.course.id = :courseId")
     void deleteByLectureCourseId(@Param("courseId") Long courseId);
+
+    /** Exam Studio 등 cross-domain 권한 검증용 — lecture + course 까지 JOIN FETCH. */
+    @Query("SELECT m FROM Material m JOIN FETCH m.lecture l JOIN FETCH l.course WHERE m.id = :id")
+    Optional<Material> findByIdWithLectureAndCourse(@Param("id") Long id);
 }
