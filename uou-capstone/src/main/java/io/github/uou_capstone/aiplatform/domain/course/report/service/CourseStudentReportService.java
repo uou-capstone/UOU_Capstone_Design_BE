@@ -37,8 +37,8 @@ import io.github.uou_capstone.aiplatform.domain.course.repository.CourseReposito
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamResult;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultRepository;
-import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningIntegratedEvidence;
-import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningIntegratedEvidenceRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
+import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.SubmissionStatus;
 import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
@@ -91,7 +91,7 @@ public class CourseStudentReportService {
     private static final double AI_EXCELLENT_THRESHOLD = 90.0;
     private static final double AI_WEAK_CONCEPT_SCORE_THRESHOLD = 70.0;
     private static final Set<String> RESOLVED_INTERVENTION_EVENTS = Set.of(
-            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED");
+            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "RESOLVED");
 
     private static final double STRONG_THRESHOLD = 85.0;
     private static final double WATCH_THRESHOLD = 70.0;
@@ -111,7 +111,7 @@ public class CourseStudentReportService {
     private final ExamResultRepository examResultRepository;
     private final SubmissionRepository submissionRepository;
     private final AssessmentRepository assessmentRepository;
-    private final LearningIntegratedEvidenceRepository learningIntegratedEvidenceRepository;
+    private final LearningSessionEvidenceRepository learningSessionEvidenceRepository;
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional(readOnly = true)
@@ -194,6 +194,14 @@ public class CourseStudentReportService {
         ActivitySummaryDto activitySummary = computeActivitySummary(examResults, submissions);
         SubmissionSummaryDto submissionSummary = computeSubmissionSummary(courseId, submissions);
         List<EvidenceDto> evidence = buildEvidence(examResults, submissions);
+        List<LearningSessionEvidence> sessionEvidence =
+                learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(
+                        courseId, student.getId());
+        List<AiLearningEvidenceDto> learningEvidence = sessionEvidence.stream()
+                .map(this::toAiLearningEvidence)
+                .toList();
+        AiIntegratedLearningSummaryDto integratedLearningSummary =
+                buildIntegratedLearningSummary(sessionEvidence);
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
         LocalDateTime reportTimestamp = activitySummary.getLatestActivityAt();
@@ -214,6 +222,8 @@ public class CourseStudentReportService {
                 .competencies(competencies)
                 .submissionSummary(submissionSummary)
                 .evidence(evidence)
+                .integratedLearningSummary(integratedLearningSummary)
+                .learningEvidence(learningEvidence)
                 .narrativeReport(narrative)
                 .overallScorePercent(scoreSummary.getAverageScorePercent())
                 .headline(buildHeadline(scoreSummary, reportStatus))
@@ -278,13 +288,14 @@ public class CourseStudentReportService {
         List<AiCompetencyDto> competencies = toAiCompetencies(baseCompetencies, examResults);
 
         List<AiEvidenceItemDto> evidence = buildAiEvidence(examResults, submissions);
-        List<LearningIntegratedEvidence> integratedEvidence =
-                learningIntegratedEvidenceRepository.findByCourseIdAndUserIdOrderByRecent(courseId, studentUser.getId());
-        List<AiLearningEvidenceDto> learningEvidence = integratedEvidence.stream()
+        List<LearningSessionEvidence> sessionEvidence =
+                learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(
+                        courseId, student.getId());
+        List<AiLearningEvidenceDto> learningEvidence = sessionEvidence.stream()
                 .map(this::toAiLearningEvidence)
                 .toList();
         AiIntegratedLearningSummaryDto integratedLearningSummary =
-                buildIntegratedLearningSummary(integratedEvidence);
+                buildIntegratedLearningSummary(sessionEvidence);
 
         ReportStatus reportStatus = computeReportStatus(examResults.size(), baseScore, baseCompetencies);
         NarrativeReportDto baseNarrative = buildNarrative(baseScore, baseCompetencies, reportStatus);
@@ -317,34 +328,39 @@ public class CourseStudentReportService {
                 .build();
     }
 
-    private AiLearningEvidenceDto toAiLearningEvidence(LearningIntegratedEvidence evidence) {
+    private AiLearningEvidenceDto toAiLearningEvidence(LearningSessionEvidence evidence) {
         return AiLearningEvidenceDto.builder()
-                .sourceId(evidence.getId())
-                .eventKind(evidence.getEventKind())
-                .sessionId(evidence.getChatSession() != null ? evidence.getChatSession().getId() : null)
+                .evidenceId(evidence.getEvidenceId())
+                .courseId(evidence.getCourse() != null ? evidence.getCourse().getId() : null)
                 .lectureId(evidence.getLecture() != null ? evidence.getLecture().getId() : null)
                 .materialId(evidence.getMaterial() != null ? evidence.getMaterial().getId() : null)
+                .studentId(evidence.getStudent() != null ? evidence.getStudent().getId() : null)
+                .sessionId(evidence.getSession() != null ? evidence.getSession().getId() : null)
                 .pageNumber(evidence.getPageNumber())
-                .coverageStartPage(evidence.getCoverageStartPage())
-                .coverageEndPage(evidence.getCoverageEndPage())
-                .quizId(evidence.getQuizId())
+                .eventType(evidence.getEventType())
                 .quizType(evidence.getQuizType())
                 .scoreRatio(evidence.getScoreRatio())
                 .passed(evidence.getPassed())
                 .weakConcepts(evidence.getWeakConcepts() == null ? List.of() : evidence.getWeakConcepts())
-                .missedQuestions(evidence.getMissedQuestions() == null ? List.of() : evidence.getMissedQuestions())
-                .diagnosticPrompt(evidence.getDiagnosticPrompt())
-                .occurredAt(evidence.getCreatedAt())
+                .wrongItems(evidence.getWrongItems() == null ? List.of() : evidence.getWrongItems())
+                .evidence(evidence.getEvidence() == null ? Map.of() : evidence.getEvidence())
+                .occurredAt(evidence.getOccurredAt())
                 .build();
     }
 
-    private AiIntegratedLearningSummaryDto buildIntegratedLearningSummary(List<LearningIntegratedEvidence> evidence) {
-        long quizCount = evidence.stream()
-                .filter(e -> "QUIZ_GRADED".equals(e.getEventKind()) || firstNonBlank(e.getQuizId()) != null)
+    private AiIntegratedLearningSummaryDto buildIntegratedLearningSummary(List<LearningSessionEvidence> evidence) {
+        long quizAttemptCount = evidence.stream()
+                .filter(e -> firstNonBlank(e.getQuizType()) != null || e.getScoreRatio() != null)
+                .count();
+        long passCount = evidence.stream()
+                .filter(e -> Boolean.TRUE.equals(e.getPassed()))
+                .count();
+        long failCount = evidence.stream()
+                .filter(e -> Boolean.FALSE.equals(e.getPassed()))
                 .count();
 
         List<Double> scoreRatios = evidence.stream()
-                .map(LearningIntegratedEvidence::getScoreRatio)
+                .map(LearningSessionEvidence::getScoreRatio)
                 .filter(Objects::nonNull)
                 .toList();
         Double averageScoreRatio = scoreRatios.isEmpty()
@@ -352,13 +368,18 @@ public class CourseStudentReportService {
                 : round3(scoreRatios.stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
 
         Map<String, Long> weakConceptCounts = new LinkedHashMap<>();
-        for (LearningIntegratedEvidence item : evidence) {
+        Map<String, Long> resolvedConceptCounts = new LinkedHashMap<>();
+        for (LearningSessionEvidence item : evidence) {
             if (item.getWeakConcepts() == null) {
                 continue;
             }
             for (String concept : item.getWeakConcepts()) {
                 if (concept != null && !concept.isBlank()) {
-                    weakConceptCounts.merge(concept, 1L, Long::sum);
+                    if (RESOLVED_INTERVENTION_EVENTS.contains(item.getEventType())) {
+                        resolvedConceptCounts.merge(concept, 1L, Long::sum);
+                    } else {
+                        weakConceptCounts.merge(concept, 1L, Long::sum);
+                    }
                 }
             }
         }
@@ -366,16 +387,24 @@ public class CourseStudentReportService {
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .map(Map.Entry::getKey)
                 .toList();
-
-        long resolvedInterventions = evidence.stream()
-                .filter(e -> RESOLVED_INTERVENTION_EVENTS.contains(e.getEventKind()))
-                .count();
+        List<String> resolvedConcepts = resolvedConceptCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(Map.Entry::getKey)
+                .toList();
+        LocalDateTime latestActivityAt = evidence.stream()
+                .map(LearningSessionEvidence::getOccurredAt)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
 
         return AiIntegratedLearningSummaryDto.builder()
-                .quizCount(quizCount)
+                .quizAttemptCount(quizAttemptCount)
+                .passCount(passCount)
+                .failCount(failCount)
                 .averageScoreRatio(averageScoreRatio)
                 .weakConcepts(weakConcepts)
-                .resolvedInterventions(resolvedInterventions)
+                .resolvedConcepts(resolvedConcepts)
+                .latestActivityAt(latestActivityAt)
                 .build();
     }
 

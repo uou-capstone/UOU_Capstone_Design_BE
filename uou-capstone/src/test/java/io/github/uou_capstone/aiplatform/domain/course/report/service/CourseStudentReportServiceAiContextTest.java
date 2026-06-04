@@ -11,8 +11,10 @@ import io.github.uou_capstone.aiplatform.domain.course.entity.Enrollment;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiCompetencyLevel;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceItemDto;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
@@ -22,8 +24,8 @@ import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultRepository;
 import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
-import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningIntegratedEvidence;
-import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningIntegratedEvidenceRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
+import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
 import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
@@ -67,7 +69,7 @@ class CourseStudentReportServiceAiContextTest {
     @Mock private ExamResultRepository examResultRepository;
     @Mock private SubmissionRepository submissionRepository;
     @Mock private AssessmentRepository assessmentRepository;
-    @Mock private LearningIntegratedEvidenceRepository learningIntegratedEvidenceRepository;
+    @Mock private LearningSessionEvidenceRepository learningSessionEvidenceRepository;
     @Mock private CurrentUserResolver currentUserResolver;
 
     @InjectMocks
@@ -101,7 +103,7 @@ class CourseStudentReportServiceAiContextTest {
         enrollment = Enrollment.builder().student(student).course(course).build();
         ReflectionTestUtils.setField(enrollment, "id", 1L);
 
-        lenient().when(learningIntegratedEvidenceRepository.findByCourseIdAndUserIdOrderByRecent(anyLong(), anyLong()))
+        lenient().when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(anyLong(), anyLong()))
                 .thenReturn(List.of());
     }
 
@@ -168,34 +170,32 @@ class CourseStudentReportServiceAiContextTest {
         return a;
     }
 
-    private LearningIntegratedEvidence integratedEvidence(Long id,
-                                                          LearningChatSession session,
-                                                          Lecture lecture,
-                                                          Material material,
-                                                          String eventKind,
-                                                          String quizId,
-                                                          Double scoreRatio,
-                                                          List<String> weakConcepts) {
-        LearningIntegratedEvidence evidence = LearningIntegratedEvidence.builder()
-                .chatSession(session)
-                .user(studentUser)
+    private LearningSessionEvidence sessionEvidence(String evidenceId,
+                                                    LearningChatSession session,
+                                                    Lecture lecture,
+                                                    Material material,
+                                                    String eventType,
+                                                    String quizType,
+                                                    Double scoreRatio,
+                                                    Boolean passed,
+                                                    List<String> weakConcepts) {
+        LearningSessionEvidence evidence = LearningSessionEvidence.builder()
+                .evidenceId(evidenceId)
+                .course(course)
                 .lecture(lecture)
                 .material(material)
-                .eventKind(eventKind)
+                .student(student)
+                .session(session)
                 .pageNumber(5)
-                .coverageStartPage(5)
-                .coverageEndPage(5)
-                .quizId(quizId)
-                .quizType("OX_Problem")
+                .eventType(eventType)
+                .quizType(quizType)
                 .scoreRatio(scoreRatio)
-                .passed(scoreRatio != null && scoreRatio >= 0.6)
+                .passed(passed)
                 .weakConcepts(weakConcepts)
-                .missedQuestions(List.of())
-                .diagnosticPrompt("retry")
-                .rawEvidence(Map.of())
+                .wrongItems(List.of())
+                .evidence(Map.of("type", "learning_evidence"))
+                .occurredAt(LocalDateTime.of(2026, 1, Integer.parseInt(evidenceId.substring(evidenceId.length() - 1)), 0, 0))
                 .build();
-        ReflectionTestUtils.setField(evidence, "id", id);
-        ReflectionTestUtils.setField(evidence, "createdAt", LocalDateTime.of(2026, 1, (int) (long) id, 0, 0));
         return evidence;
     }
 
@@ -306,27 +306,68 @@ class CourseStudentReportServiceAiContextTest {
                 .build();
         ReflectionTestUtils.setField(material, "id", 20L);
 
-        LearningIntegratedEvidence quiz1 = integratedEvidence(
-                1L, session, lecture, material, "QUIZ_GRADED", "quiz-1", 0.2, List.of("CBR", "VBR"));
-        LearningIntegratedEvidence quiz2 = integratedEvidence(
-                2L, session, lecture, material, "QUIZ_GRADED", "quiz-2", 1.0, List.of("CBR"));
-        LearningIntegratedEvidence resolved = integratedEvidence(
-                3L, session, lecture, material, "MISCONCEPTION_RESOLVED", null, null, List.of());
-        when(learningIntegratedEvidenceRepository.findByCourseIdAndUserIdOrderByRecent(COURSE_ID, STUDENT_USER_ID))
-                .thenReturn(List.of(quiz2, resolved, quiz1));
+        LearningSessionEvidence quiz1 = sessionEvidence(
+                "evidence-1", session, lecture, material, "QUIZ_GRADED", "OX_Problem", 0.2, false, List.of("CBR", "VBR"));
+        LearningSessionEvidence quiz2 = sessionEvidence(
+                "evidence-2", session, lecture, material, "QUIZ_GRADED", "OX_Problem", 1.0, true, List.of("CBR"));
+        LearningSessionEvidence resolved = sessionEvidence(
+                "evidence-3", session, lecture, material, "MISCONCEPTION_RESOLVED", null, null, null, List.of("VBR"));
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(resolved, quiz2, quiz1));
 
         StudentAiReportContextResponse res = service.getStudentAiReportContext(COURSE_ID, STUDENT_ID);
 
         assertThat(res.getLearningEvidence()).hasSize(3);
-        assertThat(res.getLearningEvidence().get(0).getSessionId()).isEqualTo(27L);
-        assertThat(res.getLearningEvidence().get(0).getLectureId()).isEqualTo(38L);
-        assertThat(res.getLearningEvidence().get(0).getMaterialId()).isEqualTo(20L);
-        assertThat(res.getLearningEvidence().get(0).getQuizId()).isEqualTo("quiz-2");
+        AiLearningEvidenceDto firstQuiz = res.getLearningEvidence().stream()
+                .filter(e -> "evidence-2".equals(e.getEvidenceId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(firstQuiz.getSessionId()).isEqualTo(27L);
+        assertThat(firstQuiz.getLectureId()).isEqualTo(38L);
+        assertThat(firstQuiz.getMaterialId()).isEqualTo(20L);
+        assertThat(firstQuiz.getStudentId()).isEqualTo(STUDENT_ID);
+        assertThat(firstQuiz.getQuizType()).isEqualTo("OX_Problem");
 
-        assertThat(res.getIntegratedLearningSummary().getQuizCount()).isEqualTo(2);
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(2);
+        assertThat(res.getIntegratedLearningSummary().getPassCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
         assertThat(res.getIntegratedLearningSummary().getAverageScoreRatio()).isEqualTo(0.6);
         assertThat(res.getIntegratedLearningSummary().getWeakConcepts()).containsExactly("CBR", "VBR");
-        assertThat(res.getIntegratedLearningSummary().getResolvedInterventions()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getResolvedConcepts()).containsExactly("VBR");
+        assertThat(res.getIntegratedLearningSummary().getLatestActivityAt()).isEqualTo(LocalDateTime.of(2026, 1, 3, 0, 0));
+    }
+
+    @Test
+    void detail_includesIntegratedLearningEvidenceAndSummary() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(anyLong(), anyLong())).thenReturn(List.of());
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Lecture lecture = Lecture.builder()
+                .course(course)
+                .title("lecture")
+                .weekNumber(1)
+                .description("d")
+                .build();
+        ReflectionTestUtils.setField(lecture, "id", 38L);
+        LearningChatSession session = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(session, "id", 27L);
+
+        LearningSessionEvidence quiz = sessionEvidence(
+                "evidence-1", session, lecture, null, "QUIZ_GRADED", "OX_Problem", 0.5, false, List.of("CBR"));
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(quiz));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getLearningEvidence()).hasSize(1);
+        assertThat(res.getLearningEvidence().get(0).getEvidenceId()).isEqualTo("evidence-1");
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
     }
 
     @Test

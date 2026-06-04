@@ -32,6 +32,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AuthService {
 
+    private static final long REFRESH_ROTATION_REPLAY_GRACE_MS = 10_000L;
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
@@ -138,14 +140,27 @@ public class AuthService {
             User user = userRepository.findByEmail(email)
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
 
-            if (!refreshTokenStore.isValid(user.getId(), oldJti)) {
+            if (!refreshTokenStore.consume(user.getId(), oldJti)) {
+                Optional<String[]> rememberedRotation = refreshTokenStore.findRememberedRotation(user.getId(), oldJti);
+                if (rememberedRotation.isPresent()) {
+                    String[] tokens = rememberedRotation.get();
+                    return new TokenResponseDto(tokens[0], tokens[1]);
+                }
+
                 log.warn("Refresh token replay detected: userId={}", user.getId());
                 refreshTokenStore.revokeAllForUser(user.getId());
                 throw new BusinessException(CommonErrorCode.INVALID_TOKEN, "유효하지 않은 리프레시 토큰입니다.");
             }
 
-            refreshTokenStore.revoke(user.getId(), oldJti);
-            return issueTokens(user);
+            TokenResponseDto tokens = issueTokens(user);
+            refreshTokenStore.rememberRotation(
+                    user.getId(),
+                    oldJti,
+                    tokens.getAccessToken(),
+                    tokens.getRefreshToken(),
+                    REFRESH_ROTATION_REPLAY_GRACE_MS
+            );
+            return tokens;
 
         } catch (BusinessException e) {
             throw e;
