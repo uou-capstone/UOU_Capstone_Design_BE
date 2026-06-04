@@ -86,7 +86,7 @@ class BaseGenerator(ABC):
     
     async def _call_gemini_async(
         self,
-        contents: List[str],
+        contents: List[Any],
         system_instruction: str,
         response_schema: Optional[dict] = None,
         model: str = "gemini-2.5-flash"

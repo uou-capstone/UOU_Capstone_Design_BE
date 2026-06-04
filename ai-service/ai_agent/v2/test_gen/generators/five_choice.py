@@ -24,7 +24,7 @@ from ..prompts import (
     FIVE_CHOICE_VALIDATOR_SYSTEM_PROMPT
 )
 from ..prompt_utils import inject_schema
-from ..utils import load_lecture_material
+from ..utils import build_lecture_material_contents, load_lecture_material
 
 
 class FiveChoiceGenerator(BaseGenerator):
@@ -100,10 +100,8 @@ class FiveChoiceGenerator(BaseGenerator):
             )
             
             # 강의 내용이 너무 길면 자름 (토큰 절약)
-            lecture_truncated = lecture_content[:10000] if isinstance(lecture_content, str) else lecture_content
-            
             contents = [
-                f"[Lecture Material]\n{lecture_truncated}",
+                *build_lecture_material_contents(lecture_content, text_limit=10000),
                 f"[User Profile]\n{profile.model_dump_json()}",
                 f"[Target Count]\n{count}"
             ]
@@ -143,10 +141,8 @@ class FiveChoiceGenerator(BaseGenerator):
             )
             
             # 강의 내용이 너무 길면 자름
-            lecture_truncated = lecture_content[:15000] if isinstance(lecture_content, str) else lecture_content
-            
             contents = [
-                f"[Lecture Material]\n{lecture_truncated}",
+                *build_lecture_material_contents(lecture_content, text_limit=15000),
                 f"[Plan]\n{json.dumps(plan, ensure_ascii=False)}",
                 f"[User Profile]\n{profile.model_dump_json()}",
                 f"[Target Count]\n{count}"
@@ -275,12 +271,10 @@ class FiveChoiceGenerator(BaseGenerator):
             )
             
             # 강의 내용이 너무 길면 자름
-            lecture_truncated = lecture_content[:10000] if isinstance(lecture_content, str) else lecture_content
-            
             problems_json = [p.model_dump() for p in problems]
             
             contents = [
-                f"[Lecture Material]\n{lecture_truncated}",
+                *build_lecture_material_contents(lecture_content, text_limit=10000),
                 f"[Generated Problems]\n{json.dumps(problems_json, ensure_ascii=False)}",
                 f"[User Profile]\n{profile.model_dump_json()}",
                 f"[Required Count]\n{required_count}"
