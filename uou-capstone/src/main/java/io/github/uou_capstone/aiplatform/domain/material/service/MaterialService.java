@@ -320,7 +320,7 @@ public class MaterialService {
     // 트랜잭션 불필요: DB 읽기 후 WebClient 스트리밍은 MVC async 스레드에서 수행되므로
     // @Transactional(readOnly=true)가 걸려 있으면 커넥션을 스트리밍 내내 점유한다.
     public StreamingResponseBody streamFile(Long materialId) {
-        Material material = materialRepository.findById(materialId)
+        Material material = materialRepository.findByIdWithLectureAndCourse(materialId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.FILE_NOT_FOUND));
 
         User currentUser = currentUserResolver.getUser();
