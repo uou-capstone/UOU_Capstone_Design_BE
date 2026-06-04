@@ -41,12 +41,14 @@ GRADING_SYSTEM_PROMPT = """# [Role]
     }
   ],
   "total_score": 0.8,
+  "max_score": 1.0,
   "overall_feedback": "전반적으로 잘 이해하고 있습니다."
 }
 
 # [Rules]
 - score는 0.0 ~ 1.0 사이의 값으로, 0.1 단위로 부여하세요 (예: 0.0, 0.1, ..., 1.0)
 - 최종 total_score = 각 문제 score 합 / 문제 수
+- max_score는 항상 1.0으로 반환하세요. total_score는 0.0~1.0 비율 점수입니다.
 - passed는 score >= 0.6 이면 true
 - reason: 해당 점수를 부여한 채점 근거 (필수)
 - feedback: 학생에게 전달할 구체적이고 건설적인 피드백 (필수)
@@ -172,6 +174,7 @@ def _normalize_llm_grading_result(
     return {
         "results": results,
         "total_score": normalized_total,
+        "max_score": 1.0,
         "overall_feedback": str(parsed.get("overall_feedback") or "채점이 완료되었습니다."),
     }
 
@@ -388,6 +391,7 @@ class GraderAgent:
         result = {
             "results": results,
             "total_score": total,
+            "max_score": 1.0,
             "overall_feedback": f"{len(problems)}문항 중 {correct_count}문항 정답 ({total*100:.0f}점)",
         }
         if answer_count_mismatch:

@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import List, Dict, Any, Optional
 from google.genai import types
+from pydantic import ValidationError
 
 from .base import BaseGenerator
 from ..schemas import (
@@ -33,6 +34,7 @@ class FiveChoiceGenerator(BaseGenerator):
     def __init__(self, client, semaphore_limit: int = 5):
         super().__init__(client, semaphore_limit)
         self.model_name = "gemini-2.5-flash"
+        self.max_writer_retries = 3
     
     async def generate(
         self,
@@ -140,49 +142,103 @@ class FiveChoiceGenerator(BaseGenerator):
                 FiveChoiceResponse
             )
             
-            # 강의 내용이 너무 길면 자름
-            contents = [
-                *build_lecture_material_contents(lecture_content, text_limit=15000),
-                f"[Plan]\n{json.dumps(plan, ensure_ascii=False)}",
-                f"[User Profile]\n{profile.model_dump_json()}",
-                f"[Target Count]\n{count}"
-            ]
-            
-            if feedback:
-                contents.append(f"[Feedback]\n{feedback}")
-            
-            if prior_content:
-                prior_json = [p.model_dump() for p in prior_content]
-                contents.append(f"[Prior Content]\n{json.dumps(prior_json, ensure_ascii=False)}")
-            
-            try:
-                response_text = await self._call_gemini_async(
-                    contents=contents,
-                    system_instruction=prompt,
-                    response_schema=FiveChoiceResponse.model_json_schema(),
-                    model=self.model_name
-                )
-                
-                data = self._parse_json_response(response_text)
-                
-                # FiveChoiceResponse 모델로 변환
-                if isinstance(data, dict) and "mcq_problems" in data:
-                    problems = [
-                        FiveChoiceProblem(**p)
-                        for p in data["mcq_problems"]
-                    ]
+            writer_feedback = feedback
+            last_error: Optional[Exception] = None
+
+            for attempt in range(self.max_writer_retries):
+                contents = [
+                    *build_lecture_material_contents(lecture_content, text_limit=15000),
+                    f"[Plan]\n{json.dumps(plan, ensure_ascii=False)}",
+                    f"[User Profile]\n{profile.model_dump_json()}",
+                    f"[Target Count]\n{count}",
+                    (
+                        "[MCQ Schema Contract]\n"
+                        "- Generate exactly 5 options per problem.\n"
+                        "- Generate exactly one correct option per problem.\n"
+                        "- correct_answer must be one string digit only: \"1\", \"2\", \"3\", \"4\", or \"5\".\n"
+                        "- Never use comma-separated, multi-answer, array, or range values for correct_answer.\n"
+                        "- If multiple options are true, rewrite the distractors so only one answer is true."
+                    ),
+                ]
+
+                if writer_feedback:
+                    contents.append(f"[Feedback]\n{writer_feedback}")
+
+                if prior_content:
+                    prior_json = [p.model_dump() for p in prior_content]
+                    contents.append(f"[Prior Content]\n{json.dumps(prior_json, ensure_ascii=False)}")
+
+                try:
+                    response_text = await self._call_gemini_async(
+                        contents=contents,
+                        system_instruction=prompt,
+                        response_schema=FiveChoiceResponse.model_json_schema(),
+                        model=self.model_name
+                    )
+
+                    data = self._parse_json_response(response_text)
+                    problems = self._parse_writer_problems(data)
+                    if len(problems) != count:
+                        raise ValueError(
+                            f"writer returned {len(problems)} problems, expected {count}"
+                        )
                     return problems
-                elif isinstance(data, list):
-                    # 직접 리스트로 반환된 경우
-                    return [FiveChoiceProblem(**p) for p in data]
-                
-                return []
-                
-            except Exception as e:
-                print(f"[FiveChoice] Write Error: {e}")
-                import traceback
-                traceback.print_exc()
-                return []
+
+                except (ValidationError, ValueError, TypeError) as e:
+                    last_error = e
+                    writer_feedback = self._writer_retry_feedback(e, count)
+                    print(
+                        f"[FiveChoice] Write validation failed "
+                        f"(attempt {attempt + 1}/{self.max_writer_retries}): {e}"
+                    )
+                    if attempt < self.max_writer_retries - 1:
+                        continue
+                    break
+                except Exception as e:
+                    print(f"[FiveChoice] Write Error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return []
+
+            if last_error:
+                print(f"[FiveChoice] Write failed after retries: {last_error}")
+            return []
+
+    def _parse_writer_problems(self, data: Any) -> List[FiveChoiceProblem]:
+        """Writer JSON을 5지선다 문제 리스트로 엄격히 변환한다."""
+        if isinstance(data, dict) and "mcq_problems" in data:
+            raw_items = data["mcq_problems"]
+        elif isinstance(data, list):
+            raw_items = data
+        else:
+            raise ValueError("writer response missing mcq_problems[]")
+
+        if not isinstance(raw_items, list):
+            raise ValueError("mcq_problems must be a list")
+
+        return [FiveChoiceProblem(**p) for p in raw_items]
+
+    def _writer_retry_feedback(self, error: Exception, count: int) -> str:
+        """검증 실패를 Writer가 바로 고칠 수 있는 재시도 피드백으로 변환한다."""
+        details: List[str] = []
+        if isinstance(error, ValidationError):
+            for item in error.errors():
+                loc = ".".join(str(part) for part in item.get("loc", []))
+                message = item.get("msg", "invalid value")
+                details.append(f"- {loc}: {message}")
+        else:
+            details.append(f"- {error}")
+
+        return (
+            "The previous MCQ writer response violated the required schema.\n"
+            f"Regenerate exactly {count} MCQ problems.\n"
+            "For every problem, correct_answer must be exactly one string digit "
+            "from \"1\" to \"5\". Never return values like \"1,2\", \"1 / 2\", "
+            "[\"1\", \"2\"], or any multi-answer format. If multiple options are "
+            "correct, revise the stem/options so only one option is correct.\n"
+            "Validation errors:\n"
+            + "\n".join(details)
+        )
     
     async def _validate_and_fix(
         self,

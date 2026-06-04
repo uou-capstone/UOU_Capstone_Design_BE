@@ -8,11 +8,14 @@ from ai_agent.bridge.GeminiBridgeClient import GeminiBridgeClient
 from ai_agent.types.domain import AppEvent, AppEventType, NdjsonEvent, NdjsonEventType, PageState, SessionState
 from ai_agent.v3.agents.GraderAgent import GraderAgent, GradingParseError
 from ai_agent.v3.agents.QaAgent import QaAgent
-from ai_agent.v3.agents.QuizAgents import QuizAgents, normalize_quiz_generation_result
+from ai_agent.v3.agents.QuizAgents import QuizAgents, build_default_profile_dict, normalize_quiz_generation_result
 from ai_agent.v3.engine.LearningContextCollector import LearningContextCollector
 from ai_agent.v3.engine.Orchestrator import Orchestrator
 from ai_agent.v3.engine.QaThreadService import QaThreadService, qa_thread_service
 from ai_agent.v3.engine.StateReducer import StateReducer
+from ai_agent.v2.test_gen.generators.five_choice import FiveChoiceGenerator
+from ai_agent.v2.test_gen.main import LectureTestGenerator
+from ai_agent.v2.test_gen.schemas import ExamType, ProblemRequest, TestProfile
 from ai_agent.v2.test_gen.utils import load_lecture_material
 from app.routers.report import (
     StudentAiReportContext,
@@ -70,6 +73,70 @@ def test_normalize_flashcard_result_adds_fe_compatible_front_back_fields():
             "back_content": "패킷 도착 간격의 변동입니다.",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_five_choice_writer_retries_multi_answer_schema_violation():
+    class FakeFiveChoiceGenerator(FiveChoiceGenerator):
+        def __init__(self):
+            super().__init__(client=None)  # type: ignore[arg-type]
+            self.calls = 0
+
+        async def _call_gemini_async(self, contents, system_instruction, response_schema=None, model=""):
+            self.calls += 1
+            correct_answer = "1,2" if self.calls == 1 else "1"
+            return json.dumps({
+                "mcq_problems": [
+                    {
+                        "id": 1,
+                        "question_content": "전송 계층의 대표 프로토콜은?",
+                        "options": [
+                            {"id": "1", "content": "TCP", "intent": "정답"},
+                            {"id": "2", "content": "UDP", "intent": "오답 유도"},
+                            {"id": "3", "content": "IP", "intent": "계층 혼동"},
+                            {"id": "4", "content": "HTTP", "intent": "응용 계층 혼동"},
+                            {"id": "5", "content": "Ethernet", "intent": "링크 계층 혼동"},
+                        ],
+                        "correct_answer": correct_answer,
+                        "intent_diagnosis": "전송 계층 프로토콜 구분",
+                    }
+                ]
+            }, ensure_ascii=False)
+
+    generator = FakeFiveChoiceGenerator()
+    profile = TestProfile.model_validate(build_default_profile_dict())
+
+    problems = await generator._write_problems(
+        "TCP와 UDP는 전송 계층 프로토콜이다.",
+        {"planned_items": [{"id": 1, "target_topic": "전송 계층 프로토콜"}]},
+        profile,
+        1,
+    )
+
+    assert generator.calls == 2
+    assert len(problems) == 1
+    assert problems[0].correct_answer == "1"
+
+
+@pytest.mark.asyncio
+async def test_lecture_test_generator_raises_when_requested_count_generates_zero_items():
+    class EmptyGenerator:
+        async def generate(self, lecture_content, profile, count):
+            return []
+
+    generator = LectureTestGenerator.__new__(LectureTestGenerator)
+    generator.generators = {ExamType.FIVE_CHOICE: EmptyGenerator()}
+    profile = TestProfile.model_validate(build_default_profile_dict())
+
+    with pytest.raises(ValueError, match="requested 1 items but generated 0"):
+        await generator.generate_test(
+            ProblemRequest(
+                exam_type=ExamType.FIVE_CHOICE,
+                target_count=1,
+                lecture_content="강의 내용",
+                user_profile=profile,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -277,6 +344,7 @@ def test_grader_auto_accepts_reference_answer_shapes():
     )
 
     assert result["total_score"] == 1.0
+    assert result["max_score"] == 1.0
     assert [item["passed"] for item in result["results"]] == [True, True, True]
 
 
@@ -293,6 +361,7 @@ def test_grader_auto_marks_missing_answers_wrong_instead_of_error():
     )
 
     assert result["total_score"] == pytest.approx(1 / 3)
+    assert result["max_score"] == 1.0
     assert result["results"][0]["passed"] is True
     assert result["results"][1]["passed"] is False
     assert "미응답" in result["results"][1]["feedback"]
@@ -332,6 +401,7 @@ async def test_grader_llm_extracts_json_from_fenced_response_with_trailing_text(
     )
 
     assert result["total_score"] == 0.7
+    assert result["max_score"] == 1.0
     assert result["results"][0]["score"] == 0.7
     assert result["results"][0]["passed"] is True
     assert result["results"][0]["user_answer"] == "학생 답변"
@@ -364,6 +434,7 @@ async def test_grader_llm_preserves_structured_user_answer_for_submission_result
     )
 
     assert result["results"][0]["user_answer"] == "학생이 입력한 서술형 답변"
+    assert result["max_score"] == 1.0
 
 
 @pytest.mark.asyncio

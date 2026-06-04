@@ -168,7 +168,7 @@ async def bridge_grade_result(req: GradeRequest):
 
     응답:
     {
-      "grading": { "results": [...], "total_score": 0.8, "overall_feedback": "..." },
+      "grading": { "results": [...], "total_score": 0.8, "max_score": 1.0, "overall_feedback": "..." },
       "passed": true
     }
     """
