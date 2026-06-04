@@ -61,6 +61,33 @@ class AiEvidenceItem(BaseModel):
     occurredAt: str | None = None
 
 
+class AiIntegratedLearningSummary(BaseModel):
+    evidenceCount: int = 0
+    quizAttemptCount: int = 0
+    passCount: int = 0
+    failCount: int = 0
+    averageScoreRatio: float | None = None
+    weakConcepts: list[str] = Field(default_factory=list)
+    resolvedConcepts: list[str] = Field(default_factory=list)
+    latestActivityAt: str | None = None
+
+
+class AiLearningEvidenceItem(BaseModel):
+    evidenceId: str | None = None
+    eventType: str | None = None
+    lectureId: int | None = None
+    materialId: int | None = None
+    pageNumber: int | None = None
+    quizType: str | None = None
+    scoreRatio: float | None = None
+    passed: bool | None = None
+    weakConcepts: list[str] = Field(default_factory=list)
+    wrongItems: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str | None = None
+    occurredAt: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class AiCompetency(BaseModel):
     key: str | None = None
     label: str | None = None
@@ -91,6 +118,8 @@ class StudentAiReportContext(BaseModel):
     assessments: list[AiAssessmentItem] = Field(default_factory=list)
     competencies: list[AiCompetency] = Field(default_factory=list)
     evidence: list[AiEvidenceItem] = Field(default_factory=list)
+    integratedLearningSummary: AiIntegratedLearningSummary = Field(default_factory=AiIntegratedLearningSummary)
+    learningEvidence: list[AiLearningEvidenceItem] = Field(default_factory=list)
     existingNarrative: AiNarrative | None = None
     reportWarnings: list[str] = Field(default_factory=list)
 
@@ -158,6 +187,13 @@ def _top_weak_concepts(context: StudentAiReportContext) -> list[str]:
         for concept in item.weakConcepts:
             if concept and concept.strip():
                 seen.setdefault(concept.strip(), True)
+    for concept in context.integratedLearningSummary.weakConcepts:
+        if concept and concept.strip():
+            seen.setdefault(concept.strip(), True)
+    for item in context.learningEvidence:
+        for concept in item.weakConcepts:
+            if concept and concept.strip():
+                seen.setdefault(concept.strip(), True)
     return list(seen.keys())[:5]
 
 
@@ -210,14 +246,18 @@ def _fallback_analysis(
         )
         for c in context.competencies[:6]
     ]
-    evidence_used = [e.summary for e in context.evidence if e.summary][:8]
+    evidence_used = _evidence_used(context)
     warnings = list(context.reportWarnings)
     if reason:
         warnings.append(reason)
 
-    if len(context.evidence) >= 5 and context.scoreSummary.averageScore is not None:
+    total_evidence_count = len(context.evidence) + len(context.learningEvidence)
+    if total_evidence_count >= 5 and (
+        context.scoreSummary.averageScore is not None
+        or context.integratedLearningSummary.averageScoreRatio is not None
+    ):
         confidence: Literal["LOW", "MEDIUM", "HIGH"] = "HIGH"
-    elif context.evidence or context.assessments or context.competencies:
+    elif context.evidence or context.learningEvidence or context.assessments or context.competencies:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
@@ -246,6 +286,13 @@ def _fallback_analysis(
         evidenceUsed=evidence_used,
         warnings=warnings,
     )
+
+
+def _evidence_used(context: StudentAiReportContext) -> list[str]:
+    out: list[str] = []
+    out.extend(e.summary for e in context.evidence if e.summary)
+    out.extend(e.summary for e in context.learningEvidence if e.summary)
+    return out[:10]
 
 
 def _analysis_schema() -> dict[str, Any]:
@@ -284,6 +331,7 @@ def _build_analysis_prompt(context: StudentAiReportContext) -> str:
 너는 교사용 학생 역량 리포트 분석 에이전트다.
 반드시 JSON만 출력하라. 코드블록, 설명 문장, markdown wrapper는 금지한다.
 Spring Boot가 DB에서 집계한 학생 리포트 context만 근거로 분석한다.
+통합학습 퀴즈, 오개념 교정, 재시험 기록은 learningEvidence/integratedLearningSummary에 들어오며 학생의 형성평가 근거로 우선 반영한다.
 근거가 부족한 내용은 단정하지 말고 confidence/warnings에 반영한다.
 
 출력 JSON 필드:
@@ -320,7 +368,7 @@ async def analyze_student_report(
         parsed["fallbackUsed"] = False
         parsed["reason"] = None
         parsed.setdefault("warnings", context.reportWarnings)
-        parsed.setdefault("evidenceUsed", [e.summary for e in context.evidence if e.summary][:8])
+        parsed.setdefault("evidenceUsed", _evidence_used(context))
         return StudentReportAnalysis.model_validate(parsed)
     except Exception as exc:  # noqa: BLE001
         return _fallback_analysis(context, reason=stable_error_type(exc))
@@ -396,7 +444,7 @@ def _build_chat_answer(request: StudentReportChatRequest) -> str:
     use_report = request.report if not _report_identity_warnings(request.context, request.report) else None
     analysis = use_report or _fallback_analysis(request.context).model_dump(mode="json")
     weak_concepts = _top_weak_concepts(request.context)
-    evidence = [e.summary for e in request.context.evidence if e.summary][:5]
+    evidence = _evidence_used(request.context)[:5]
     return "\n".join([
         f"질문: {request.question}",
         "",
@@ -404,6 +452,8 @@ def _build_chat_answer(request: StudentReportChatRequest) -> str:
         f"- 요약: {analysis.get('summary', '저장된 요약이 없습니다.')}",
         f"- 주요 약점: {', '.join(analysis.get('weaknesses', [])[:3]) or ', '.join(weak_concepts) or '추가 근거 필요'}",
         f"- 참고 근거: {', '.join(evidence) if evidence else '제공된 evidence가 부족합니다.'}",
+        f"- 통합학습 기록: 퀴즈 {request.context.integratedLearningSummary.quizAttemptCount}회, "
+        f"평균 {request.context.integratedLearningSummary.averageScoreRatio if request.context.integratedLearningSummary.averageScoreRatio is not None else '미확인'}",
         "",
         "지도 제안: 가장 낮은 역량이나 반복 오답 개념을 먼저 짧게 재점검한 뒤, 유사 문항으로 전이 여부를 확인하세요.",
     ])
@@ -442,6 +492,11 @@ def _compact_report_context(context: StudentAiReportContext) -> dict[str, Any]:
         "evidence": [
             item.model_dump(mode="json", exclude_none=True, exclude={"rawText"})
             for item in context.evidence[:12]
+        ],
+        "integratedLearningSummary": context.integratedLearningSummary.model_dump(mode="json", exclude_none=True),
+        "learningEvidence": [
+            item.model_dump(mode="json", exclude_none=True, exclude={"raw"})
+            for item in context.learningEvidence[:20]
         ],
         "existingNarrative": (
             context.existingNarrative.model_dump(mode="json", exclude_none=True)
@@ -486,7 +541,7 @@ def _build_chat_prompt(request: StudentReportChatRequest) -> str:
 # Workflow
 1. Spring Boot가 전달한 선택 학생 context와 저장 리포트만 학습 근거로 사용한다.
 2. 최근 대화는 follow-up 의도 파악용으로만 쓰고, 새로운 사실 근거로 사용하지 않는다.
-3. 교사의 현재 질문에 필요한 근거를 evidence, assessment, competency, saved report 순서로 확인한다.
+3. 교사의 현재 질문에 필요한 근거를 integratedLearningSummary, learningEvidence, evidence, assessment, competency, saved report 순서로 확인한다.
 4. 근거가 부족하면 부족하다고 밝히고, 교사가 다음에 확인할 항목을 제안한다.
 
 # Rules

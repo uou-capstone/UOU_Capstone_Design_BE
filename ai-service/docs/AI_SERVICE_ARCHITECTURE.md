@@ -294,6 +294,8 @@ PDF 처리 정책:
 
 - Spring이 DB에서 조회한 학생 리포트 context DTO를 FastAPI에 전달
 - FastAPI는 DB를 직접 조회하지 않는다.
+- v3 통합학습의 퀴즈 채점, 재시험, 오개념 교정 근거는 Spring이 `learningEvidence`와 `integratedLearningSummary`로 전달한다.
+- 학생 리포트 분석/채팅은 시험·과제 근거보다 통합학습 형성평가 근거를 우선 확인해 보완 학습 우선순위를 판단한다.
 - Gemini 분석 실패 시 deterministic fallback 분석을 반환한다.
 
 주요 endpoint:
