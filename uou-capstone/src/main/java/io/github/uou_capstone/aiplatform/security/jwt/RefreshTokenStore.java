@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -27,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 public class RefreshTokenStore {
 
     private static final String PREFIX = "sb:refresh:";
+    private static final String ROTATED_PREFIX = "sb:refresh:rotated:";
 
     private final StringRedisTemplate redisTemplate;
 
@@ -38,27 +40,15 @@ public class RefreshTokenStore {
         }
     }
 
-    public boolean isValid(Long userId, String jti) {
+    public boolean consume(Long userId, String jti) {
         if (jti == null || jti.isBlank()) {
             return false;
         }
         try {
-            String value = redisTemplate.opsForValue().get(buildKey(userId, jti));
-            return value != null;
+            return Boolean.TRUE.equals(redisTemplate.delete(buildKey(userId, jti)));
         } catch (Exception e) {
-            log.error("Failed to check refresh jti: userId={}", userId, e);
+            log.error("Failed to consume refresh jti: userId={}", userId, e);
             return false;
-        }
-    }
-
-    public void revoke(Long userId, String jti) {
-        if (jti == null || jti.isBlank()) {
-            return;
-        }
-        try {
-            redisTemplate.delete(buildKey(userId, jti));
-        } catch (Exception e) {
-            log.error("Failed to revoke refresh jti: userId={}", userId, e);
         }
     }
 
@@ -81,7 +71,47 @@ public class RefreshTokenStore {
         }
     }
 
+    public void rememberRotation(Long userId, String oldJti, String accessToken, String refreshToken, long ttlMillis) {
+        if (oldJti == null || oldJti.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(
+                    buildRotatedKey(userId, oldJti),
+                    accessToken + "\n" + refreshToken,
+                    ttlMillis,
+                    TimeUnit.MILLISECONDS
+            );
+        } catch (Exception e) {
+            log.error("Failed to remember refresh rotation: userId={}", userId, e);
+        }
+    }
+
+    public Optional<String[]> findRememberedRotation(Long userId, String oldJti) {
+        if (oldJti == null || oldJti.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            String value = redisTemplate.opsForValue().get(buildRotatedKey(userId, oldJti));
+            if (value == null) {
+                return Optional.empty();
+            }
+            String[] parts = value.split("\n", 2);
+            if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(parts);
+        } catch (Exception e) {
+            log.error("Failed to find remembered refresh rotation: userId={}", userId, e);
+            return Optional.empty();
+        }
+    }
+
     private String buildKey(Long userId, String jti) {
         return PREFIX + userId + ":" + jti;
+    }
+
+    private String buildRotatedKey(Long userId, String jti) {
+        return ROTATED_PREFIX + userId + ":" + jti;
     }
 }
