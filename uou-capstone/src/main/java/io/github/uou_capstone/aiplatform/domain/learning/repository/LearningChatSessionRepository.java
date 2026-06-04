@@ -60,4 +60,12 @@ public interface LearningChatSessionRepository extends JpaRepository<LearningCha
             WHERE s.lecture.course.id = :courseId
             """)
     List<Object[]> findLectureUserPairsByCourse(@Param("courseId") Long courseId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM LearningChatSession s WHERE s.lecture.course.id = :courseId")
+    void deleteByLectureCourseId(@Param("courseId") Long courseId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM LearningChatSession s WHERE s.lecture.id = :lectureId")
+    void deleteByLectureId(@Param("lectureId") Long lectureId);
 }
