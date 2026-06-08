@@ -6,6 +6,7 @@ import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.Crite
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionUpdateRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaAssistantService;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriterionService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -46,6 +47,13 @@ public class CourseReportCriteriaController {
     @PreAuthorize("hasAuthority('TEACHER')")
     public ResponseEntity<List<CriterionResponse>> list(@PathVariable Long courseId) {
         return ResponseEntity.ok(criterionService.list(courseId));
+    }
+
+    @Operation(summary = "List all report criteria including built-ins")
+    @GetMapping("/all")
+    @PreAuthorize("hasAuthority('TEACHER')")
+    public ResponseEntity<List<ReportCriterionResponse>> listAll(@PathVariable Long courseId) {
+        return ResponseEntity.ok(criterionService.listAll(courseId));
     }
 
     @Operation(summary = "Get report criteria summary")

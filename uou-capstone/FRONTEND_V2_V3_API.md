@@ -48,6 +48,11 @@
   - `session_id`, `chatSessionId`, `lecture_id`, `current_page`, `ai_status_connected`, `created_at`, `updated_at`
   - `chatSessionId`는 Spring DB에 저장되는 채팅 세션 ID이며, 이후 이벤트 전송/메시지 조회에 사용한다.
 
+#### 자료 삭제/교체 후 세션 처리
+- 강의 PDF 자료가 삭제되거나 교체되면 기존 `chatSessionId`를 폐기한다.
+- FE는 `POST /api/learning/sessions/{lectureId}`를 다시 호출하고, 응답의 새 `chatSessionId`를 이벤트 전송/메시지 조회 기준으로 사용한다.
+- 오래된 `chatSessionId`로 이벤트를 보내면 Spring이 종료된 세션으로 판단해 FastAPI 호출 전에 차단한다.
+
 ### 저장된 채팅 조회
 - `GET /api/learning/sessions?lectureId={lectureId}`
   - 권한: `STUDENT` 또는 `TEACHER`

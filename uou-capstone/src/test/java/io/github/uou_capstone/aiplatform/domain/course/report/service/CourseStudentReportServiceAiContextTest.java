@@ -14,6 +14,8 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceI
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaQueryService;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
@@ -70,6 +72,7 @@ class CourseStudentReportServiceAiContextTest {
     @Mock private SubmissionRepository submissionRepository;
     @Mock private AssessmentRepository assessmentRepository;
     @Mock private LearningSessionEvidenceRepository learningSessionEvidenceRepository;
+    @Mock private CourseReportCriteriaQueryService criteriaQueryService;
     @Mock private CurrentUserResolver currentUserResolver;
 
     @InjectMocks
@@ -105,6 +108,17 @@ class CourseStudentReportServiceAiContextTest {
 
         lenient().when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(anyLong(), anyLong()))
                 .thenReturn(List.of());
+        lenient().when(criteriaQueryService.listAll(course)).thenReturn(List.of(
+                ReportCriterionResponse.builder()
+                        .id("builtin:CONCEPT_UNDERSTANDING")
+                        .key("CONCEPT_UNDERSTANDING")
+                        .label("개념 이해도")
+                        .description("핵심 개념 이해")
+                        .builtIn(true)
+                        .editable(false)
+                        .deletable(false)
+                        .fallbackPolicy("INSUFFICIENT_EVIDENCE")
+                        .build()));
     }
 
     private void primeOwnerAndEnrollment() {
@@ -259,6 +273,9 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getAssessments().get(1).getScore()).isNull();
 
         assertThat(res.getCompetencies()).hasSize(2);
+        assertThat(res.getReportCriteria()).hasSize(1);
+        assertThat(res.getReportCriteria().get(0).getId()).isEqualTo("builtin:CONCEPT_UNDERSTANDING");
+        assertThat(res.getReportCriteria().get(0).isBuiltIn()).isTrue();
         AiCompetencyDto logic = res.getCompetencies().stream()
                 .filter(c -> "logic".equals(c.getKey())).findFirst().orElseThrow();
         assertThat(logic.getLevel()).isEqualTo(AiCompetencyLevel.NEEDS_IMPROVEMENT);
@@ -368,6 +385,7 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getLearningEvidence().get(0).getEvidenceId()).isEqualTo("evidence-1");
         assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
         assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+        assertThat(res.getReportCriteria()).hasSize(1);
     }
 
     @Test

@@ -2173,3 +2173,51 @@ FastAPI v3가 내려주는 근거는 `quiz.quizType`, `grading.scoreRatio`, `gra
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceServiceTest.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
+
+---
+
+## [2026-06-08] Student AI report analysis Spring proxy
+
+### Symptoms
+
+FE가 Spring만 호출하는 구조인데도 학생별 AI 리포트 분석 실행, 저장 결과 조회, SSE 재분석 흐름이 없어서 교사 커스텀 평가 기준을 반영한 학생 리포트 재분석을 할 수 없었다. 기존 학생 리포트는 context까지만 제공했고, 분석 실행/저장은 FE가 직접 FastAPI를 호출해야 하는 구조처럼 남아 있었다.
+
+### Cause
+
+Spring에 학생 분석 실행/조회 API가 없었고, FastAPI에도 Spring 프록시를 전제로 한 저장 경로가 연결되어 있지 않았다. 또한 분석 기준은 course custom criteria만 내려가고, 학생 분석 결과를 저장할 테이블과 최신 결과 조회 엔드포인트가 없어서 FE가 재분석 결과를 다시 불러오는 경로도 비어 있었다.
+
+### Fix
+
+- `CourseReportController`에 `GET /students/{studentId}/analysis`, `POST /students/{studentId}/analyze`, `POST /students/{studentId}/analyze/stream`을 추가했다.
+- `StudentReportAnalysisService`와 `StudentReportAnalysisPersister`를 추가해 FastAPI sync/stream 결과를 저장하고, `done.data`가 객체일 때만 최신 분석으로 UPSERT하도록 했다.
+- `student_report_analyses` Flyway 테이블을 추가해 `(course_id, student_id)` 기준 최신 1건을 저장하도록 했다.
+- `FastApiBridgeClient`에 `/api/v3/report/student/analyze`와 `/api/v3/report/student/analyze/stream` 호출 메서드를 추가했다.
+- `StudentAiReportContextResponse`의 `reportCriteria`를 그대로 FastAPI 분석 context에 포함해 기본 10개 + 커스텀 평가 기준이 분석에 반영되도록 연결했다.
+- `model`은 Spring/FastAPI 양쪽 allowlist로 제한해 FE 임의 값이 그대로 분석 엔진에 전달되지 않도록 막았다.
+
+### Verification
+
+```powershell
+.\gradlew.bat test --no-daemon --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisPersisterTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.repository.StudentReportAnalysisUniqueConstraintTest --tests io.github.uou_capstone.aiplatform.domain.course.report.controller.CourseReportControllerTest
+.\gradlew.bat test --no-daemon --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriterionServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.controller.CourseReportCriteriaControllerTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaAssistantServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisPersisterTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.repository.StudentReportAnalysisUniqueConstraintTest --tests io.github.uou_capstone.aiplatform.domain.course.report.controller.CourseReportControllerTest
+python -m pytest tests/test_report_criteria.py
+git diff --check
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/dto/StudentReportAnalysisRequest.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/dto/StudentReportAnalysisResponse.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/entity/StudentReportAnalysis.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/repository/StudentReportAnalysisRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisPersister.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClient.java`
+- `src/main/resources/db/migration/V12__student_report_analysis.sql`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportControllerTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/repository/StudentReportAnalysisUniqueConstraintTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisPersisterTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisServiceTest.java`
+- `../ai-service/app/services/gemini_service.py`
+- `../ai-service/tests/test_report_criteria.py`

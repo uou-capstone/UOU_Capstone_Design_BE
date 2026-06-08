@@ -145,6 +145,29 @@ public class FastApiBridgeClient {
                 .bodyToFlux(String.class);
     }
 
+    /** Student report AI analysis sync JSON. */
+    public String reportStudentAnalyze(Map<String, Object> body) {
+        String raw = aiServiceWebClient.post()
+                .uri("/api/v3/report/student/analyze")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(String.class)
+                .onErrorMap(e -> new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
+                        "Student report analysis service call failed: " + e.getMessage()))
+                .block();
+        BridgeResponseLogger.debugBody(log, "POST /api/v3/report/student/analyze", raw);
+        return raw;
+    }
+
+    /** Student report AI analysis NDJSON stream. */
+    public Flux<String> reportStudentAnalyzeStream(Map<String, Object> body) {
+        return aiServiceStreamingWebClient.post()
+                .uri("/api/v3/report/student/analyze/stream")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(String.class);
+    }
+
     /** Report Criteria AI 추천 — NDJSON 스트림 ({@code criterion_suggestion} 중간 이벤트 포함). */
     public Flux<String> reportCriteriaAssistantStream(Map<String, Object> body) {
         return aiServiceStreamingWebClient.post()

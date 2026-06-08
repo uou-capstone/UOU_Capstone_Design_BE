@@ -1,0 +1,85 @@
+package io.github.uou_capstone.aiplatform.domain.course.report.criteria.service;
+
+import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaSummaryResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaStatus;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.entity.CourseReportCriterion;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.repository.CourseReportCriterionRepository;
+import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class CourseReportCriterionServiceTest {
+
+    private static final long COURSE_ID = 1L;
+
+    @Mock private CourseAccessService courseAccessService;
+    @Mock private CourseReportCriterionRepository repository;
+
+    private CourseReportCriteriaCatalog catalog;
+    private CourseReportCriteriaQueryService queryService;
+    private CourseReportCriterionService service;
+    private Course course;
+
+    @BeforeEach
+    void setUp() {
+        catalog = new CourseReportCriteriaCatalog();
+        queryService = new CourseReportCriteriaQueryService(catalog, repository);
+        service = new CourseReportCriterionService(courseAccessService, repository, catalog, queryService);
+        course = Course.builder().title("course").description("d").invitationCode("code").build();
+        ReflectionTestUtils.setField(course, "id", COURSE_ID);
+    }
+
+    @Test
+    void listAllReturnsBuiltInsThenCustomCriteria() {
+        CourseReportCriterion custom = CourseReportCriterion.builder()
+                .course(course)
+                .label("발표 참여도")
+                .description("발표 시도")
+                .weight(20)
+                .build();
+        ReflectionTestUtils.setField(custom, "id", 11L);
+
+        when(courseAccessService.loadCourseAsTeacher(COURSE_ID)).thenReturn(course);
+        when(repository.findByCourseOrderByIdAsc(course)).thenReturn(List.of(custom));
+
+        List<ReportCriterionResponse> res = service.listAll(COURSE_ID);
+
+        assertThat(res).hasSize(11);
+        assertThat(res.get(0).getId()).isEqualTo("builtin:CONCEPT_UNDERSTANDING");
+        assertThat(res.get(0).isBuiltIn()).isTrue();
+        assertThat(res.get(0).isEditable()).isFalse();
+        assertThat(res.get(0).isDeletable()).isFalse();
+        assertThat(res.get(10).getId()).isEqualTo("custom:11");
+        assertThat(res.get(10).getCriterionId()).isEqualTo(11L);
+        assertThat(res.get(10).isBuiltIn()).isFalse();
+        assertThat(res.get(10).isEditable()).isTrue();
+        assertThat(res.get(10).isDeletable()).isTrue();
+    }
+
+    @Test
+    void summaryPreservesCustomCriteriaStatusAndAddsReportCriteriaTotal() {
+        when(courseAccessService.loadCourseAsTeacher(COURSE_ID)).thenReturn(course);
+        when(repository.findByCourseOrderByIdAsc(course)).thenReturn(List.of());
+
+        CriteriaSummaryResponse res = service.summary(COURSE_ID);
+
+        assertThat(res.getBaseItemCount()).isEqualTo(10);
+        assertThat(res.getAdditionalItemCount()).isZero();
+        assertThat(res.getActiveCriteriaCount()).isZero();
+        assertThat(res.getCriteriaStatus()).isEqualTo(CriteriaStatus.NONE.name());
+        assertThat(res.getReportCriteriaCount()).isEqualTo(10);
+        assertThat(res.getReportCriteriaStatus()).isEqualTo(CriteriaStatus.ACTIVE.name());
+    }
+}

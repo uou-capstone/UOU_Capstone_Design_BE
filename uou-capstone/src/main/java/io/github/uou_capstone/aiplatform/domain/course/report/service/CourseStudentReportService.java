@@ -19,6 +19,8 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ScoreSummaryDt
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentInfoDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaQueryService;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.SubmissionSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiActivitySummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiAssessmentItemDto;
@@ -112,6 +114,7 @@ public class CourseStudentReportService {
     private final SubmissionRepository submissionRepository;
     private final AssessmentRepository assessmentRepository;
     private final LearningSessionEvidenceRepository learningSessionEvidenceRepository;
+    private final CourseReportCriteriaQueryService criteriaQueryService;
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional(readOnly = true)
@@ -202,6 +205,7 @@ public class CourseStudentReportService {
                 .toList();
         AiIntegratedLearningSummaryDto integratedLearningSummary =
                 buildIntegratedLearningSummary(sessionEvidence);
+        List<ReportCriterionResponse> reportCriteria = criteriaQueryService.listAll(course);
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
         LocalDateTime reportTimestamp = activitySummary.getLatestActivityAt();
@@ -224,6 +228,7 @@ public class CourseStudentReportService {
                 .evidence(evidence)
                 .integratedLearningSummary(integratedLearningSummary)
                 .learningEvidence(learningEvidence)
+                .reportCriteria(reportCriteria)
                 .narrativeReport(narrative)
                 .overallScorePercent(scoreSummary.getAverageScorePercent())
                 .headline(buildHeadline(scoreSummary, reportStatus))
@@ -296,6 +301,7 @@ public class CourseStudentReportService {
                 .toList();
         AiIntegratedLearningSummaryDto integratedLearningSummary =
                 buildIntegratedLearningSummary(sessionEvidence);
+        List<ReportCriterionResponse> reportCriteria = criteriaQueryService.listAll(course);
 
         ReportStatus reportStatus = computeReportStatus(examResults.size(), baseScore, baseCompetencies);
         NarrativeReportDto baseNarrative = buildNarrative(baseScore, baseCompetencies, reportStatus);
@@ -322,6 +328,7 @@ public class CourseStudentReportService {
                 .competencies(competencies)
                 .evidence(evidence)
                 .learningEvidence(learningEvidence)
+                .reportCriteria(reportCriteria)
                 .integratedLearningSummary(integratedLearningSummary)
                 .existingNarrative(narrative)
                 .reportWarnings(warnings)
