@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
 import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
 import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
@@ -34,6 +35,7 @@ public class LearningSessionEvidenceService {
     private final LearningSessionEvidenceRepository evidenceRepository;
     private final EntityManager entityManager;
     private final ObjectMapper objectMapper;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     @Transactional
     public void saveFromStreamLine(String line, Long sessionId, Long lectureId, User currentUser) {
@@ -130,6 +132,8 @@ public class LearningSessionEvidenceService {
 
         try {
             evidenceRepository.saveAndFlush(evidence);
+            analysisInvalidationService.invalidateStudent(
+                    courseId, currentUser.getStudent().getId(), "learning_evidence_created");
         } catch (DataIntegrityViolationException e) {
             log.debug("Duplicate learning evidence ignored: evidenceId={}", evidenceId);
         }

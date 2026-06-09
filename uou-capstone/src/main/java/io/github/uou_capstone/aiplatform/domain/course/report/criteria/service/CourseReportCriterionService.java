@@ -11,6 +11,7 @@ import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.Crite
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.entity.CourseReportCriterion;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.repository.CourseReportCriterionRepository;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ public class CourseReportCriterionService {
     private final CourseReportCriterionRepository repository;
     private final CourseReportCriteriaCatalog catalog;
     private final CourseReportCriteriaQueryService criteriaQueryService;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     @Transactional(readOnly = true)
     public List<CriterionResponse> list(Long courseId) {
@@ -73,6 +75,7 @@ public class CourseReportCriterionService {
                         .description(req.getDescription())
                         .weight(req.getWeight())
                         .build());
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_created");
         return new CriterionResponse(saved);
     }
 
@@ -82,6 +85,7 @@ public class CourseReportCriterionService {
         CourseReportCriterion c = repository.findByIdAndCourse(criterionId, course)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
         c.update(req.getLabel(), req.getDescription(), req.getWeight());
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_updated");
         return new CriterionResponse(c);
     }
 
@@ -91,5 +95,6 @@ public class CourseReportCriterionService {
         CourseReportCriterion c = repository.findByIdAndCourse(criterionId, course)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
         repository.delete(c);
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_deleted");
     }
 }

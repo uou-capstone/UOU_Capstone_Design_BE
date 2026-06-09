@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
@@ -83,13 +84,14 @@ public class StudentReportAnalysisPersister {
     }
 
     Snapshot extract(Map<String, Object> data) {
+        Map<String, Object> normalized = normalizeSummary(data);
         return new Snapshot(
-                serializeObject(data),
-                stringOrNull(data, "summaryMarkdown"),
-                stringOrNull(data, "source"),
-                Boolean.TRUE.equals(data.get("fallbackUsed")),
-                stringOrNull(data, "reason"),
-                stringOrNull(data, "confidence"),
+                serializeObject(normalized),
+                stringOrNull(normalized, "summaryMarkdown"),
+                stringOrNull(normalized, "source"),
+                Boolean.TRUE.equals(normalized.get("fallbackUsed")),
+                stringOrNull(normalized, "reason"),
+                stringOrNull(normalized, "confidence"),
                 LocalDateTime.now()
         );
     }
@@ -111,6 +113,15 @@ public class StudentReportAnalysisPersister {
     private String stringOrNull(Map<String, Object> data, String key) {
         Object v = data.get(key);
         return v == null ? null : String.valueOf(v);
+    }
+
+    private Map<String, Object> normalizeSummary(Map<String, Object> data) {
+        if (data == null || data.get("summaryMarkdown") != null || data.get("summary") == null) {
+            return data;
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>(data);
+        normalized.put("summaryMarkdown", String.valueOf(data.get("summary")));
+        return normalized;
     }
 
     public record Snapshot(String analysisJson,

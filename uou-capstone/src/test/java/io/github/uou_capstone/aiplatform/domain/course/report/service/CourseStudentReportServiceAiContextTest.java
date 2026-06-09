@@ -484,6 +484,65 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getOverallScorePercent()).isNull();
         assertThat(res.getReportStatus()).isEqualTo("insufficient_data");
         assertThat(res.getHeadline()).doesNotContain("0.0");
+        assertThat(res.getNarrativeReport().getSummary()).doesNotContain("0.0");
+        assertThat(res.getStrengths()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getImprovementPoints()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getSummaryBullets()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getCoachingInsights()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+    }
+
+    @Test
+    void aiContext_marksScoreFieldsMissing_whenExamResultHasNoValidScore() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.findByCourse_Id(COURSE_ID)).thenReturn(List.of());
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        ExamSession session = ExamSession.builder()
+                .lecture(null).material(null).displayName(null).user(studentUser)
+                .examType(ExamType.FIVE_CHOICE).targetCount(10).build();
+        ExamResult resultWithoutScore = ExamResult.builder()
+                .examSession(session)
+                .submission(null)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(resultWithoutScore, "id", 7L);
+        ReflectionTestUtils.setField(resultWithoutScore, "completedAt", LocalDateTime.now());
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(resultWithoutScore));
+
+        StudentAiReportContextResponse res = service.getStudentAiReportContext(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getScoreSummary().getAverageScore()).isNull();
+        assertThat(res.getScoreSummary().getAverageScoreRatio()).isNull();
+        assertThat(res.getExistingNarrative().getSummary()).doesNotContain("0.0");
+        assertThat(res.getExistingNarrative().getStrengths()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getExistingNarrative().getWeaknesses()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+    }
+
+    @Test
+    void detail_preservesRealZeroScoreInNarrative() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Map<String, Object> feedback = Map.of(
+                "evaluationItems", List.of(Map.of(
+                        "score", 0.0,
+                        "feedback", "review",
+                        "evaluationDetails", Map.of(
+                                "competencyKey", "logic",
+                                "competencyLabel", "logic"))));
+        ExamResult zeroScoreResult = examResultWith(1L, 0.0, feedback, "review");
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(zeroScoreResult));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getScoreSummary().getAverageScorePercent()).isEqualTo(0.0);
+        assertThat(res.getHeadline()).contains("0.0");
+        assertThat(res.getNarrativeReport().getSummary()).contains("0.0");
+        assertThat(res.getImprovementPoints()).anySatisfy(text -> assertThat(text).contains("0.0"));
     }
 
     @Test

@@ -95,4 +95,18 @@ class StudentReportAnalysisPersisterTest {
         assertThat(snapshot.confidence()).isEqualTo("LOW");
         assertThat(snapshot.generatedAt()).isNotNull();
     }
+
+    @Test
+    void extractFallsBackFromSummaryAndStoresNormalizedJson() {
+        Map<String, Object> data = Map.of(
+                "summary", "summary",
+                "confidence", "HIGH");
+
+        StudentReportAnalysisPersister.Snapshot snapshot = persister.extract(data);
+
+        assertThat(snapshot.summaryMarkdown()).isEqualTo("summary");
+        assertThat(snapshot.analysisJson()).contains("\"summary\":\"summary\"");
+        assertThat(snapshot.analysisJson()).contains("\"summaryMarkdown\":\"summary\"");
+        assertThat(snapshot.confidence()).isEqualTo("HIGH");
+    }
 }

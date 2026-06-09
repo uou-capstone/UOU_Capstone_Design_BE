@@ -71,6 +71,22 @@ class StudentReportAnalysisServiceTest {
         ReflectionTestUtils.setField(student, "id", STUDENT_ID);
     }
 
+    private String fastApiAnalysisJson(String summary) {
+        return """
+                {
+                  "summary": "%s",
+                  "strengths": ["concept"],
+                  "weaknesses": ["proof"],
+                  "competencyAnalysis": [
+                    {"criterionId":"builtin:CONCEPT_UNDERSTANDING","score":0.8,"evidence":["quiz"]}
+                  ],
+                  "teachingSuggestions": ["review"],
+                  "followUpQuestions": ["why?"],
+                  "confidence": "HIGH"
+                }
+                """.formatted(summary);
+    }
+
     @Test
     void analyzeSendsSpringBuiltContextAndModelOnly() {
         StudentAiReportContextResponse context = StudentAiReportContextResponse.builder()
@@ -81,7 +97,7 @@ class StudentReportAnalysisServiceTest {
                         .build()))
                 .build();
         when(courseStudentReportService.getStudentAiReportContext(COURSE_ID, STUDENT_ID)).thenReturn(context);
-        when(fastApiBridgeClient.reportStudentAnalyze(any())).thenReturn("{\"summaryMarkdown\":\"ok\"}");
+        when(fastApiBridgeClient.reportStudentAnalyze(any())).thenReturn(fastApiAnalysisJson("ok"));
 
         StudentReportAnalysisRequest request = new StudentReportAnalysisRequest();
         request.setModel("gemini-2.5-flash");
@@ -96,7 +112,10 @@ class StudentReportAnalysisServiceTest {
         assertThat(body).containsEntry("model", "gemini-2.5-flash");
         assertThat(body).doesNotContainKey("criteria");
         assertThat(body).doesNotContainKey("reportCriteria");
-        assertThat(result).containsEntry("summaryMarkdown", "ok");
+        assertThat(result).containsEntry("summary", "ok")
+                .containsEntry("summaryMarkdown", "ok")
+                .containsEntry("confidence", "HIGH");
+        assertThat(result.get("competencyAnalysis")).isInstanceOf(List.class);
         verify(persister).upsert(eq(COURSE_ID), eq(STUDENT_ID), eq(result));
     }
 
@@ -104,7 +123,7 @@ class StudentReportAnalysisServiceTest {
     void analyzeOmitsDisallowedModel() {
         when(courseStudentReportService.getStudentAiReportContext(COURSE_ID, STUDENT_ID))
                 .thenReturn(StudentAiReportContextResponse.builder().build());
-        when(fastApiBridgeClient.reportStudentAnalyze(any())).thenReturn("{\"summaryMarkdown\":\"ok\"}");
+        when(fastApiBridgeClient.reportStudentAnalyze(any())).thenReturn(fastApiAnalysisJson("ok"));
 
         StudentReportAnalysisRequest request = new StudentReportAnalysisRequest();
         request.setModel("unexpected-model");
@@ -137,7 +156,9 @@ class StudentReportAnalysisServiceTest {
                 .thenReturn(StudentAiReportContextResponse.builder().build());
         when(fastApiBridgeClient.reportStudentAnalyzeStream(any())).thenReturn(Flux.just(
                 "{\"type\":\"agent_delta\",\"delta\":\"working\"}",
-                "{\"type\":\"done\",\"data\":{\"summaryMarkdown\":\"done\",\"confidence\":\"HIGH\"}}"));
+                """
+                {"type":"done","data":{"summary":"done","strengths":["s"],"weaknesses":["w"],"competencyAnalysis":[{"score":0.7}],"teachingSuggestions":["t"],"followUpQuestions":["q"],"confidence":"HIGH"}}
+                """.trim()));
 
         List<ServerSentEvent<Map<String, Object>>> events =
                 service.analyzeStream(COURSE_ID, STUDENT_ID, null).collectList().block();
@@ -145,9 +166,15 @@ class StudentReportAnalysisServiceTest {
         assertThat(events).isNotNull();
         assertThat(events).extracting(ServerSentEvent::event).containsExactly("agent_delta", "done");
         @SuppressWarnings("unchecked")
+        Map<String, Object> emittedData = (Map<String, Object>) events.get(1).data().get("data");
+        assertThat(emittedData).containsEntry("summary", "done")
+                .containsEntry("summaryMarkdown", "done")
+                .containsEntry("confidence", "HIGH");
+        @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
         verify(persister).upsert(eq(COURSE_ID), eq(STUDENT_ID), dataCaptor.capture());
-        assertThat(dataCaptor.getValue()).containsEntry("summaryMarkdown", "done")
+        assertThat(dataCaptor.getValue()).containsEntry("summary", "done")
+                .containsEntry("summaryMarkdown", "done")
                 .containsEntry("confidence", "HIGH");
     }
 

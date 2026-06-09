@@ -6,6 +6,7 @@ import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
 import io.github.uou_capstone.aiplatform.domain.assessment.entity.ChoiceOption;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.ChoiceOptionRepository;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.course.repository.EnrollmentRepository;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
@@ -40,6 +41,7 @@ public class SubmissionService {
     private final EnrollmentRepository enrollmentRepository;
     private final CurrentUserResolver currentUserResolver;
     private final TeacherNotificationPublisher teacherNotificationPublisher;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     @Transactional
     public Long createSubmission(Long assessmentId, SubmissionRequestDto requestDto) {
@@ -98,6 +100,8 @@ public class SubmissionService {
                 assessment.getId()
         );
 
+        analysisInvalidationService.invalidateStudent(
+                assessment.getCourse().getId(), student.getId(), "submission_created");
         return submission.getId();
     }
 

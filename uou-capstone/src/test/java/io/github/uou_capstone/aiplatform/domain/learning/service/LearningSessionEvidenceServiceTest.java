@@ -3,6 +3,7 @@ package io.github.uou_capstone.aiplatform.domain.learning.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.lecture.entity.Lecture;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningChatSession;
 import io.github.uou_capstone.aiplatform.domain.learning.entity.LearningSessionEvidence;
 import io.github.uou_capstone.aiplatform.domain.learning.repository.LearningSessionEvidenceRepository;
@@ -16,6 +17,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
@@ -34,6 +36,9 @@ class LearningSessionEvidenceServiceTest {
 
     @Mock
     private EntityManager entityManager;
+
+    @Mock
+    private StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -81,6 +86,7 @@ class LearningSessionEvidenceServiceTest {
         assertThat(saved.getWeakConcepts()).containsExactly("CBR");
         assertThat(saved.getWrongItems()).hasSize(1);
         assertThat(saved.getOccurredAt()).isEqualTo(LocalDateTime.of(2026, 1, 2, 3, 4, 5));
+        verify(analysisInvalidationService).invalidateStudent(10L, 50L, "learning_evidence_created");
     }
 
     @Test
@@ -119,6 +125,7 @@ class LearningSessionEvidenceServiceTest {
         assertThat(saved.getWeakConcepts()).containsExactly("분수 통분");
         assertThat(saved.getWrongItems()).hasSize(1);
         assertThat(saved.getOccurredAt()).isEqualTo(LocalDateTime.of(2026, 1, 3, 4, 5, 6));
+        verify(analysisInvalidationService).invalidateStudent(10L, 50L, "learning_evidence_created");
     }
 
     @Test
@@ -137,5 +144,39 @@ class LearningSessionEvidenceServiceTest {
 
         verify(evidenceRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
         verify(entityManager, never()).getReference(eq(Course.class), org.mockito.ArgumentMatchers.any());
+        verify(analysisInvalidationService, never()).invalidateStudent(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void saveFromStreamLine_doesNotInvalidateWhenDuplicateSaveFails() {
+        ReflectionTestUtils.setField(service, "objectMapper", objectMapper);
+
+        Long sessionId = 5L;
+        Long lectureId = 100L;
+        Student student = Student.builder().grade(1).classNumber("1-1").build();
+        ReflectionTestUtils.setField(student, "id", 50L);
+        User user = User.builder().email("s@example.com").password("p").fullName("s").build();
+        ReflectionTestUtils.setField(user, "student", student);
+
+        Course courseRef = Course.builder().teacher(null).title("c").description("d").invitationCode("i").build();
+        Lecture lectureRef = Lecture.builder().course(courseRef).title("l").weekNumber(1).description("d").build();
+        LearningChatSession sessionRef = LearningChatSession.builder().lecture(lectureRef).user(user).build();
+
+        when(entityManager.getReference(Course.class, 10L)).thenReturn(courseRef);
+        when(entityManager.getReference(Lecture.class, lectureId)).thenReturn(lectureRef);
+        when(entityManager.getReference(Student.class, 50L)).thenReturn(student);
+        when(entityManager.getReference(LearningChatSession.class, sessionId)).thenReturn(sessionRef);
+        when(evidenceRepository.saveAndFlush(org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new DataIntegrityViolationException("duplicate"));
+
+        String line = """
+                {"type":"done","data":{"learningEvidence":{"type":"learning_evidence","evidenceId":"ev-dup","courseId":10,"eventType":"QUIZ_GRADED","scoreRatio":0.75}}}
+                """.trim();
+
+        service.saveFromStreamLine(line, sessionId, lectureId, user);
+
+        verify(analysisInvalidationService, never()).invalidateStudent(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 }

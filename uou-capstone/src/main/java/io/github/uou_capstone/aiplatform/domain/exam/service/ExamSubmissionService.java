@@ -7,6 +7,8 @@ package io.github.uou_capstone.aiplatform.domain.exam.service;
 
 
 import io.github.uou_capstone.aiplatform.service.CurrentUserResolver;
+import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.notification.entity.NotificationType;
 import io.github.uou_capstone.aiplatform.domain.notification.service.TeacherNotificationPublisher;
 
@@ -19,10 +21,10 @@ import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 
 
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+
 import io.github.uou_capstone.aiplatform.domain.assessment.entity.Assessment;
 
 import io.github.uou_capstone.aiplatform.domain.assessment.repository.AssessmentRepository;
-
 
 
 
@@ -59,12 +61,12 @@ import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamResultReposi
 
 
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+
 import io.github.uou_capstone.aiplatform.domain.submission.entity.Submission;
 
 import io.github.uou_capstone.aiplatform.domain.submission.repository.SubmissionRepository;
 
 import io.github.uou_capstone.aiplatform.domain.user.entity.Student;
-
 
 
 
@@ -210,11 +212,12 @@ public class ExamSubmissionService {
 
     private final ObjectMapper objectMapper;  // JSON 변환용
     private final TeacherNotificationPublisher teacherNotificationPublisher;
-
-
+    private final CourseAccessService courseAccessService;
+    private final ExamGenerationService examGenerationService;
     private final AssessmentRepository assessmentRepository;
-
     private final SubmissionRepository submissionRepository;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
+
 
 
 
@@ -351,6 +354,14 @@ public class ExamSubmissionService {
 
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
 
+        // 강의실 권한 검증: 세션이 속한 강의의 ACTIVE 수강생/담당 교사만 응시 가능.
+        // 학생 조회 API 와 동일 정책 (CourseAccessService.loadCourseAsParticipant).
+        if (examSession.getLecture() != null && examSession.getLecture().getCourse() != null) {
+            courseAccessService.loadCourseAsParticipant(examSession.getLecture().getCourse().getId());
+        } else {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+
 
 
 
@@ -398,8 +409,8 @@ public class ExamSubmissionService {
 
 
         // 시험 세션에 속한 문제들 조회 (questionOrder 순서대로)
-
-
+        // V5 hydration 배포 전 생성된 READY 세션은 ExamQuestion 행이 없을 수 있어 lazy backfill.
+        examGenerationService.ensureExamQuestionsHydrated(examSession);
 
         List<ExamQuestion> questions = examQuestionRepository
 
@@ -445,11 +456,11 @@ public class ExamSubmissionService {
 
 
 
-                    CommonErrorCode.INVALID_PARAMETER, 
+                    CommonErrorCode.INVALID_PARAMETER,
 
 
 
-                    String.format("답변 개수가 일치하지 않습니다. 문제: %d개, 답변: %d개", 
+                    String.format("답변 개수가 일치하지 않습니다. 문제: %d개, 답변: %d개",
 
 
 
@@ -461,6 +472,20 @@ public class ExamSubmissionService {
 
 
 
+        }
+
+        // 제출된 questionId 배열이 ExamQuestion.id 순서와 정확히 일치하는지 검증.
+        // FE 가 학생 조회 API 에서 받은 id 순서를 유지해 보내야 채점이 정확하다.
+        for (int i = 0; i < questions.size(); i++) {
+            Long expected = questions.get(i).getId();
+            Long actual = requestDto.getAnswers().get(i).getQuestionId();
+            if (!expected.equals(actual)) {
+                throw new BusinessException(
+                        CommonErrorCode.INVALID_PARAMETER,
+                        String.format("answers[%d].questionId 불일치: 기대=%d, 실제=%s",
+                                i, expected, actual)
+                );
+            }
         }
 
 
@@ -573,9 +598,10 @@ public class ExamSubmissionService {
 
 
 
-        GradingResponseDto gradingResult = examGradingService.gradeAndSaveResult(examResult, userAnswers);
+        GradingResponseDto gradingResult = examGradingService.gradeAndSaveResult(examResult, userAnswers, false);
 
         syncAssessmentSubmission(examSession, currentUser, examResult);
+        invalidateSubmittedStudentAnalysis(examSession, currentUser);
 
 
 
@@ -647,7 +673,6 @@ public class ExamSubmissionService {
 
     }
 
-
     private void syncAssessmentSubmission(ExamSession examSession, User currentUser, ExamResult examResult) {
         assessmentRepository.findByExamSession_Id(examSession.getId())
                 .ifPresent(assessment -> {
@@ -665,6 +690,21 @@ public class ExamSubmissionService {
                     submissionRepository.save(submission);
                 });
     }
+
+    private void invalidateSubmittedStudentAnalysis(ExamSession examSession, User currentUser) {
+        if (examSession == null
+                || examSession.getLecture() == null
+                || examSession.getLecture().getCourse() == null
+                || currentUser == null
+                || currentUser.getStudent() == null) {
+            return;
+        }
+        analysisInvalidationService.invalidateStudent(
+                examSession.getLecture().getCourse().getId(),
+                currentUser.getStudent().getId(),
+                "exam_submission_completed");
+    }
+
 
 
 

@@ -839,13 +839,15 @@ public class CourseStudentReportService {
 
         String topStrength = competencies.stream()
                 .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
-                .max(Comparator.comparingDouble(c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .filter(c -> c.getAverageScorePercent() != null)
+                .max(Comparator.comparingDouble(CompetencyDto::getAverageScorePercent))
                 .map(CompetencyDto::getLabel)
                 .orElse(null);
 
         String topImprovement = competencies.stream()
                 .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
-                .min(Comparator.comparingDouble(c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .filter(c -> c.getAverageScorePercent() != null)
+                .min(Comparator.comparingDouble(CompetencyDto::getAverageScorePercent))
                 .map(CompetencyDto::getLabel)
                 .orElse(null);
 
@@ -956,8 +958,9 @@ public class CourseStudentReportService {
 
         return byKey.values().stream()
                 .map(CompetencyAggregator::toDto)
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        (CompetencyDto c) -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ).reversed())
                 .toList();
     }
@@ -1262,34 +1265,34 @@ public class CourseStudentReportService {
                                               ReportStatus reportStatus) {
         Double avg = scoreSummary.getAverageScorePercent();
         String summary;
-        if (reportStatus == ReportStatus.INSUFFICIENT_DATA) {
+        if (reportStatus == ReportStatus.INSUFFICIENT_DATA || avg == null) {
             summary = "아직 응시한 시험이 없어 역량 분석을 제공할 수 없습니다.";
         } else if (reportStatus == ReportStatus.EXCELLING) {
-            summary = String.format("평균 %.1f점으로 모든 역량에서 우수한 수행을 보이고 있습니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점으로 모든 역량에서 우수한 수행을 보이고 있습니다.", avg);
         } else if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
-            summary = String.format("평균 %.1f점, 일부 역량에서 보강이 필요합니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점, 일부 역량에서 보강이 필요합니다.", avg);
         } else {
-            summary = String.format("평균 %.1f점, 전반적으로 안정적인 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점, 전반적으로 안정적인 학습 흐름을 유지하고 있습니다.", avg);
         }
 
         List<String> strengths = competencies.stream()
                 .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        (CompetencyDto c) -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ).reversed())
                 .limit(NARRATIVE_LIST_SIZE)
-                .map(c -> String.format("%s 평균 %.1f점", c.getLabel(),
-                        c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .map(c -> String.format("%s 평균 %.1f점", c.getLabel(), c.getAverageScorePercent()))
                 .toList();
 
         List<String> improvements = competencies.stream()
                 .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ))
                 .limit(NARRATIVE_LIST_SIZE)
-                .map(c -> String.format("%s 평균 %.1f점 — 보강 필요", c.getLabel(),
-                        c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .map(c -> String.format("%s 평균 %.1f점 — 보강 필요", c.getLabel(), c.getAverageScorePercent()))
                 .toList();
 
         List<String> nextSteps = new ArrayList<>();
@@ -1299,8 +1302,9 @@ public class CourseStudentReportService {
         } else {
             CompetencyDto weakest = competencies.stream()
                     .filter(c -> !CompetencyStatus.INSUFFICIENT_DATA.value().equals(c.getStatus()))
+                    .filter(c -> c.getAverageScorePercent() != null)
                     .min(Comparator.comparingDouble(
-                            c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                            CompetencyDto::getAverageScorePercent
                     ))
                     .orElse(null);
             if (weakest != null) {
@@ -1326,12 +1330,12 @@ public class CourseStudentReportService {
             return "분석 가능한 학습 데이터가 더 필요합니다.";
         }
         if (reportStatus == ReportStatus.EXCELLING) {
-            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg);
         }
         if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
-            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg == null ? 0.0 : avg);
+            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg);
         }
-        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg == null ? 0.0 : avg);
+        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg);
     }
 
     private List<String> buildSummaryBullets(ActivitySummaryDto activitySummary,

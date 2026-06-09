@@ -69,6 +69,7 @@ public class StudentReportAnalysisService {
             throw new BusinessException(CommonErrorCode.AI_SERVER_ERROR,
                     "Student report analysis response parsing failed.");
         }
+        data = normalizeSummary(data);
         persister.upsert(courseId, studentId, data);
         return data;
     }
@@ -86,6 +87,7 @@ public class StudentReportAnalysisService {
                 .appendDoneOnComplete(false)
                 .build();
         return SseStreamSupport.wrapNdjsonByType(upstream, objectMapper, policy, this::mapError)
+                .map(this::normalizeDoneEvent)
                 .doOnNext(event -> persistIfDone(courseId, studentId, event.event(), event.data()));
     }
 
@@ -95,12 +97,35 @@ public class StudentReportAnalysisService {
         Object inner = payload.get("data");
         if (inner instanceof Map<?, ?> innerMap) {
             try {
-                persister.upsert(courseId, studentId, (Map<String, Object>) innerMap);
+                persister.upsert(courseId, studentId, normalizeSummary((Map<String, Object>) innerMap));
             } catch (Exception ex) {
                 log.error("Student report analysis stream UPSERT failed: courseId={}, studentId={}",
                         courseId, studentId, ex);
             }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private ServerSentEvent<Map<String, Object>> normalizeDoneEvent(ServerSentEvent<Map<String, Object>> event) {
+        if (!SseEventNames.DONE.equals(event.event()) || event.data() == null) {
+            return event;
+        }
+        Object inner = event.data().get("data");
+        if (!(inner instanceof Map<?, ?> innerMap)) {
+            return event;
+        }
+        Map<String, Object> normalizedInner = normalizeSummary((Map<String, Object>) innerMap);
+        if (normalizedInner == inner) {
+            return event;
+        }
+        Map<String, Object> normalizedPayload = new LinkedHashMap<>(event.data());
+        normalizedPayload.put("data", normalizedInner);
+        return ServerSentEvent.<Map<String, Object>>builder(normalizedPayload)
+                .id(event.id())
+                .event(event.event())
+                .retry(event.retry())
+                .comment(event.comment())
+                .build();
     }
 
     private Map<String, Object> preparePayload(Long courseId,
@@ -115,6 +140,15 @@ public class StudentReportAnalysisService {
             body.put("model", model);
         }
         return body;
+    }
+
+    private Map<String, Object> normalizeSummary(Map<String, Object> data) {
+        if (data == null || data.get("summaryMarkdown") != null || data.get("summary") == null) {
+            return data;
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>(data);
+        normalized.put("summaryMarkdown", String.valueOf(data.get("summary")));
+        return normalized;
     }
 
     private String sanitizeModel(String requested) {
