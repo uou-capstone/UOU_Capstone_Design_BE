@@ -15,7 +15,9 @@ public interface ExamQuestionRepository extends JpaRepository<ExamQuestion, Long
     List<ExamQuestion> findByAssessment(Assessment assessment);
     
     List<ExamQuestion> findByExamSession(ExamSession examSession);
-    
+
+    boolean existsByExamSession(ExamSession examSession);
+
     List<ExamQuestion> findByExamType(ExamType examType);
     
     @Query("SELECT eq FROM ExamQuestion eq WHERE eq.assessment.id = :assessmentId ORDER BY eq.questionOrder")
