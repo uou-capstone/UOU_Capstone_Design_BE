@@ -12,6 +12,8 @@ public class CriteriaSummaryResponse {
     private final int baseItemCount;
     private final int additionalItemCount;
     private final int activeCriteriaCount;
+    private final int reportCriteriaCount;
     private final String criteriaStatus;
+    private final String reportCriteriaStatus;
     private final LocalDateTime criteriaReflectedAt;
 }

@@ -98,7 +98,7 @@ public class NotificationController {
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @PreAuthorize("hasAnyAuthority('STUDENT','TEACHER')")
     public Flux<ServerSentEvent<Map<String, Object>>> stream() {
-        Long userId = currentUserResolver.getUser().getId();
+        Long userId = currentUserResolver.getUserId();
 
         Flux<ServerSentEvent<Map<String, Object>>> source = streamRegistry.register(userId);
 

@@ -14,6 +14,7 @@ import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamType;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationService;
+import io.github.uou_capstone.aiplatform.domain.learning.service.LearningDataCleanupService;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.generation.service.MaterialGenerationService;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
@@ -55,6 +56,7 @@ class CourseServiceContentsTest {
     @Mock private ExamGenerationService examGenerationService;
     @Mock private MaterialGenerationService materialGenerationService;
     @Mock private CourseAccessService courseAccessService;
+    @Mock private LearningDataCleanupService learningDataCleanupService;
 
     @InjectMocks
     private CourseService courseService;

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.FiveChoiceProblemDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.GradingResponseDto;
 import io.github.uou_capstone.aiplatform.domain.exam.dto.OxProblemDto;
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +48,7 @@ public class ExamGradingService {
     private final ObjectMapper objectMapper;
     private final AsyncTaskService asyncTaskService;
     private final FastApiBridgeClient fastApiBridgeClient;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     /**
      * 시험 채점 (동기)
@@ -115,6 +118,7 @@ public class ExamGradingService {
                             feedbackProfileRaw, new TypeReference<Map<String, Object>>() {});
                     examResult.updateUserFeedback(feedbackMap);
                     examResultRepository.save(examResult);
+                    invalidateForExamResult(examResult, "exam_async_feedback_updated");
                 }
             }
 
@@ -140,6 +144,13 @@ public class ExamGradingService {
      */
     @Transactional
     public GradingResponseDto gradeAndSaveResult(ExamResult examResult, List<Map<String, Object>> userAnswers) {
+        return gradeAndSaveResult(examResult, userAnswers, true);
+    }
+
+    @Transactional
+    public GradingResponseDto gradeAndSaveResult(ExamResult examResult,
+                                                 List<Map<String, Object>> userAnswers,
+                                                 boolean invalidateAnalysis) {
         log.info("시험 채점 및 결과 저장: examResultId={}", examResult.getId());
 
         GradingResponseDto gradingResult = gradeExam(examResult.getExamSession().getId(), userAnswers);
@@ -163,10 +174,28 @@ public class ExamGradingService {
         }
 
         examResultRepository.save(examResult);
+        if (invalidateAnalysis) {
+            invalidateForExamResult(examResult, "exam_result_graded");
+        }
 
         log.info("시험 채점 및 결과 저장 완료: examResultId={}, totalScore={}/{}",
                 examResult.getId(), gradingResult.getTotalScore(), gradingResult.getMaxScore());
         return gradingResult;
+    }
+
+    private void invalidateForExamResult(ExamResult examResult, String reason) {
+        if (examResult == null
+                || examResult.getExamSession() == null
+                || examResult.getExamSession().getLecture() == null
+                || examResult.getExamSession().getLecture().getCourse() == null
+                || examResult.getUser() == null
+                || examResult.getUser().getStudent() == null) {
+            return;
+        }
+        analysisInvalidationService.invalidateStudent(
+                examResult.getExamSession().getLecture().getCourse().getId(),
+                examResult.getUser().getStudent().getId(),
+                reason);
     }
 
     /**
@@ -218,8 +247,9 @@ public class ExamGradingService {
             }
 
             GradingResponseDto dto = new GradingResponseDto();
-            dto.setTotalScore(readScore(gradingNode.get("total_score")));
-            dto.setMaxScore(readScore(gradingNode.get("max_score")));
+            applyNormalizedScores(dto,
+                    readOptionalScore(gradingNode.get("total_score")),
+                    readOptionalScore(gradingNode.get("max_score")));
             dto.setOverallFeedback(readText(gradingNode.get("overall_feedback")));
             dto.setQuestionGradings(parseQuestionGradings(snakeMapper, gradingNode.get("results")));
 
@@ -294,6 +324,33 @@ public class ExamGradingService {
             questionGradings.add(questionGrading);
         }
         return questionGradings;
+    }
+
+    private void applyNormalizedScores(GradingResponseDto dto, BigDecimal totalScore, BigDecimal maxScore) {
+        if (totalScore == null) {
+            dto.setTotalScore(null);
+            dto.setMaxScore(null);
+            return;
+        }
+        if (maxScore != null && maxScore.signum() > 0) {
+            dto.setTotalScore(totalScore);
+            dto.setMaxScore(maxScore);
+            return;
+        }
+
+        dto.setMaxScore(BigDecimal.valueOf(100));
+        if (totalScore.compareTo(BigDecimal.ONE) <= 0) {
+            dto.setTotalScore(totalScore.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP));
+        } else {
+            dto.setTotalScore(totalScore);
+        }
+    }
+
+    private BigDecimal readOptionalScore(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.decimalValue();
     }
 
     private BigDecimal readScore(JsonNode node) {

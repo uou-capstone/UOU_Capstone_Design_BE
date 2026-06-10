@@ -82,7 +82,7 @@ class NotificationServiceTest {
 
     @Test
     void getUnreadCount_returnsRepositoryCount() {
-        when(currentUserResolver.getUser()).thenReturn(user);
+        when(currentUserResolver.getUserId()).thenReturn(7L);
         when(notificationRepository.countByUserIdAndReadAtIsNull(7L)).thenReturn(3L);
 
         assertThat(notificationService.getUnreadCount()).isEqualTo(3L);
@@ -94,7 +94,7 @@ class NotificationServiceTest {
                 .user(user).type(NotificationType.COURSE_JOIN_APPROVED)
                 .title("t").body("b").resourceType("course").resourceId(1L).build();
         ReflectionTestUtils.setField(target, "id", 42L);
-        when(currentUserResolver.getUser()).thenReturn(user);
+        when(currentUserResolver.getUserId()).thenReturn(7L);
         when(notificationRepository.findByIdAndUserId(42L, 7L)).thenReturn(Optional.of(target));
 
         notificationService.markAsRead(42L);
@@ -104,7 +104,7 @@ class NotificationServiceTest {
 
     @Test
     void markAsRead_throwsWhenNotFound() {
-        when(currentUserResolver.getUser()).thenReturn(user);
+        when(currentUserResolver.getUserId()).thenReturn(7L);
         when(notificationRepository.findByIdAndUserId(anyLong(), anyLong())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> notificationService.markAsRead(999L))
@@ -114,7 +114,7 @@ class NotificationServiceTest {
 
     @Test
     void markAllAsRead_callsBulkUpdate() {
-        when(currentUserResolver.getUser()).thenReturn(user);
+        when(currentUserResolver.getUserId()).thenReturn(7L);
 
         notificationService.markAllAsRead();
 

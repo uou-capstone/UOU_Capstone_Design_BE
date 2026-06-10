@@ -1,6 +1,7 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.dto.ai;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -23,6 +24,7 @@ public class StudentAiReportContextResponse {
     private final List<AiCompetencyDto> competencies;
     private final List<AiEvidenceItemDto> evidence;
     private final List<AiLearningEvidenceDto> learningEvidence;
+    private final List<ReportCriterionResponse> reportCriteria;
     private final AiIntegratedLearningSummaryDto integratedLearningSummary;
     private final AiNarrativeDto existingNarrative;
     private final List<String> reportWarnings;

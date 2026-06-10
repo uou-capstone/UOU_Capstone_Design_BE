@@ -722,6 +722,48 @@ public class ExamGenerationService {
         }
     }
 
+    /**
+     * V5 hydration 배포 전에 생성되어 ExamQuestion 행이 없는 READY 세션을 위한 lazy backfill.
+     * 호출자의 쓰기 트랜잭션을 그대로 사용 (자체 @Transactional 없음).
+     * 행이 이미 있거나 examContentJson 이 비어 있으면 no-op.
+     */
+    @SuppressWarnings("unchecked")
+    public void ensureExamQuestionsHydrated(ExamSession session) {
+        if (examQuestionRepository.existsByExamSession(session)) return;
+
+        Map<String, Object> examContent = session.getExamContentJson();
+        if (examContent == null || examContent.isEmpty()) return;
+
+        ExamType type = session.getExamType();
+        switch (type) {
+            case FLASH_CARD -> {
+                List<Map<String, Object>> raw = (List<Map<String, Object>>) examContent.get("flashCards");
+                if (raw == null) return;
+                hydrateFlashCards(session, raw.stream()
+                        .map(m -> objectMapper.convertValue(m, FlashCardDto.class)).toList());
+            }
+            case OX_PROBLEM -> {
+                List<Map<String, Object>> raw = (List<Map<String, Object>>) examContent.get("oxProblems");
+                if (raw == null) return;
+                hydrateOxProblems(session, raw.stream()
+                        .map(m -> objectMapper.convertValue(m, OxProblemDto.class)).toList());
+            }
+            case FIVE_CHOICE -> {
+                List<Map<String, Object>> raw = (List<Map<String, Object>>) examContent.get("fiveChoiceProblems");
+                if (raw == null) return;
+                hydrateFiveChoice(session, raw.stream()
+                        .map(m -> objectMapper.convertValue(m, FiveChoiceProblemDto.class)).toList());
+            }
+            case SHORT_ANSWER -> {
+                List<Map<String, Object>> raw = (List<Map<String, Object>>) examContent.get("shortAnswerProblems");
+                if (raw == null) return;
+                hydrateShortAnswers(session, raw.stream()
+                        .map(m -> objectMapper.convertValue(m, ShortAnswerProblemDto.class)).toList());
+            }
+            case DEBATE -> { /* DEBATE 는 hydration 대상 없음 */ }
+        }
+    }
+
     private void hydrateFlashCards(ExamSession session, List<FlashCardDto> cards) {
         if (cards == null || cards.isEmpty()) return;
         int order = 1;
@@ -837,7 +879,7 @@ public class ExamGenerationService {
      * <p>응답은 ExamQuestion 행 + questionMetadata 에서 학생 공개 필드만 화이트리스트로 추출한다.
      * 정답·해설·평가 기준 등은 DTO 매핑 단계에서 구조적으로 제외 — 새 DTO 만 사용해 누출 방지.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public StudentExamDetailDto getStudentExamSession(Long examSessionId) {
         ExamSession session = examSessionRepository.findById(examSessionId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.SESSION_NOT_FOUND));
@@ -851,6 +893,9 @@ public class ExamGenerationService {
 
         Long courseId = session.getLecture().getCourse().getId();
         courseAccessService.loadCourseAsParticipant(courseId);
+
+        // V5 배포 이전 READY 세션은 ExamQuestion 행이 없을 수 있어 examContentJson 에서 lazy backfill.
+        ensureExamQuestionsHydrated(session);
 
         List<ExamQuestion> questions =
                 examQuestionRepository.findByExamSessionIdOrderByQuestionOrder(session.getId());

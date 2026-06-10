@@ -8,8 +8,10 @@ import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.Crite
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionCreateRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriterionUpdateRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.entity.CourseReportCriterion;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.repository.CourseReportCriterionRepository;
+import io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisInvalidationService;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,10 +25,11 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CourseReportCriterionService {
 
-    private static final int BASE_REPORT_ITEM_COUNT = 4;
-
     private final CourseAccessService courseAccessService;
     private final CourseReportCriterionRepository repository;
+    private final CourseReportCriteriaCatalog catalog;
+    private final CourseReportCriteriaQueryService criteriaQueryService;
+    private final StudentReportAnalysisInvalidationService analysisInvalidationService;
 
     @Transactional(readOnly = true)
     public List<CriterionResponse> list(Long courseId) {
@@ -34,6 +37,12 @@ public class CourseReportCriterionService {
         return repository.findByCourseOrderByIdAsc(course).stream()
                 .map(CriterionResponse::new)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReportCriterionResponse> listAll(Long courseId) {
+        Course course = courseAccessService.loadCourseAsTeacher(courseId);
+        return criteriaQueryService.listAll(course);
     }
 
     @Transactional(readOnly = true)
@@ -46,10 +55,12 @@ public class CourseReportCriterionService {
                 .orElse(null);
 
         return CriteriaSummaryResponse.builder()
-                .baseItemCount(BASE_REPORT_ITEM_COUNT)
+                .baseItemCount(catalog.builtInCount())
                 .additionalItemCount(criteria.size())
                 .activeCriteriaCount(criteria.size())
+                .reportCriteriaCount(catalog.builtInCount() + criteria.size())
                 .criteriaStatus(criteria.isEmpty() ? CriteriaStatus.NONE.name() : CriteriaStatus.ACTIVE.name())
+                .reportCriteriaStatus(CriteriaStatus.ACTIVE.name())
                 .criteriaReflectedAt(reflectedAt)
                 .build();
     }
@@ -64,6 +75,7 @@ public class CourseReportCriterionService {
                         .description(req.getDescription())
                         .weight(req.getWeight())
                         .build());
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_created");
         return new CriterionResponse(saved);
     }
 
@@ -73,6 +85,7 @@ public class CourseReportCriterionService {
         CourseReportCriterion c = repository.findByIdAndCourse(criterionId, course)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
         c.update(req.getLabel(), req.getDescription(), req.getWeight());
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_updated");
         return new CriterionResponse(c);
     }
 
@@ -82,5 +95,6 @@ public class CourseReportCriterionService {
         CourseReportCriterion c = repository.findByIdAndCourse(criterionId, course)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND));
         repository.delete(c);
+        analysisInvalidationService.invalidateCourse(course.getId(), "report_criterion_deleted");
     }
 }

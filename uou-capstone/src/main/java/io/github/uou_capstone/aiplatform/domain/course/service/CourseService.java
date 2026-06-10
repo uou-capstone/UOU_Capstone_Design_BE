@@ -22,6 +22,7 @@ import io.github.uou_capstone.aiplatform.domain.exam.entity.ExamSession;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.service.ExamGenerationService;
+import io.github.uou_capstone.aiplatform.domain.learning.service.LearningDataCleanupService;
 import io.github.uou_capstone.aiplatform.domain.material.entity.Material;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSession;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
@@ -62,6 +63,7 @@ public class CourseService {
     private final ExamGenerationService examGenerationService;
     private final MaterialGenerationService materialGenerationService;
     private final CourseAccessService courseAccessService;
+    private final LearningDataCleanupService learningDataCleanupService;
 
     @Transactional
     public Course createCourse(CourseCreateRequestDto requestDto) { //강의실 생성
@@ -140,7 +142,7 @@ public class CourseService {
 
     @Transactional(readOnly = true)
     public Course getCourseById(Long courseId) { //강의실 id 상세 조회
-        return courseRepository.findById(courseId)
+        return courseRepository.findDetailById(courseId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
     }
 
@@ -274,6 +276,7 @@ public class CourseService {
         }
 
         // 3. 강의(lecture)를 참조하는 자식 테이블 먼저 삭제 (FK 제약으로 인한 삭제 실패 방지)
+        learningDataCleanupService.deleteByCourseId(courseId);
         generatedContentRepository.clearSessionByCourseId(courseId);  // generated_content.session_id 참조 해제
         generationSessionRepository.deleteByLectureCourseId(courseId);
         examSessionRepository.deleteByLectureCourseId(courseId);

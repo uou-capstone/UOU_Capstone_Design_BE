@@ -8,6 +8,12 @@ BE는 `POST /api/learning/sessions/{lectureId}` 호출 시 `sessionId`가 없으
 
 ## Required Flow
 
+### Material replacement/deletion rule
+
+When a lecture PDF is deleted or replaced, BE ends the active Spring chat sessions for that lecture and invalidates the matching FastAPI sessions by `chatSessionId`.
+
+After material deletion or replacement, FE must discard the previously stored `chatSessionId` for that lecture and call `POST /api/learning/sessions/{lectureId}` again. Do not continue sending events with the old `chatSessionId`; BE rejects ended sessions before calling FastAPI.
+
 ### 1. Enter lecture learning screen
 
 ```http
@@ -161,6 +167,7 @@ Suggested component state order:
 - Do not clear messages after session creation unless the history request returned an empty array.
 - Do not show the empty state while the history request is still loading.
 - Do not send `SAVE_AND_EXIT` from route cleanup if users should be able to resume.
+- After material deletion or replacement, do not reuse the old `chatSessionId`; re-enter the lecture session API and use the new `chatSessionId`.
 
 ## Smoke Test
 

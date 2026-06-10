@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.domain.course.entity.Course;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantChatRequest;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.CriteriaAssistantRequest;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.entity.CourseReportCriterion;
 import io.github.uou_capstone.aiplatform.domain.course.report.criteria.repository.CourseReportCriterionRepository;
 import io.github.uou_capstone.aiplatform.domain.course.service.CourseAccessService;
@@ -21,6 +22,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
  * Report Criteria AI Assistant — FastAPI {@code /bridge/report/criteria_assistant_stream} 호출.
@@ -38,6 +40,7 @@ public class CourseReportCriteriaAssistantService {
 
     private final CourseAccessService courseAccessService;
     private final CourseReportCriterionRepository criterionRepository;
+    private final CourseReportCriteriaCatalog catalog;
     private final FastApiBridgeClient fastApiBridgeClient;
     private final ObjectMapper objectMapper;
 
@@ -45,14 +48,9 @@ public class CourseReportCriteriaAssistantService {
         Course course = courseAccessService.loadCourseAsTeacher(courseId);
         List<CourseReportCriterion> existing = criterionRepository.findByCourseOrderByIdAsc(course);
 
-        List<Map<String, Object>> existingDtos = existing.stream()
-                .map(c -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("label", c.getLabel());
-                    m.put("description", c.getDescription());
-                    m.put("weight", c.getWeight());
-                    return m;
-                })
+        List<Map<String, Object>> existingDtos = Stream.concat(
+                        catalog.builtInCriteria().stream().map(this::toAssistantCriterion),
+                        existing.stream().map(this::toAssistantCriterion))
                 .toList();
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -85,7 +83,9 @@ public class CourseReportCriteriaAssistantService {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("courseId", course.getId());
         body.put("courseName", course.getTitle());
-        body.put("builtInCriteria", List.of());
+        body.put("builtInCriteria", catalog.builtInCriteria().stream()
+                .map(this::toAssistantCriterion)
+                .toList());
         body.put("additionalCriteria", additional.stream()
                 .map(this::toAssistantCriterion)
                 .toList());
@@ -128,7 +128,21 @@ public class CourseReportCriteriaAssistantService {
         m.put("description", c.getDescription());
         m.put("weight", c.getWeight());
         m.put("updatedAt", c.getUpdatedAt() != null ? c.getUpdatedAt().toString() : null);
+        m.put("builtIn", false);
         m.put("isBuiltIn", false);
+        return m;
+    }
+
+    private Map<String, Object> toAssistantCriterion(ReportCriterionResponse c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", c.getId());
+        m.put("key", c.getKey());
+        m.put("name", c.getLabel());
+        m.put("label", c.getLabel());
+        m.put("description", c.getDescription());
+        m.put("weight", c.getWeight());
+        m.put("builtIn", c.isBuiltIn());
+        m.put("isBuiltIn", c.isBuiltIn());
         return m;
     }
 

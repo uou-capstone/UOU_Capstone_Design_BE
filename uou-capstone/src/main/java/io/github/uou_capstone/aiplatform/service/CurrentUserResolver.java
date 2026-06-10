@@ -24,6 +24,7 @@ public class CurrentUserResolver {
     private final UserRepository userRepository;
 
     private User cachedUser;
+    private Long cachedUserId;
 
     public User getUser() {
         if (cachedUser == null) {
@@ -32,6 +33,18 @@ public class CurrentUserResolver {
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
         }
         return cachedUser;
+    }
+
+    public Long getUserId() {
+        if (cachedUser != null) {
+            return cachedUser.getId();
+        }
+        if (cachedUserId == null) {
+            String email = SecurityContextHolder.getContext().getAuthentication().getName();
+            cachedUserId = userRepository.findIdByEmail(email)
+                    .orElseThrow(() -> new BusinessException(CommonErrorCode.MEMBER_NOT_FOUND));
+        }
+        return cachedUserId;
     }
 
     public Student getStudent() {

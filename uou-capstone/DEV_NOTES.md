@@ -4,6 +4,36 @@
 
 ---
 
+## [2026-06-04] 강의실 삭제 시 learning 세션 FK 실패
+
+### 증상
+
+`DELETE /api/courses/{courseId}` 요청에서 강의실 하위 강의를 삭제하려 할 때 `learning_chat_sessions.lecture_id` FK 때문에 MySQL `Cannot delete or update a parent row` 오류가 발생했다. 같은 원인으로 개별 강의 삭제도 학습 세션이 남아 있으면 실패할 수 있었다.
+
+### 원인
+
+강의실/강의 삭제 흐름은 material, exam, generation 데이터만 lecture 삭제 전에 정리했다. v3 learning 채팅 이력과 evidence 테이블은 `lectures`, `material`, `learning_chat_sessions`를 FK로 참조하지만 삭제 순서에 포함되지 않았다.
+
+### 조치
+
+- learning 하위 데이터 삭제 순서를 `session evidence -> integrated evidence -> chat messages -> chat sessions`로 고정한 정리 서비스를 추가했다.
+- 강의실 삭제와 개별 강의 삭제 모두 기존 lecture 하위 데이터 삭제 전에 learning 정리를 먼저 수행하도록 연결했다.
+- 삭제 순서 회귀를 막는 단위 테스트를 추가했다.
+
+### 검증
+
+- `./gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningDataCleanupServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.service.CourseServiceDeleteTest --tests io.github.uou_capstone.aiplatform.domain.course.lecture.service.LectureServiceDeleteTest --no-daemon`
+- `spring-lint`: 이번 변경 파일 기준 위반 없음
+
+### 관련 파일
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningDataCleanupService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/repository/*Repository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/service/CourseService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/lecture/service/LectureService.java`
+
+---
+
 ## [2026-06-03] Report Criteria Assistant Chat Spring 프록시 추가
 
 ### 증상
@@ -2113,3 +2143,81 @@ The frontend intermittently showed the server as offline and failed to load `/ap
 - `src/main/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthService.java`
 - `src/main/java/io/github/uou_capstone/aiplatform/security/jwt/RefreshTokenStore.java`
 - `src/test/java/io/github/uou_capstone/aiplatform/domain/user/service/AuthServiceTest.java`
+
+---
+
+## [2026-06-04] 통합학습 근거 중첩 payload 리포트 집계
+
+### Symptoms
+
+통합학습에서 퀴즈를 채점하고 복습 학습까지 진행했는데 학생 리포트의 통합학습 요약이 `퀴즈 시도 0회`, 약점/해결 개념 없음으로 표시됐다. `learningEvidence`가 내려왔더라도 평균 점수와 통과/미통과 집계가 비어 있었다.
+
+### Cause
+
+FastAPI v3가 내려주는 근거는 `quiz.quizType`, `grading.scoreRatio`, `grading.passed`, `diagnosis.weakConcepts`, `createdAt`처럼 중첩 구조다. Spring 저장 로직은 루트의 `quizType`, `scoreRatio`, `passed`, `weakConcepts`, `occurredAt`만 읽어 핵심 컬럼을 비워 저장했고, 리포트 집계도 컬럼 값만 기준으로 계산했다. 복습 완료 이벤트명 `MISCONCEPTION_REPAIR_COMPLETED`도 해결 개념 이벤트 목록에 없었다.
+
+### Fix
+
+- `LearningSessionEvidenceService`가 FastAPI 중첩 payload를 읽어 quiz type, score ratio, passed, wrong items, weak concepts, createdAt을 정규화해 저장하도록 보강했다.
+- `CourseStudentReportService`가 기존에 저장된 raw `evidence_json`의 중첩 값도 fallback으로 읽어 `learningEvidence`와 `integratedLearningSummary`를 계산하도록 수정했다.
+- `MISCONCEPTION_REPAIR_COMPLETED`를 해결 개념 집계 이벤트에 포함했다.
+
+### Verification
+```powershell
+.\gradlew.bat test --tests io.github.uou_capstone.aiplatform.domain.learning.service.LearningSessionEvidenceServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --no-daemon
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportService.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/learning/service/LearningSessionEvidenceServiceTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/service/CourseStudentReportServiceAiContextTest.java`
+
+---
+
+## [2026-06-08] Student AI report analysis Spring proxy
+
+### Symptoms
+
+FE가 Spring만 호출하는 구조인데도 학생별 AI 리포트 분석 실행, 저장 결과 조회, SSE 재분석 흐름이 없어서 교사 커스텀 평가 기준을 반영한 학생 리포트 재분석을 할 수 없었다. 기존 학생 리포트는 context까지만 제공했고, 분석 실행/저장은 FE가 직접 FastAPI를 호출해야 하는 구조처럼 남아 있었다.
+
+### Cause
+
+Spring에 학생 분석 실행/조회 API가 없었고, FastAPI에도 Spring 프록시를 전제로 한 저장 경로가 연결되어 있지 않았다. 또한 분석 기준은 course custom criteria만 내려가고, 학생 분석 결과를 저장할 테이블과 최신 결과 조회 엔드포인트가 없어서 FE가 재분석 결과를 다시 불러오는 경로도 비어 있었다.
+
+### Fix
+
+- `CourseReportController`에 `GET /students/{studentId}/analysis`, `POST /students/{studentId}/analyze`, `POST /students/{studentId}/analyze/stream`을 추가했다.
+- `StudentReportAnalysisService`와 `StudentReportAnalysisPersister`를 추가해 FastAPI sync/stream 결과를 저장하고, `done.data`가 객체일 때만 최신 분석으로 UPSERT하도록 했다.
+- `student_report_analyses` Flyway 테이블을 추가해 `(course_id, student_id)` 기준 최신 1건을 저장하도록 했다.
+- `FastApiBridgeClient`에 `/api/v3/report/student/analyze`와 `/api/v3/report/student/analyze/stream` 호출 메서드를 추가했다.
+- `StudentAiReportContextResponse`의 `reportCriteria`를 그대로 FastAPI 분석 context에 포함해 기본 10개 + 커스텀 평가 기준이 분석에 반영되도록 연결했다.
+- `model`은 Spring/FastAPI 양쪽 allowlist로 제한해 FE 임의 값이 그대로 분석 엔진에 전달되지 않도록 막았다.
+
+### Verification
+
+```powershell
+.\gradlew.bat test --no-daemon --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisPersisterTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.repository.StudentReportAnalysisUniqueConstraintTest --tests io.github.uou_capstone.aiplatform.domain.course.report.controller.CourseReportControllerTest
+.\gradlew.bat test --no-daemon --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriterionServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.controller.CourseReportCriteriaControllerTest --tests io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaAssistantServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.service.CourseStudentReportServiceAiContextTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentchat.service.StudentReportChatServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisServiceTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service.StudentReportAnalysisPersisterTest --tests io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.repository.StudentReportAnalysisUniqueConstraintTest --tests io.github.uou_capstone.aiplatform.domain.course.report.controller.CourseReportControllerTest
+python -m pytest tests/test_report_criteria.py
+git diff --check
+```
+
+### Related Files
+
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportController.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/dto/StudentReportAnalysisRequest.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/dto/StudentReportAnalysisResponse.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/entity/StudentReportAnalysis.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/repository/StudentReportAnalysisRepository.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisPersister.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisService.java`
+- `src/main/java/io/github/uou_capstone/aiplatform/integration/fastapi/FastApiBridgeClient.java`
+- `src/main/resources/db/migration/V12__student_report_analysis.sql`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/controller/CourseReportControllerTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/repository/StudentReportAnalysisUniqueConstraintTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisPersisterTest.java`
+- `src/test/java/io/github/uou_capstone/aiplatform/domain/course/report/studentanalysis/service/StudentReportAnalysisServiceTest.java`
+- `../ai-service/app/services/gemini_service.py`
+- `../ai-service/tests/test_report_criteria.py`

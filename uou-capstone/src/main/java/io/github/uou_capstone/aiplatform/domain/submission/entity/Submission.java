@@ -46,6 +46,7 @@ public class Submission extends BaseTimeEntity {
 
     public void updateExamResult(ExamResult examResult) {
         this.examResult = examResult;
+        this.status = SubmissionStatus.GRADED;
     }
 }
 

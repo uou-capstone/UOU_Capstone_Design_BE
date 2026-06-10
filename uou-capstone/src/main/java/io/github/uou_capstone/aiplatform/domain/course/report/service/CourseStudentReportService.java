@@ -19,6 +19,8 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ScoreSummaryDt
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentInfoDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaQueryService;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.SubmissionSummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiActivitySummaryDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiAssessmentItemDto;
@@ -91,7 +93,7 @@ public class CourseStudentReportService {
     private static final double AI_EXCELLENT_THRESHOLD = 90.0;
     private static final double AI_WEAK_CONCEPT_SCORE_THRESHOLD = 70.0;
     private static final Set<String> RESOLVED_INTERVENTION_EVENTS = Set.of(
-            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "RESOLVED");
+            "INTERVENTION_RESOLVED", "MISCONCEPTION_RESOLVED", "MISCONCEPTION_REPAIR_COMPLETED", "RESOLVED");
 
     private static final double STRONG_THRESHOLD = 85.0;
     private static final double WATCH_THRESHOLD = 70.0;
@@ -112,6 +114,7 @@ public class CourseStudentReportService {
     private final SubmissionRepository submissionRepository;
     private final AssessmentRepository assessmentRepository;
     private final LearningSessionEvidenceRepository learningSessionEvidenceRepository;
+    private final CourseReportCriteriaQueryService criteriaQueryService;
     private final CurrentUserResolver currentUserResolver;
 
     @Transactional(readOnly = true)
@@ -202,6 +205,7 @@ public class CourseStudentReportService {
                 .toList();
         AiIntegratedLearningSummaryDto integratedLearningSummary =
                 buildIntegratedLearningSummary(sessionEvidence);
+        List<ReportCriterionResponse> reportCriteria = criteriaQueryService.listAll(course);
         ReportStatus reportStatus = computeReportStatus(examResults.size(), scoreSummary, competencies);
         NarrativeReportDto narrative = buildNarrative(scoreSummary, competencies, reportStatus);
         LocalDateTime reportTimestamp = activitySummary.getLatestActivityAt();
@@ -224,6 +228,7 @@ public class CourseStudentReportService {
                 .evidence(evidence)
                 .integratedLearningSummary(integratedLearningSummary)
                 .learningEvidence(learningEvidence)
+                .reportCriteria(reportCriteria)
                 .narrativeReport(narrative)
                 .overallScorePercent(scoreSummary.getAverageScorePercent())
                 .headline(buildHeadline(scoreSummary, reportStatus))
@@ -296,6 +301,7 @@ public class CourseStudentReportService {
                 .toList();
         AiIntegratedLearningSummaryDto integratedLearningSummary =
                 buildIntegratedLearningSummary(sessionEvidence);
+        List<ReportCriterionResponse> reportCriteria = criteriaQueryService.listAll(course);
 
         ReportStatus reportStatus = computeReportStatus(examResults.size(), baseScore, baseCompetencies);
         NarrativeReportDto baseNarrative = buildNarrative(baseScore, baseCompetencies, reportStatus);
@@ -322,6 +328,7 @@ public class CourseStudentReportService {
                 .competencies(competencies)
                 .evidence(evidence)
                 .learningEvidence(learningEvidence)
+                .reportCriteria(reportCriteria)
                 .integratedLearningSummary(integratedLearningSummary)
                 .existingNarrative(narrative)
                 .reportWarnings(warnings)
@@ -338,11 +345,11 @@ public class CourseStudentReportService {
                 .sessionId(evidence.getSession() != null ? evidence.getSession().getId() : null)
                 .pageNumber(evidence.getPageNumber())
                 .eventType(evidence.getEventType())
-                .quizType(evidence.getQuizType())
-                .scoreRatio(evidence.getScoreRatio())
-                .passed(evidence.getPassed())
-                .weakConcepts(evidence.getWeakConcepts() == null ? List.of() : evidence.getWeakConcepts())
-                .wrongItems(evidence.getWrongItems() == null ? List.of() : evidence.getWrongItems())
+                .quizType(effectiveQuizType(evidence))
+                .scoreRatio(effectiveScoreRatio(evidence))
+                .passed(effectivePassed(evidence))
+                .weakConcepts(effectiveWeakConcepts(evidence))
+                .wrongItems(effectiveWrongItems(evidence))
                 .evidence(evidence.getEvidence() == null ? Map.of() : evidence.getEvidence())
                 .occurredAt(evidence.getOccurredAt())
                 .build();
@@ -350,17 +357,17 @@ public class CourseStudentReportService {
 
     private AiIntegratedLearningSummaryDto buildIntegratedLearningSummary(List<LearningSessionEvidence> evidence) {
         long quizAttemptCount = evidence.stream()
-                .filter(e -> firstNonBlank(e.getQuizType()) != null || e.getScoreRatio() != null)
+                .filter(e -> firstNonBlank(effectiveQuizType(e)) != null || effectiveScoreRatio(e) != null)
                 .count();
         long passCount = evidence.stream()
-                .filter(e -> Boolean.TRUE.equals(e.getPassed()))
+                .filter(e -> Boolean.TRUE.equals(effectivePassed(e)))
                 .count();
         long failCount = evidence.stream()
-                .filter(e -> Boolean.FALSE.equals(e.getPassed()))
+                .filter(e -> Boolean.FALSE.equals(effectivePassed(e)))
                 .count();
 
         List<Double> scoreRatios = evidence.stream()
-                .map(LearningSessionEvidence::getScoreRatio)
+                .map(this::effectiveScoreRatio)
                 .filter(Objects::nonNull)
                 .toList();
         Double averageScoreRatio = scoreRatios.isEmpty()
@@ -370,10 +377,7 @@ public class CourseStudentReportService {
         Map<String, Long> weakConceptCounts = new LinkedHashMap<>();
         Map<String, Long> resolvedConceptCounts = new LinkedHashMap<>();
         for (LearningSessionEvidence item : evidence) {
-            if (item.getWeakConcepts() == null) {
-                continue;
-            }
-            for (String concept : item.getWeakConcepts()) {
+            for (String concept : effectiveWeakConcepts(item)) {
                 if (concept != null && !concept.isBlank()) {
                     if (RESOLVED_INTERVENTION_EVENTS.contains(item.getEventType())) {
                         resolvedConceptCounts.merge(concept, 1L, Long::sum);
@@ -406,6 +410,80 @@ public class CourseStudentReportService {
                 .resolvedConcepts(resolvedConcepts)
                 .latestActivityAt(latestActivityAt)
                 .build();
+    }
+
+    private String effectiveQuizType(LearningSessionEvidence evidence) {
+        Map<?, ?> quiz = nestedMap(evidence.getEvidence(), "quiz");
+        return firstNonBlank(
+                evidence.getQuizType(),
+                asString(rawValue(evidence, "quizType")),
+                asString(rawValue(evidence, "quiz_type")),
+                asString(quiz.get("quizType")),
+                asString(quiz.get("quiz_type"))
+        );
+    }
+
+    private Double effectiveScoreRatio(LearningSessionEvidence evidence) {
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        Double value = firstNonNull(
+                evidence.getScoreRatio(),
+                asDouble(rawValue(evidence, "scoreRatio")),
+                asDouble(rawValue(evidence, "score_ratio")),
+                asDouble(grading.get("scoreRatio")),
+                asDouble(grading.get("score_ratio"))
+        );
+        return value == null ? null : round3(value);
+    }
+
+    private Boolean effectivePassed(LearningSessionEvidence evidence) {
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        return firstNonNull(
+                evidence.getPassed(),
+                asBoolean(rawValue(evidence, "passed")),
+                asBoolean(grading.get("passed"))
+        );
+    }
+
+    private List<String> effectiveWeakConcepts(LearningSessionEvidence evidence) {
+        if (evidence.getWeakConcepts() != null && !evidence.getWeakConcepts().isEmpty()) {
+            return evidence.getWeakConcepts();
+        }
+        Map<?, ?> diagnosis = nestedMap(evidence.getEvidence(), "diagnosis");
+        return asStringList(firstNonNull(
+                rawValue(evidence, "weakConcepts"),
+                rawValue(evidence, "weak_concepts"),
+                diagnosis.get("weakConcepts"),
+                diagnosis.get("weak_concepts")
+        ));
+    }
+
+    private List<Object> effectiveWrongItems(LearningSessionEvidence evidence) {
+        if (evidence.getWrongItems() != null && !evidence.getWrongItems().isEmpty()) {
+            return evidence.getWrongItems();
+        }
+        Map<?, ?> grading = nestedMap(evidence.getEvidence(), "grading");
+        return asObjectList(firstNonNull(
+                rawValue(evidence, "wrongItems"),
+                rawValue(evidence, "wrong_items"),
+                rawValue(evidence, "missedQuestions"),
+                rawValue(evidence, "missed_questions"),
+                grading.get("wrongItems"),
+                grading.get("wrong_items"),
+                grading.get("missedQuestions"),
+                grading.get("missed_questions")
+        ));
+    }
+
+    private Object rawValue(LearningSessionEvidence evidence, String key) {
+        return evidence.getEvidence() == null ? null : evidence.getEvidence().get(key);
+    }
+
+    private Map<?, ?> nestedMap(Map<String, Object> source, String key) {
+        if (source == null) {
+            return Map.of();
+        }
+        Object value = source.get(key);
+        return value instanceof Map<?, ?> map ? map : Map.of();
     }
 
     private AiScoreSummaryDto toAiScoreSummary(ScoreSummaryDto base, List<ExamResult> examResults) {
@@ -761,13 +839,15 @@ public class CourseStudentReportService {
 
         String topStrength = competencies.stream()
                 .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
-                .max(Comparator.comparingDouble(c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .filter(c -> c.getAverageScorePercent() != null)
+                .max(Comparator.comparingDouble(CompetencyDto::getAverageScorePercent))
                 .map(CompetencyDto::getLabel)
                 .orElse(null);
 
         String topImprovement = competencies.stream()
                 .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
-                .min(Comparator.comparingDouble(c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .filter(c -> c.getAverageScorePercent() != null)
+                .min(Comparator.comparingDouble(CompetencyDto::getAverageScorePercent))
                 .map(CompetencyDto::getLabel)
                 .orElse(null);
 
@@ -878,8 +958,9 @@ public class CourseStudentReportService {
 
         return byKey.values().stream()
                 .map(CompetencyAggregator::toDto)
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        (CompetencyDto c) -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ).reversed())
                 .toList();
     }
@@ -938,8 +1019,63 @@ public class CourseStudentReportService {
         }
     }
 
+    private static Double asDouble(Object value) {
+        if (value instanceof Number n) {
+            return n.doubleValue();
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            try {
+                return Double.parseDouble(s);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Boolean asBoolean(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            return Boolean.parseBoolean(s);
+        }
+        return null;
+    }
+
+    private static List<String> asStringList(Object value) {
+        if (!(value instanceof List<?> raw)) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (Object item : raw) {
+            String text = asString(item);
+            if (text != null && !text.isBlank()) {
+                result.add(text);
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<Object> asObjectList(Object value) {
+        if (!(value instanceof List<?> raw)) {
+            return List.of();
+        }
+        return List.copyOf(raw);
+    }
+
     private static String asString(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    @SafeVarargs
+    private static <T> T firstNonNull(T... values) {
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static String firstNonBlank(String... values) {
@@ -1129,34 +1265,34 @@ public class CourseStudentReportService {
                                               ReportStatus reportStatus) {
         Double avg = scoreSummary.getAverageScorePercent();
         String summary;
-        if (reportStatus == ReportStatus.INSUFFICIENT_DATA) {
+        if (reportStatus == ReportStatus.INSUFFICIENT_DATA || avg == null) {
             summary = "아직 응시한 시험이 없어 역량 분석을 제공할 수 없습니다.";
         } else if (reportStatus == ReportStatus.EXCELLING) {
-            summary = String.format("평균 %.1f점으로 모든 역량에서 우수한 수행을 보이고 있습니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점으로 모든 역량에서 우수한 수행을 보이고 있습니다.", avg);
         } else if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
-            summary = String.format("평균 %.1f점, 일부 역량에서 보강이 필요합니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점, 일부 역량에서 보강이 필요합니다.", avg);
         } else {
-            summary = String.format("평균 %.1f점, 전반적으로 안정적인 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+            summary = String.format("평균 %.1f점, 전반적으로 안정적인 학습 흐름을 유지하고 있습니다.", avg);
         }
 
         List<String> strengths = competencies.stream()
                 .filter(c -> CompetencyStatus.STRONG.value().equals(c.getStatus()))
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        (CompetencyDto c) -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ).reversed())
                 .limit(NARRATIVE_LIST_SIZE)
-                .map(c -> String.format("%s 평균 %.1f점", c.getLabel(),
-                        c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .map(c -> String.format("%s 평균 %.1f점", c.getLabel(), c.getAverageScorePercent()))
                 .toList();
 
         List<String> improvements = competencies.stream()
                 .filter(c -> CompetencyStatus.NEEDS_IMPROVEMENT.value().equals(c.getStatus()))
+                .filter(c -> c.getAverageScorePercent() != null)
                 .sorted(Comparator.comparingDouble(
-                        c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                        CompetencyDto::getAverageScorePercent
                 ))
                 .limit(NARRATIVE_LIST_SIZE)
-                .map(c -> String.format("%s 평균 %.1f점 — 보강 필요", c.getLabel(),
-                        c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()))
+                .map(c -> String.format("%s 평균 %.1f점 — 보강 필요", c.getLabel(), c.getAverageScorePercent()))
                 .toList();
 
         List<String> nextSteps = new ArrayList<>();
@@ -1166,8 +1302,9 @@ public class CourseStudentReportService {
         } else {
             CompetencyDto weakest = competencies.stream()
                     .filter(c -> !CompetencyStatus.INSUFFICIENT_DATA.value().equals(c.getStatus()))
+                    .filter(c -> c.getAverageScorePercent() != null)
                     .min(Comparator.comparingDouble(
-                            c -> c.getAverageScorePercent() == null ? 0.0 : c.getAverageScorePercent()
+                            CompetencyDto::getAverageScorePercent
                     ))
                     .orElse(null);
             if (weakest != null) {
@@ -1193,12 +1330,12 @@ public class CourseStudentReportService {
             return "분석 가능한 학습 데이터가 더 필요합니다.";
         }
         if (reportStatus == ReportStatus.EXCELLING) {
-            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg == null ? 0.0 : avg);
+            return String.format("평균 %.1f점으로 우수한 학습 흐름을 유지하고 있습니다.", avg);
         }
         if (reportStatus == ReportStatus.NEEDS_ATTENTION) {
-            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg == null ? 0.0 : avg);
+            return String.format("평균 %.1f점으로 보완이 필요한 구간이 확인됩니다.", avg);
         }
-        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg == null ? 0.0 : avg);
+        return String.format("평균 %.1f점으로 안정적인 학습 흐름을 보입니다.", avg);
     }
 
     private List<String> buildSummaryBullets(ActivitySummaryDto activitySummary,

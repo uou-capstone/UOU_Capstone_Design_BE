@@ -7,9 +7,18 @@ import re
 from functools import lru_cache
 from typing import Any
 
+DEFAULT_MODEL = "gemini-2.5-flash"
+ALLOWED_MODELS = {
+    DEFAULT_MODEL,
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+}
+
 
 def model_name(requested: str | None = None) -> str:
-    return requested or os.getenv("MODEL_NAME") or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+    candidate = requested or os.getenv("MODEL_NAME") or os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
+    return candidate if candidate in ALLOWED_MODELS else DEFAULT_MODEL
 
 
 def api_key() -> str:

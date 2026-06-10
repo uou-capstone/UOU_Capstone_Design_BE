@@ -14,6 +14,8 @@ import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiEvidenceI
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiLearningEvidenceDto;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.AiScoreTrend;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.ai.StudentAiReportContextResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.dto.ReportCriterionResponse;
+import io.github.uou_capstone.aiplatform.domain.course.report.criteria.service.CourseReportCriteriaQueryService;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportDetailResponse;
 import io.github.uou_capstone.aiplatform.domain.course.report.dto.StudentReportListItem;
 import io.github.uou_capstone.aiplatform.domain.course.repository.CourseRepository;
@@ -70,6 +72,7 @@ class CourseStudentReportServiceAiContextTest {
     @Mock private SubmissionRepository submissionRepository;
     @Mock private AssessmentRepository assessmentRepository;
     @Mock private LearningSessionEvidenceRepository learningSessionEvidenceRepository;
+    @Mock private CourseReportCriteriaQueryService criteriaQueryService;
     @Mock private CurrentUserResolver currentUserResolver;
 
     @InjectMocks
@@ -105,6 +108,17 @@ class CourseStudentReportServiceAiContextTest {
 
         lenient().when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(anyLong(), anyLong()))
                 .thenReturn(List.of());
+        lenient().when(criteriaQueryService.listAll(course)).thenReturn(List.of(
+                ReportCriterionResponse.builder()
+                        .id("builtin:CONCEPT_UNDERSTANDING")
+                        .key("CONCEPT_UNDERSTANDING")
+                        .label("개념 이해도")
+                        .description("핵심 개념 이해")
+                        .builtIn(true)
+                        .editable(false)
+                        .deletable(false)
+                        .fallbackPolicy("INSUFFICIENT_EVIDENCE")
+                        .build()));
     }
 
     private void primeOwnerAndEnrollment() {
@@ -259,6 +273,9 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getAssessments().get(1).getScore()).isNull();
 
         assertThat(res.getCompetencies()).hasSize(2);
+        assertThat(res.getReportCriteria()).hasSize(1);
+        assertThat(res.getReportCriteria().get(0).getId()).isEqualTo("builtin:CONCEPT_UNDERSTANDING");
+        assertThat(res.getReportCriteria().get(0).isBuiltIn()).isTrue();
         AiCompetencyDto logic = res.getCompetencies().stream()
                 .filter(c -> "logic".equals(c.getKey())).findFirst().orElseThrow();
         assertThat(logic.getLevel()).isEqualTo(AiCompetencyLevel.NEEDS_IMPROVEMENT);
@@ -368,6 +385,77 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getLearningEvidence().get(0).getEvidenceId()).isEqualTo("evidence-1");
         assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
         assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+        assertThat(res.getReportCriteria()).hasSize(1);
+    }
+
+    @Test
+    void detail_summarizesNestedRawIntegratedLearningEvidence() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(anyLong(), anyLong())).thenReturn(List.of());
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Lecture lecture = Lecture.builder()
+                .course(course)
+                .title("lecture")
+                .weekNumber(1)
+                .description("d")
+                .build();
+        ReflectionTestUtils.setField(lecture, "id", 38L);
+        LearningChatSession session = LearningChatSession.builder()
+                .lecture(lecture)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(session, "id", 27L);
+
+        LearningSessionEvidence quiz = LearningSessionEvidence.builder()
+                .evidenceId("evidence-4")
+                .course(course)
+                .lecture(lecture)
+                .student(student)
+                .session(session)
+                .pageNumber(3)
+                .eventType("QUIZ_GRADED")
+                .evidence(Map.of(
+                        "type", "learning_evidence",
+                        "quiz", Map.of("quizType", "OX_Problem"),
+                        "grading", Map.of("scoreRatio", 0.4, "passed", false, "wrongItems", List.of(Map.of("id", 1))),
+                        "diagnosis", Map.of("weakConcepts", List.of("분수 통분"))))
+                .occurredAt(LocalDateTime.of(2026, 1, 4, 0, 0))
+                .build();
+        LearningSessionEvidence repaired = LearningSessionEvidence.builder()
+                .evidenceId("evidence-5")
+                .course(course)
+                .lecture(lecture)
+                .student(student)
+                .session(session)
+                .pageNumber(3)
+                .eventType("MISCONCEPTION_REPAIR_COMPLETED")
+                .evidence(Map.of(
+                        "type", "learning_evidence",
+                        "diagnosis", Map.of("weakConcepts", List.of("분수 통분"))))
+                .occurredAt(LocalDateTime.of(2026, 1, 5, 0, 0))
+                .build();
+        when(learningSessionEvidenceRepository.findTop50ByCourseIdAndStudentIdOrderByOccurredAtDescIdDesc(COURSE_ID, STUDENT_ID))
+                .thenReturn(List.of(repaired, quiz));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getLearningEvidence()).hasSize(2);
+        AiLearningEvidenceDto quizDto = res.getLearningEvidence().stream()
+                .filter(e -> "evidence-4".equals(e.getEvidenceId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(quizDto.getQuizType()).isEqualTo("OX_Problem");
+        assertThat(quizDto.getScoreRatio()).isEqualTo(0.4);
+        assertThat(quizDto.getPassed()).isFalse();
+        assertThat(quizDto.getWeakConcepts()).containsExactly("분수 통분");
+        assertThat(quizDto.getWrongItems()).hasSize(1);
+        assertThat(res.getIntegratedLearningSummary().getQuizAttemptCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getFailCount()).isEqualTo(1);
+        assertThat(res.getIntegratedLearningSummary().getAverageScoreRatio()).isEqualTo(0.4);
+        assertThat(res.getIntegratedLearningSummary().getWeakConcepts()).containsExactly("분수 통분");
+        assertThat(res.getIntegratedLearningSummary().getResolvedConcepts()).containsExactly("분수 통분");
     }
 
     @Test
@@ -396,6 +484,65 @@ class CourseStudentReportServiceAiContextTest {
         assertThat(res.getOverallScorePercent()).isNull();
         assertThat(res.getReportStatus()).isEqualTo("insufficient_data");
         assertThat(res.getHeadline()).doesNotContain("0.0");
+        assertThat(res.getNarrativeReport().getSummary()).doesNotContain("0.0");
+        assertThat(res.getStrengths()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getImprovementPoints()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getSummaryBullets()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getCoachingInsights()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+    }
+
+    @Test
+    void aiContext_marksScoreFieldsMissing_whenExamResultHasNoValidScore() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.findByCourse_Id(COURSE_ID)).thenReturn(List.of());
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        ExamSession session = ExamSession.builder()
+                .lecture(null).material(null).displayName(null).user(studentUser)
+                .examType(ExamType.FIVE_CHOICE).targetCount(10).build();
+        ExamResult resultWithoutScore = ExamResult.builder()
+                .examSession(session)
+                .submission(null)
+                .user(studentUser)
+                .build();
+        ReflectionTestUtils.setField(resultWithoutScore, "id", 7L);
+        ReflectionTestUtils.setField(resultWithoutScore, "completedAt", LocalDateTime.now());
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(resultWithoutScore));
+
+        StudentAiReportContextResponse res = service.getStudentAiReportContext(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getScoreSummary().getAverageScore()).isNull();
+        assertThat(res.getScoreSummary().getAverageScoreRatio()).isNull();
+        assertThat(res.getExistingNarrative().getSummary()).doesNotContain("0.0");
+        assertThat(res.getExistingNarrative().getStrengths()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+        assertThat(res.getExistingNarrative().getWeaknesses()).allSatisfy(text -> assertThat(text).doesNotContain("0.0"));
+    }
+
+    @Test
+    void detail_preservesRealZeroScoreInNarrative() {
+        primeOwnerAndEnrollment();
+        when(assessmentRepository.countByCourse_Id(COURSE_ID)).thenReturn(0L);
+        when(submissionRepository.findByCourseIdAndStudentIdWithAssessment(anyLong(), anyLong())).thenReturn(List.of());
+
+        Map<String, Object> feedback = Map.of(
+                "evaluationItems", List.of(Map.of(
+                        "score", 0.0,
+                        "feedback", "review",
+                        "evaluationDetails", Map.of(
+                                "competencyKey", "logic",
+                                "competencyLabel", "logic"))));
+        ExamResult zeroScoreResult = examResultWith(1L, 0.0, feedback, "review");
+        when(examResultRepository.findByCourseIdAndUserIdWithSession(COURSE_ID, STUDENT_USER_ID))
+                .thenReturn(List.of(zeroScoreResult));
+
+        StudentReportDetailResponse res = service.getStudentReportDetail(COURSE_ID, STUDENT_ID);
+
+        assertThat(res.getScoreSummary().getAverageScorePercent()).isEqualTo(0.0);
+        assertThat(res.getHeadline()).contains("0.0");
+        assertThat(res.getNarrativeReport().getSummary()).contains("0.0");
+        assertThat(res.getImprovementPoints()).anySatisfy(text -> assertThat(text).contains("0.0"));
     }
 
     @Test

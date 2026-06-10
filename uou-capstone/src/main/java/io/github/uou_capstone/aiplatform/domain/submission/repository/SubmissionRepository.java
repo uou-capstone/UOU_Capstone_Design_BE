@@ -9,10 +9,13 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface SubmissionRepository extends JpaRepository<Submission, Long> {
     // 학생과 평가 ID로 이미 제출 기록이 있는지 확인
     boolean existsByStudentAndAssessment(Student student, Assessment assessment);
+
+    Optional<Submission> findByStudentAndAssessment(Student student, Assessment assessment);
 
     // 특정 평가 ID에 해당하는 모든 제출 기록을 찾는 메서드(선생님)
     List<Submission> findByAssessmentId(Long assessmentId);

@@ -11,6 +11,7 @@ import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.Genera
 import io.github.uou_capstone.aiplatform.domain.course.lecture.repository.LectureRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamProfileRepository;
 import io.github.uou_capstone.aiplatform.domain.exam.repository.ExamSessionRepository;
+import io.github.uou_capstone.aiplatform.domain.learning.service.LearningDataCleanupService;
 import io.github.uou_capstone.aiplatform.domain.material.generation.GenerationSessionRepository;
 import io.github.uou_capstone.aiplatform.domain.material.repository.MaterialRepository;
 import io.github.uou_capstone.aiplatform.domain.user.entity.Teacher;
@@ -34,6 +35,7 @@ public class LectureService {
     private final GenerationSessionRepository generationSessionRepository;
     private final ExamSessionRepository examSessionRepository;
     private final ExamProfileRepository examProfileRepository;
+    private final LearningDataCleanupService learningDataCleanupService;
 
     @Transactional
     public Lecture createLecture(Long courseId, LectureCreateRequestDto requestDto) {
@@ -110,6 +112,7 @@ public class LectureService {
         }
 
         // 3. 강의(lecture)를 참조하는 자식 테이블 먼저 삭제/참조 해제 (FK 제약 방지)
+        learningDataCleanupService.deleteByLectureId(lectureId);
         generatedContentRepository.clearSessionByLectureId(lectureId);
         generationSessionRepository.deleteByLectureId(lectureId);
         examSessionRepository.deleteByLectureId(lectureId);
