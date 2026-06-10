@@ -97,6 +97,34 @@ class StudentReportAnalysisPersisterTest {
     }
 
     @Test
+    void extractSerializesQuantitativeMetricFields() {
+        Map<String, Object> data = Map.of(
+                "summaryMarkdown", "summary",
+                "dataCoverage", Map.of(
+                        "evidenceCount", 3,
+                        "gradableEvidenceCount", 2,
+                        "quizAttemptCount", 1,
+                        "confidence", "MEDIUM"),
+                "quantitativeMetrics", List.of(Map.of(
+                        "type", "DATA_COVERAGE",
+                        "score", 0.6,
+                        "label", "Data coverage")),
+                "initialSignalScore", 0.6,
+                "competencyAnalysis", List.of(Map.of(
+                        "criterionId", "builtin:CONCEPT_UNDERSTANDING",
+                        "label", "Concept understanding",
+                        "evidenceRefs", List.of("evidence-1"))));
+
+        StudentReportAnalysisPersister.Snapshot snapshot = persister.extract(data);
+
+        assertThat(snapshot.analysisJson()).contains("\"dataCoverage\":{");
+        assertThat(snapshot.analysisJson()).contains("\"quantitativeMetrics\":[");
+        assertThat(snapshot.analysisJson()).contains("\"initialSignalScore\":0.6");
+        assertThat(snapshot.analysisJson()).contains("\"competencyAnalysis\":[");
+        assertThat(snapshot.analysisJson()).contains("\"evidenceRefs\":[\"evidence-1\"]");
+    }
+
+    @Test
     void extractFallsBackFromSummaryAndStoresNormalizedJson() {
         Map<String, Object> data = Map.of(
                 "summary", "summary",

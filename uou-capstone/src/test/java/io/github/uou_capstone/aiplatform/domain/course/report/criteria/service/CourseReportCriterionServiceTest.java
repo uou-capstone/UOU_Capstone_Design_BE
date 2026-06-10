@@ -77,6 +77,30 @@ class CourseReportCriterionServiceTest {
     }
 
     @Test
+    void builtInCriteriaExposeCanonicalKeysAndBuiltInFlag() {
+        List<ReportCriterionResponse> res = catalog.builtInCriteria();
+
+        assertThat(res).hasSize(10);
+        assertThat(res).extracting(ReportCriterionResponse::getKey).containsExactly(
+                "CONCEPT_UNDERSTANDING",
+                "QUESTION_SPECIFICITY",
+                "PROBLEM_SOLVING",
+                "APPLICATION_TRANSFER",
+                "QUIZ_ACCURACY",
+                "LEARNING_PERSISTENCE",
+                "WRONG_ANSWER_REFLECTION",
+                "CLASS_PARTICIPATION",
+                "LEARNING_CONFIDENCE",
+                "GROWTH_MOMENTUM");
+        assertThat(res).allSatisfy(criterion -> {
+            assertThat(criterion.getId()).isEqualTo("builtin:" + criterion.getKey());
+            assertThat(criterion.isBuiltIn()).isTrue();
+            assertThat(criterion.isEditable()).isFalse();
+            assertThat(criterion.isDeletable()).isFalse();
+        });
+    }
+
+    @Test
     void summaryPreservesCustomCriteriaStatusAndAddsReportCriteriaTotal() {
         when(courseAccessService.loadCourseAsTeacher(COURSE_ID)).thenReturn(course);
         when(repository.findByCourseOrderByIdAsc(course)).thenReturn(List.of());

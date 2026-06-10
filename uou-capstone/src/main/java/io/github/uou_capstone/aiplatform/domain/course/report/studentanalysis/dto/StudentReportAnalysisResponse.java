@@ -16,6 +16,10 @@ public class StudentReportAnalysisResponse {
     private final Long studentId;
     private final Map<String, Object> analysis;
     private final String summaryMarkdown;
+    private final Object dataCoverage;
+    private final Object quantitativeMetrics;
+    private final Object initialSignalScore;
+    private final Object competencyAnalysis;
     private final String source;
     private final boolean fallbackUsed;
     private final String reason;
@@ -27,6 +31,10 @@ public class StudentReportAnalysisResponse {
         this.studentId = entity.getStudent() == null ? null : entity.getStudent().getId();
         this.analysis = parseAnalysis(objectMapper, entity.getAnalysisJson());
         this.summaryMarkdown = entity.getSummaryMarkdown();
+        this.dataCoverage = analysis.get("dataCoverage");
+        this.quantitativeMetrics = analysis.get("quantitativeMetrics");
+        this.initialSignalScore = analysis.get("initialSignalScore");
+        this.competencyAnalysis = analysis.get("competencyAnalysis");
         this.source = entity.getSource();
         this.fallbackUsed = entity.isFallbackUsed();
         this.reason = entity.getFallbackReason();

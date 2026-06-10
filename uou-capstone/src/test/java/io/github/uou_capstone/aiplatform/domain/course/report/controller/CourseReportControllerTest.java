@@ -23,6 +23,7 @@ import reactor.core.publisher.Flux;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -76,7 +77,34 @@ class CourseReportControllerTest {
         StudentReportAnalysis analysis = StudentReportAnalysis.builder()
                 .course(course)
                 .student(student)
-                .analysisJson("{\"summaryMarkdown\":\"summary\"}")
+                .analysisJson("""
+                        {
+                          "summaryMarkdown": "summary",
+                          "dataCoverage": {
+                            "evidenceCount": 3,
+                            "gradableEvidenceCount": 2,
+                            "quizAttemptCount": 1,
+                            "confidence": "MEDIUM"
+                          },
+                          "quantitativeMetrics": [
+                            {
+                              "type": "DATA_COVERAGE",
+                              "label": "Data coverage",
+                              "score": null,
+                              "description": "Evidence readiness"
+                            }
+                          ],
+                          "initialSignalScore": null,
+                          "competencyAnalysis": [
+                            {
+                              "criterionId": "builtin:CONCEPT_UNDERSTANDING",
+                              "score": null,
+                              "insufficientEvidence": true,
+                              "evidenceRefs": ["evidence-1"]
+                            }
+                          ]
+                        }
+                        """)
                 .summaryMarkdown("summary")
                 .fallbackUsed(false)
                 .build();
@@ -89,7 +117,16 @@ class CourseReportControllerTest {
                 .andExpect(jsonPath("$.courseId").value(1))
                 .andExpect(jsonPath("$.studentId").value(2))
                 .andExpect(jsonPath("$.summaryMarkdown").value("summary"))
-                .andExpect(jsonPath("$.analysis.summaryMarkdown").value("summary"));
+                .andExpect(jsonPath("$.analysis.summaryMarkdown").value("summary"))
+                .andExpect(jsonPath("$.dataCoverage.evidenceCount").value(3))
+                .andExpect(jsonPath("$.analysis.dataCoverage.evidenceCount").value(3))
+                .andExpect(jsonPath("$.quantitativeMetrics[0].type").value("DATA_COVERAGE"))
+                .andExpect(jsonPath("$.quantitativeMetrics[0].score").value(nullValue()))
+                .andExpect(jsonPath("$.analysis.quantitativeMetrics[0].score").value(nullValue()))
+                .andExpect(jsonPath("$.initialSignalScore").value(nullValue()))
+                .andExpect(jsonPath("$.competencyAnalysis[0].criterionId").value("builtin:CONCEPT_UNDERSTANDING"))
+                .andExpect(jsonPath("$.competencyAnalysis[0].insufficientEvidence").value(true))
+                .andExpect(jsonPath("$.competencyAnalysis[0].evidenceRefs[0]").value("evidence-1"));
     }
 
     @Test

@@ -386,6 +386,58 @@ Auth: `TEACHER`
   - Course student score: arithmetic average of valid result percentages
   - Submissions, questions, participation, and competency buckets are not weighted into this field yet
 
+### Student AI analysis result
+- `GET /students/{studentId}/analysis`
+- Returns the saved FastAPI `/api/v3/report/student/analyze` result.
+- Existing field `analysis` remains the raw saved JSON object.
+- Added top-level pass-through fields for FE convenience:
+  - `dataCoverage`
+  - `quantitativeMetrics`
+  - `initialSignalScore`
+  - `competencyAnalysis`
+- The same values also remain under `analysis.*` for backward compatibility.
+- Quantitative metric types currently include:
+  - `DATA_COVERAGE`
+  - `OBSERVED_DIAGNOSTIC_SCORE`
+  - `CONSERVATIVE_DIAGNOSTIC_SCORE`
+  - `NORMALIZED_LEARNING_GAIN`
+  - `MASTERY_PROBABILITY_ESTIMATE`
+  - `DIFFICULTY_ADJUSTED_SCORE`
+  - `CONCEPT_COVERAGE_SCORE`
+  - `MISCONCEPTION_RECOVERY_SCORE`
+- `DATA_COVERAGE` is evidence readiness for report generation, not a student competency score.
+- `score: null` means no score is available. It must not be displayed as `0.0`.
+- `score: 0.0` is a real zero score and should remain distinguishable from `null`.
+- `initialSignalScore: null` means insufficient quantitative signal.
+- `competencyAnalysis[].evidenceRefs` identifies which evidence records supported each criterion analysis.
+
+### Student AI analysis execution
+- `POST /students/{studentId}/analyze`
+- `POST /students/{studentId}/analyze/stream`
+- Spring builds `StudentAiReportContextResponse`, then calls FastAPI with:
+  - `context`: the full student AI report context
+  - `model`: optional allowed model name
+- Report criteria are nested under `context.reportCriteria[]`, not at the top level.
+- Built-in criteria include stable `id`, `key`, `label`, `description`, and `builtIn: true`.
+- The current built-in keys are:
+  - `CONCEPT_UNDERSTANDING`
+  - `QUESTION_SPECIFICITY`
+  - `PROBLEM_SOLVING`
+  - `APPLICATION_TRANSFER`
+  - `QUIZ_ACCURACY`
+  - `LEARNING_PERSISTENCE`
+  - `WRONG_ANSWER_REFLECTION`
+  - `CLASS_PARTICIPATION`
+  - `LEARNING_CONFIDENCE`
+  - `GROWTH_MOMENTUM`
+- Previously saved analysis JSON is not rewritten automatically. Re-run student analysis after deployment to refresh saved reports.
+
+### Report criteria assistant chat
+- FE must call Spring public API only:
+  - `POST /api/courses/{courseId}/reports/criteria/assistant/chat/stream`
+- FE must not call FastAPI bridge routes such as `/bridge/report/criteria_assistant_chat_stream` directly.
+- Spring forwards built-in criteria as `builtInCriteria` and DB custom criteria as `additionalCriteria`.
+
 ### Student activity summary
 - `GET /students/{studentId}/activity-summary`
 - Response fields: `questionCount`, `examAttemptCount`, `submissionCount`, `missingSubmissionCount`, `lectureProgressPercent`, `pageCoverage`, `categoryCoverage`

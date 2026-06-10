@@ -1,5 +1,6 @@
 package io.github.uou_capstone.aiplatform.domain.course.report.studentanalysis.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.uou_capstone.aiplatform.common.error.CommonErrorCode;
 import io.github.uou_capstone.aiplatform.common.error.exception.BusinessException;
@@ -90,11 +91,26 @@ class StudentReportAnalysisServiceTest {
     @Test
     void analyzeSendsSpringBuiltContextAndModelOnly() {
         StudentAiReportContextResponse context = StudentAiReportContextResponse.builder()
-                .reportCriteria(List.of(ReportCriterionResponse.builder()
-                        .id("builtin:CONCEPT_UNDERSTANDING")
-                        .label("Concept understanding")
-                        .builtIn(true)
-                        .build()))
+                .reportCriteria(List.of(
+                        ReportCriterionResponse.builder()
+                                .id("builtin:CONCEPT_UNDERSTANDING")
+                                .key("CONCEPT_UNDERSTANDING")
+                                .label("Concept understanding")
+                                .builtIn(true)
+                                .build(),
+                        ReportCriterionResponse.builder()
+                                .id("builtin:QUIZ_ACCURACY")
+                                .key("QUIZ_ACCURACY")
+                                .label("Quiz accuracy")
+                                .builtIn(true)
+                                .build(),
+                        ReportCriterionResponse.builder()
+                                .id("custom:7")
+                                .key("custom:7")
+                                .criterionId(7L)
+                                .label("Custom criterion")
+                                .builtIn(false)
+                                .build()))
                 .build();
         when(courseStudentReportService.getStudentAiReportContext(COURSE_ID, STUDENT_ID)).thenReturn(context);
         when(fastApiBridgeClient.reportStudentAnalyze(any())).thenReturn(fastApiAnalysisJson("ok"));
@@ -112,6 +128,24 @@ class StudentReportAnalysisServiceTest {
         assertThat(body).containsEntry("model", "gemini-2.5-flash");
         assertThat(body).doesNotContainKey("criteria");
         assertThat(body).doesNotContainKey("reportCriteria");
+
+        Map<String, Object> serializedContext = objectMapper.convertValue(
+                body.get("context"), new TypeReference<>() {});
+        assertThat(serializedContext).containsKey("reportCriteria");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reportCriteria =
+                (List<Map<String, Object>>) serializedContext.get("reportCriteria");
+        assertThat(reportCriteria).hasSize(3);
+        assertThat(reportCriteria.get(0)).containsEntry("id", "builtin:CONCEPT_UNDERSTANDING")
+                .containsEntry("key", "CONCEPT_UNDERSTANDING")
+                .containsEntry("builtIn", true);
+        assertThat(reportCriteria.get(1)).containsEntry("id", "builtin:QUIZ_ACCURACY")
+                .containsEntry("key", "QUIZ_ACCURACY")
+                .containsEntry("builtIn", true);
+        assertThat(reportCriteria.get(2)).containsEntry("id", "custom:7")
+                .containsEntry("key", "custom:7")
+                .containsEntry("criterionId", 7L)
+                .containsEntry("builtIn", false);
         assertThat(result).containsEntry("summary", "ok")
                 .containsEntry("summaryMarkdown", "ok")
                 .containsEntry("confidence", "HIGH");
@@ -157,7 +191,38 @@ class StudentReportAnalysisServiceTest {
         when(fastApiBridgeClient.reportStudentAnalyzeStream(any())).thenReturn(Flux.just(
                 "{\"type\":\"agent_delta\",\"delta\":\"working\"}",
                 """
-                {"type":"done","data":{"summary":"done","strengths":["s"],"weaknesses":["w"],"competencyAnalysis":[{"score":0.7}],"teachingSuggestions":["t"],"followUpQuestions":["q"],"confidence":"HIGH"}}
+                {
+                  "type": "done",
+                  "data": {
+                    "summary": "done",
+                    "strengths": ["s"],
+                    "weaknesses": ["w"],
+                    "dataCoverage": {
+                      "evidenceCount": 3,
+                      "gradableEvidenceCount": 2,
+                      "quizAttemptCount": 1,
+                      "confidence": "MEDIUM"
+                    },
+                    "quantitativeMetrics": [
+                      {
+                        "type": "OBSERVED_DIAGNOSTIC_SCORE",
+                        "score": 0.7,
+                        "label": "Observed diagnostic score"
+                      }
+                    ],
+                    "initialSignalScore": 0.7,
+                    "competencyAnalysis": [
+                      {
+                        "criterionId": "builtin:CONCEPT_UNDERSTANDING",
+                        "score": 0.7,
+                        "evidenceRefs": ["evidence-1"]
+                      }
+                    ],
+                    "teachingSuggestions": ["t"],
+                    "followUpQuestions": ["q"],
+                    "confidence": "HIGH"
+                  }
+                }
                 """.trim()));
 
         List<ServerSentEvent<Map<String, Object>>> events =
@@ -170,12 +235,29 @@ class StudentReportAnalysisServiceTest {
         assertThat(emittedData).containsEntry("summary", "done")
                 .containsEntry("summaryMarkdown", "done")
                 .containsEntry("confidence", "HIGH");
+        assertThat(emittedData.get("dataCoverage")).isInstanceOf(Map.class);
+        assertThat(emittedData.get("quantitativeMetrics")).isInstanceOf(List.class);
+        assertThat(emittedData).containsEntry("initialSignalScore", 0.7);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> emittedCoverage = (Map<String, Object>) emittedData.get("dataCoverage");
+        assertThat(emittedCoverage).containsEntry("evidenceCount", 3);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> emittedCompetencies =
+                (List<Map<String, Object>>) emittedData.get("competencyAnalysis");
+        assertThat(emittedCompetencies.get(0).get("evidenceRefs")).isEqualTo(List.of("evidence-1"));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
         verify(persister).upsert(eq(COURSE_ID), eq(STUDENT_ID), dataCaptor.capture());
         assertThat(dataCaptor.getValue()).containsEntry("summary", "done")
                 .containsEntry("summaryMarkdown", "done")
-                .containsEntry("confidence", "HIGH");
+                .containsEntry("confidence", "HIGH")
+                .containsEntry("initialSignalScore", 0.7);
+        assertThat(dataCaptor.getValue().get("dataCoverage")).isInstanceOf(Map.class);
+        assertThat(dataCaptor.getValue().get("quantitativeMetrics")).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> persistedCompetencies =
+                (List<Map<String, Object>>) dataCaptor.getValue().get("competencyAnalysis");
+        assertThat(persistedCompetencies.get(0).get("evidenceRefs")).isEqualTo(List.of("evidence-1"));
     }
 
     @Test
