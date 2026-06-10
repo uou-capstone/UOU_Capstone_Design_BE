@@ -5,10 +5,13 @@ os.environ["GEMINI_API_KEY"] = "dummy_api_key_for_testing"
 from app.routers.report import (  # noqa: E402
     AiCompetency,
     AiEvidenceItem,
+    AiIntegratedLearningSummary,
+    AiLearningEvidenceItem,
     StudentAiReportContext,
     ReportCriterion,
     _analysis_schema,
     _build_analysis_prompt,
+    _build_quantitative_metrics,
     _compact_report_context,
     _fallback_analysis,
     _normalize_analysis_payload,
@@ -63,6 +66,8 @@ def test_context_accepts_report_criteria_and_fallback_returns_required_ids():
     assert result.competencyAnalysis[1].level == "INSUFFICIENT_DATA"
     assert result.competencyAnalysis[1].confidence == "LOW"
     assert result.competencyAnalysis[1].insufficientEvidence is True
+    assert result.summaryMarkdown == result.summary
+    assert result.dataCoverage.evidenceCount == 1
 
 
 def test_normalization_preserves_supplied_criteria_order_and_ignores_unknown():
@@ -95,6 +100,7 @@ def test_normalization_preserves_supplied_criteria_order_and_ignores_unknown():
     assert items[0]["insufficientEvidence"] is True
     assert items[1]["score"] == 100.0
     assert items[1]["label"] == "발표 참여도"
+    assert items[1]["evidenceRefs"] == ["teacher_memo:0"]
     assert "unknown_criteria:unknown:1" in normalized["warnings"]
 
 
@@ -235,3 +241,156 @@ def test_analysis_schema_is_strict_only_for_report_criteria_mode():
     assert "criteriaId" in criteria_required
     assert "insufficientEvidence" in criteria_required
     assert legacy_required == ["analysis"]
+
+
+def test_quantitative_metrics_keep_missing_scores_null_not_zero():
+    context = StudentAiReportContext(
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-no-score",
+                eventType="PAGE_EXPLAINED",
+                pageNumber=1,
+            )
+        ]
+    )
+
+    metrics, initial_signal = _build_quantitative_metrics(context)
+    observed = next(metric for metric in metrics if metric.key == "OBSERVED_DIAGNOSTIC_SCORE")
+
+    assert observed.value is None
+    assert observed.insufficientEvidence is True
+    assert initial_signal is None
+
+
+def test_quantitative_metrics_preserve_zero_score_as_observed_zero():
+    context = StudentAiReportContext(
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-zero",
+                eventType="QUIZ_GRADED",
+                evidence={"grading": {"scoreRatio": 0.0}},
+            )
+        ]
+    )
+
+    metrics, initial_signal = _build_quantitative_metrics(context)
+    observed = next(metric for metric in metrics if metric.key == "OBSERVED_DIAGNOSTIC_SCORE")
+
+    assert observed.value == 0.0
+    assert observed.insufficientEvidence is False
+    assert initial_signal is not None
+
+
+def test_quantitative_metrics_include_conservative_gain_and_mastery_estimate():
+    context = StudentAiReportContext(
+        integratedLearningSummary=AiIntegratedLearningSummary(quizAttemptCount=2),
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-pre",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.4,
+                passed=False,
+                pageNumber=3,
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-post",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.8,
+                passed=True,
+                pageNumber=3,
+            ),
+        ],
+    )
+
+    metrics, initial_signal = _build_quantitative_metrics(context)
+    by_key = {metric.key: metric for metric in metrics}
+
+    assert by_key["OBSERVED_DIAGNOSTIC_SCORE"].value == 60.0
+    assert by_key["CONSERVATIVE_DIAGNOSTIC_SCORE"].value == 52.9
+    assert by_key["NORMALIZED_LEARNING_GAIN"].value == 66.7
+    assert by_key["MASTERY_PROBABILITY_ESTIMATE"].value is not None
+    assert by_key["OBSERVED_DIAGNOSTIC_SCORE"].evidenceRefs == ["ev-pre", "ev-post"]
+    assert initial_signal is not None
+
+
+def test_quantitative_metrics_include_difficulty_adjusted_score():
+    context = StudentAiReportContext(
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-easy",
+                eventType="QUIZ_GRADED",
+                scoreRatio=1.0,
+                evidence={"difficulty": "easy"},
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-hard",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.5,
+                evidence={"difficulty": "hard"},
+            ),
+        ],
+    )
+
+    metrics, _initial_signal = _build_quantitative_metrics(context)
+    by_key = {metric.key: metric for metric in metrics}
+
+    assert by_key["DIFFICULTY_ADJUSTED_SCORE"].value == 70.0
+    assert by_key["DIFFICULTY_ADJUSTED_SCORE"].evidenceRefs == ["ev-easy", "ev-hard"]
+
+
+def test_quantitative_metrics_include_concept_coverage_score():
+    context = StudentAiReportContext(
+        integratedLearningSummary=AiIntegratedLearningSummary(
+            weakConcepts=["CBR", "VBR"],
+            resolvedConcepts=["Jitter"],
+        ),
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-c1",
+                eventType="QUIZ_GRADED",
+                weakConcepts=["CBR"],
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-c2",
+                eventType="QUIZ_GRADED",
+                wrongItems=[{"concepts": ["Jitter"]}],
+            ),
+        ],
+    )
+
+    metrics, _initial_signal = _build_quantitative_metrics(context)
+    by_key = {metric.key: metric for metric in metrics}
+
+    assert by_key["CONCEPT_COVERAGE_SCORE"].value == 66.7
+    assert by_key["CONCEPT_COVERAGE_SCORE"].evidenceRefs == ["ev-c1", "ev-c2"]
+
+
+def test_quantitative_metrics_include_misconception_recovery_score():
+    context = StudentAiReportContext(
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-fail",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.2,
+                passed=False,
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-repair",
+                eventType="MISCONCEPTION_REPAIR_COMPLETED",
+                weakConcepts=["CBR"],
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-retest",
+                eventType="RETEST_GRADED",
+                scoreRatio=0.8,
+                passed=True,
+            ),
+        ],
+    )
+
+    metrics, initial_signal = _build_quantitative_metrics(context)
+    by_key = {metric.key: metric for metric in metrics}
+
+    assert by_key["MISCONCEPTION_RECOVERY_SCORE"].value == 70.0
+    assert by_key["MISCONCEPTION_RECOVERY_SCORE"].evidenceRefs == ["ev-fail", "ev-repair", "ev-retest"]
+    assert initial_signal is not None

@@ -87,6 +87,7 @@ class AiLearningEvidenceItem(BaseModel):
     passed: bool | None = None
     weakConcepts: list[str] = Field(default_factory=list)
     wrongItems: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
     summary: str | None = None
     occurredAt: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -184,6 +185,30 @@ class CompetencyAnalysis(BaseModel):
     confidence: Literal["LOW", "MEDIUM", "HIGH"] = "LOW"
     analysis: str
     evidence: list[str] = Field(default_factory=list)
+    evidenceRefs: list[str] = Field(default_factory=list)
+    insufficientEvidence: bool = False
+
+
+class ReportDataCoverage(BaseModel):
+    evidenceCount: int = 0
+    scoredEvidenceCount: int = 0
+    quizAttemptCount: int = 0
+    learningEvidenceCount: int = 0
+    assessmentCount: int = 0
+    pageEvidenceCount: int = 0
+    confidence: Literal["LOW", "MEDIUM", "HIGH"] = "LOW"
+    reason: str = "초기 데이터라 리포트 지표를 보수적으로 해석해야 합니다."
+
+
+class QuantitativeMetric(BaseModel):
+    key: str
+    label: str
+    value: float | None = None
+    unit: str = "PERCENT"
+    confidence: Literal["LOW", "MEDIUM", "HIGH"] = "LOW"
+    formula: str
+    evidenceRefs: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     insufficientEvidence: bool = False
 
 
@@ -191,9 +216,13 @@ class StudentReportAnalysis(BaseModel):
     studentId: int | None = None
     courseId: int | None = None
     summary: str
+    summaryMarkdown: str | None = None
     strengths: list[str]
     weaknesses: list[str]
     competencyAnalysis: list[CompetencyAnalysis]
+    dataCoverage: ReportDataCoverage = Field(default_factory=ReportDataCoverage)
+    quantitativeMetrics: list[QuantitativeMetric] = Field(default_factory=list)
+    initialSignalScore: float | None = None
     teachingSuggestions: list[str]
     followUpQuestions: list[str]
     confidence: Literal["LOW", "MEDIUM", "HIGH"]
@@ -238,6 +267,8 @@ def _fallback_analysis(
     context: StudentAiReportContext,
     reason: str | None = None,
 ) -> StudentReportAnalysis:
+    quantitative_metrics, initial_signal = _build_quantitative_metrics(context)
+    data_coverage = _build_data_coverage(context)
     score = context.scoreSummary.averageScore
     trend = context.scoreSummary.trend or "INSUFFICIENT_DATA"
     weak_concepts = _top_weak_concepts(context)
@@ -311,9 +342,13 @@ def _fallback_analysis(
         studentId=context.student.studentId,
         courseId=context.course.courseId,
         summary=summary,
+        summaryMarkdown=summary,
         strengths=strengths[:5],
         weaknesses=weaknesses[:5],
         competencyAnalysis=competency_analysis,
+        dataCoverage=data_coverage,
+        quantitativeMetrics=quantitative_metrics,
+        initialSignalScore=initial_signal,
         teachingSuggestions=[
             "가장 낮은 역량 또는 반복 오답 개념을 기준으로 짧은 보충 활동을 먼저 배정하세요.",
             "다음 평가 전에는 약점 개념을 포함한 OX/객관식 점검으로 이해 여부를 빠르게 확인하세요.",
@@ -337,7 +372,401 @@ def _evidence_used(context: StudentAiReportContext) -> list[str]:
     out: list[str] = []
     out.extend(e.summary for e in context.evidence if e.summary)
     out.extend(e.summary for e in context.learningEvidence if e.summary)
+    for item in context.learningEvidence:
+        nested_summary = _first_string(
+            item.evidence.get("summary"),
+            item.evidence.get("feedback"),
+            item.raw.get("summary"),
+            item.raw.get("feedback"),
+        )
+        if nested_summary:
+            out.append(nested_summary)
     return out[:10]
+
+
+def _first_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+def _first_not_none(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _ratio_to_percent(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if 0.0 <= value <= 1.0:
+        return round(value * 100.0, 1)
+    return round(max(0.0, min(100.0, value)), 1)
+
+
+def _learning_evidence_ref(item: AiLearningEvidenceItem, index: int) -> str:
+    if item.evidenceId and item.evidenceId.strip():
+        return item.evidenceId.strip()
+    nested = _first_string(
+        item.evidence.get("evidenceId"),
+        item.evidence.get("id"),
+        item.raw.get("evidenceId"),
+        item.raw.get("id"),
+    )
+    if nested:
+        return nested
+    event = item.eventType or "learning_event"
+    page = f":p{item.pageNumber}" if item.pageNumber is not None else ""
+    return f"{event}{page}:{index}"
+
+
+def _generic_evidence_ref(item: AiEvidenceItem, index: int) -> str:
+    if item.sourceId is not None:
+        return f"{item.type or 'evidence'}:{item.sourceId}"
+    return f"{item.type or 'evidence'}:{index}"
+
+
+def _score_ratio_from_learning_evidence(item: AiLearningEvidenceItem) -> float | None:
+    score = _as_float(item.scoreRatio)
+    if score is None:
+        grading = item.evidence.get("grading") if isinstance(item.evidence.get("grading"), dict) else {}
+        raw_grading = item.raw.get("grading") if isinstance(item.raw.get("grading"), dict) else {}
+        score = _as_float(_first_not_none(
+            item.evidence.get("scoreRatio"),
+            item.evidence.get("score_ratio"),
+            item.raw.get("scoreRatio"),
+            item.raw.get("score_ratio"),
+            grading.get("scoreRatio"),
+            grading.get("score_ratio"),
+            raw_grading.get("scoreRatio"),
+            raw_grading.get("score_ratio"),
+        ))
+    if score is None:
+        return None
+    if score > 1.0:
+        score = score / 100.0
+    return max(0.0, min(1.0, score))
+
+
+def _graded_learning_evidence(context: StudentAiReportContext) -> list[tuple[AiLearningEvidenceItem, str, float]]:
+    graded: list[tuple[AiLearningEvidenceItem, str, float]] = []
+    for index, item in enumerate(context.learningEvidence):
+        score = _score_ratio_from_learning_evidence(item)
+        if score is None:
+            continue
+        graded.append((item, _learning_evidence_ref(item, index), score))
+    return graded
+
+
+def _confidence_for_evidence(scored_count: int, total_count: int) -> Literal["LOW", "MEDIUM", "HIGH"]:
+    if scored_count >= 10 and total_count >= 12:
+        return "HIGH"
+    if scored_count >= 5 or total_count >= 8:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _build_data_coverage(context: StudentAiReportContext) -> ReportDataCoverage:
+    graded = _graded_learning_evidence(context)
+    page_numbers = {item.pageNumber for item in context.learningEvidence if item.pageNumber is not None}
+    total_evidence = len(context.evidence) + len(context.learningEvidence) + len(context.assessments)
+    scored_count = len(graded) + sum(1 for item in context.assessments if item.scoreRatio is not None)
+    quiz_attempts = context.integratedLearningSummary.quizAttemptCount or sum(
+        1 for item in context.learningEvidence
+        if (item.eventType or "").upper() in {"QUIZ_GRADED", "QUIZ_SUBMITTED"}
+    )
+    confidence = _confidence_for_evidence(scored_count, total_evidence)
+    if scored_count == 0:
+        reason = "채점 가능한 점수 근거가 없어 점수형 지표는 null로 유지합니다."
+    elif confidence == "LOW":
+        reason = "초기 표본이 적어 관찰 점수와 보수 점수를 함께 해석해야 합니다."
+    else:
+        reason = "퀴즈/평가 근거가 누적되어 초기 지표를 계산할 수 있습니다."
+    return ReportDataCoverage(
+        evidenceCount=total_evidence,
+        scoredEvidenceCount=scored_count,
+        quizAttemptCount=quiz_attempts,
+        learningEvidenceCount=len(context.learningEvidence),
+        assessmentCount=len(context.assessments),
+        pageEvidenceCount=len(page_numbers),
+        confidence=confidence,
+        reason=reason,
+    )
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _conservative_score(observed_percent: float | None, n: int, k: int = 5) -> float | None:
+    if observed_percent is None or n <= 0:
+        return None
+    # 초기 표본의 과신을 막기 위해 중립 prior 50점으로 수축한다.
+    return round(((n * observed_percent) + (k * 50.0)) / (n + k), 1)
+
+
+def _normalized_gain(first_ratio: float | None, last_ratio: float | None) -> float | None:
+    if first_ratio is None or last_ratio is None or first_ratio >= 1.0:
+        return None
+    gain = (last_ratio - first_ratio) / (1.0 - first_ratio)
+    return round(max(-1.0, min(1.0, gain)) * 100.0, 1)
+
+
+def _bkt_mastery_percent(scores: list[float]) -> float | None:
+    if not scores:
+        return None
+    mastery = 0.5
+    guess = 0.2
+    slip = 0.1
+    transition = 0.1
+    for score in scores:
+        correct = score >= 0.6
+        if correct:
+            denominator = mastery * (1 - slip) + (1 - mastery) * guess
+            mastery = mastery * (1 - slip) / denominator if denominator else mastery
+        else:
+            denominator = mastery * slip + (1 - mastery) * (1 - guess)
+            mastery = mastery * slip / denominator if denominator else mastery
+        mastery = mastery + (1 - mastery) * transition
+    return round(max(0.0, min(1.0, mastery)) * 100.0, 1)
+
+
+def _difficulty_weight_for_evidence(item: AiLearningEvidenceItem) -> float:
+    raw_values = [
+        item.evidence.get("difficulty"),
+        item.raw.get("difficulty"),
+        item.evidence.get("level"),
+        item.raw.get("level"),
+    ]
+    for value in raw_values:
+        text = str(value or "").strip().lower()
+        if text in {"hard", "difficult", "advanced", "어려움", "상"}:
+            return 1.2
+        if text in {"easy", "beginner", "basic", "쉬움", "하"}:
+            return 0.8
+        if text:
+            return 1.0
+    quiz_type = (item.quizType or "").lower()
+    if "essay" in quiz_type or "서술" in quiz_type:
+        return 1.2
+    if "short" in quiz_type or "단답" in quiz_type:
+        return 1.0
+    return 0.9
+
+
+def _difficulty_adjusted_score(graded: list[tuple[AiLearningEvidenceItem, str, float]]) -> float | None:
+    if not graded:
+        return None
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for item, _ref, score in graded:
+        weight = _difficulty_weight_for_evidence(item)
+        weighted_sum += score * weight
+        weight_total += weight
+    if weight_total <= 0:
+        return None
+    return round((weighted_sum / weight_total) * 100.0, 1)
+
+
+def _concept_coverage_percent(context: StudentAiReportContext) -> float | None:
+    target_concepts = {
+        concept.strip()
+        for concept in [
+            *context.integratedLearningSummary.weakConcepts,
+            *context.integratedLearningSummary.resolvedConcepts,
+        ]
+        if concept and concept.strip()
+    }
+    observed_concepts: set[str] = set()
+    for item in context.learningEvidence:
+        observed_concepts.update(concept.strip() for concept in item.weakConcepts if concept and concept.strip())
+        for wrong_item in item.wrongItems:
+            if not isinstance(wrong_item, dict):
+                continue
+            raw_concepts = wrong_item.get("concepts") or wrong_item.get("concept") or wrong_item.get("topic")
+            if isinstance(raw_concepts, list):
+                observed_concepts.update(str(value).strip() for value in raw_concepts if str(value).strip())
+            elif raw_concepts:
+                observed_concepts.add(str(raw_concepts).strip())
+    if not target_concepts:
+        target_concepts = observed_concepts
+    if not target_concepts:
+        return None
+    return round((len(observed_concepts & target_concepts) / len(target_concepts)) * 100.0, 1)
+
+
+def _misconception_recovery_score(context: StudentAiReportContext) -> float | None:
+    graded = _graded_learning_evidence(context)
+    first_failed = next((score for item, _ref, score in graded if item.passed is False or score < 0.6), None)
+    if first_failed is None:
+        return None
+    later_scores = [
+        score
+        for item, _ref, score in graded
+        if (item.eventType or "").upper() == "RETEST_GRADED" or item.passed is True
+    ]
+    repair_completed = any(
+        (item.eventType or "").upper() == "MISCONCEPTION_REPAIR_COMPLETED"
+        for item in context.learningEvidence
+    )
+    if not later_scores and not repair_completed:
+        return None
+    latest = later_scores[-1] if later_scores else first_failed
+    improvement = max(0.0, latest - first_failed)
+    repair_bonus = 0.1 if repair_completed else 0.0
+    return round(min(1.0, improvement + repair_bonus) * 100.0, 1)
+
+
+def _build_quantitative_metrics(context: StudentAiReportContext) -> tuple[list[QuantitativeMetric], float | None]:
+    coverage = _build_data_coverage(context)
+    graded = _graded_learning_evidence(context)
+    refs = [ref for _item, ref, _score in graded]
+    scores = [score for _item, _ref, score in graded]
+    observed_percent = _ratio_to_percent(_mean(scores))
+    confidence = coverage.confidence
+
+    metrics: list[QuantitativeMetric] = [
+        QuantitativeMetric(
+            key="DATA_COVERAGE",
+            label="근거 준비도",
+            value=round(min(100.0, coverage.evidenceCount * 12.5), 1),
+            unit="PERCENT",
+            confidence=confidence,
+            formula="min(100, evidenceCount * 12.5)",
+            evidenceRefs=refs[:10],
+            warnings=["능력 점수가 아니라 리포트 산출에 필요한 근거량 지표입니다."],
+            insufficientEvidence=coverage.evidenceCount == 0,
+        )
+    ]
+
+    metrics.append(QuantitativeMetric(
+        key="OBSERVED_DIAGNOSTIC_SCORE",
+        label="초기 이해 관찰 점수",
+        value=observed_percent,
+        unit="PERCENT",
+        confidence=confidence,
+        formula="mean(learningEvidence.scoreRatio) * 100",
+        evidenceRefs=refs[:10],
+        warnings=[] if observed_percent is not None else ["채점 가능한 퀴즈/평가 근거가 없습니다."],
+        insufficientEvidence=observed_percent is None,
+    ))
+
+    conservative = _conservative_score(observed_percent, len(scores))
+    metrics.append(QuantitativeMetric(
+        key="CONSERVATIVE_DIAGNOSTIC_SCORE",
+        label="보수 보정 이해 점수",
+        value=conservative,
+        unit="PERCENT",
+        confidence=confidence,
+        formula="(n * observedScore + 5 * 50) / (n + 5)",
+        evidenceRefs=refs[:10],
+        warnings=["초기 표본 과신을 줄이기 위해 50점 prior로 수축한 점수입니다."],
+        insufficientEvidence=conservative is None,
+    ))
+
+    gain = _normalized_gain(scores[0], scores[-1]) if len(scores) >= 2 else None
+    metrics.append(QuantitativeMetric(
+        key="NORMALIZED_LEARNING_GAIN",
+        label="정규화 학습 향상도",
+        value=gain,
+        unit="PERCENT",
+        confidence=confidence if len(scores) >= 2 else "LOW",
+        formula="(latestScore - firstScore) / (1 - firstScore) * 100",
+        evidenceRefs=refs[:10],
+        warnings=[] if gain is not None else ["사전/사후 또는 재시험 점수 쌍이 부족합니다."],
+        insufficientEvidence=gain is None,
+    ))
+
+    mastery = _bkt_mastery_percent(scores)
+    metrics.append(QuantitativeMetric(
+        key="MASTERY_PROBABILITY_ESTIMATE",
+        label="개념 숙달 확률 추정",
+        value=mastery,
+        unit="PERCENT",
+        confidence=confidence,
+        formula="BKT-style update with prior=0.5, guess=0.2, slip=0.1, transition=0.1",
+        evidenceRefs=refs[:10],
+        warnings=["초기 추정치이며 문항 수가 적으면 변동성이 큽니다."],
+        insufficientEvidence=mastery is None,
+    ))
+
+    difficulty_adjusted = _difficulty_adjusted_score(graded)
+    metrics.append(QuantitativeMetric(
+        key="DIFFICULTY_ADJUSTED_SCORE",
+        label="난이도 보정 이해 점수",
+        value=difficulty_adjusted,
+        unit="PERCENT",
+        confidence=confidence,
+        formula="sum(scoreRatio * difficultyWeight) / sum(difficultyWeight) * 100",
+        evidenceRefs=refs[:10],
+        warnings=["문항 difficulty가 없으면 quizType 기반 기본 가중치를 사용합니다."],
+        insufficientEvidence=difficulty_adjusted is None,
+    ))
+
+    concept_coverage = _concept_coverage_percent(context)
+    concept_refs = [
+        _learning_evidence_ref(item, index)
+        for index, item in enumerate(context.learningEvidence)
+        if item.weakConcepts or item.wrongItems
+    ][:10]
+    metrics.append(QuantitativeMetric(
+        key="CONCEPT_COVERAGE_SCORE",
+        label="개념 확인 커버리지",
+        value=concept_coverage,
+        unit="PERCENT",
+        confidence=confidence if concept_coverage is not None else "LOW",
+        formula="observedConceptCount / targetConceptCount * 100",
+        evidenceRefs=concept_refs,
+        warnings=[] if concept_coverage is not None else ["weakConcepts/resolvedConcepts 또는 wrongItems 개념 태그가 부족합니다."],
+        insufficientEvidence=concept_coverage is None,
+    ))
+
+    recovery_score = _misconception_recovery_score(context)
+    recovery_refs = [
+        _learning_evidence_ref(item, index)
+        for index, item in enumerate(context.learningEvidence)
+        if (item.eventType or "").upper() in {"QUIZ_GRADED", "RETEST_GRADED", "MISCONCEPTION_REPAIR_COMPLETED"}
+    ][:10]
+    metrics.append(QuantitativeMetric(
+        key="MISCONCEPTION_RECOVERY_SCORE",
+        label="오개념 교정 회복 점수",
+        value=recovery_score,
+        unit="PERCENT",
+        confidence=confidence if recovery_score is not None else "LOW",
+        formula="max(0, latestRetestScore - firstFailedScore) * 100 + repairCompletionBonus",
+        evidenceRefs=recovery_refs,
+        warnings=[] if recovery_score is not None else ["저득점-교정-재시험 흐름 근거가 부족합니다."],
+        insufficientEvidence=recovery_score is None,
+    ))
+
+    metric_values = [
+        metric.value
+        for metric in metrics
+        if metric.key in {
+            "CONSERVATIVE_DIAGNOSTIC_SCORE",
+            "NORMALIZED_LEARNING_GAIN",
+            "MASTERY_PROBABILITY_ESTIMATE",
+            "DIFFICULTY_ADJUSTED_SCORE",
+            "MISCONCEPTION_RECOVERY_SCORE",
+        }
+        and metric.value is not None
+    ]
+    initial_signal = round(sum(metric_values) / len(metric_values), 1) if metric_values else None
+    return metrics, initial_signal
 
 
 def _truncate_text(value: str | None, limit: int) -> str | None:
@@ -391,8 +820,38 @@ def _insufficient_criteria_analysis(
         confidence="LOW",
         analysis=reason,
         evidence=[],
+        evidenceRefs=[],
         insufficientEvidence=True,
     )
+
+
+def _criterion_evidence_refs(context: StudentAiReportContext, criterion: ReportCriterion) -> list[str]:
+    refs: list[str] = []
+    if criterion.is_built_in():
+        refs.extend(_generic_evidence_ref(item, index) for index, item in enumerate(context.evidence))
+        refs.extend(_learning_evidence_ref(item, index) for index, item in enumerate(context.learningEvidence))
+        return refs[:5]
+
+    label = (criterion.label or "").strip().lower()
+    description_terms = [
+        word
+        for word in (criterion.description or "").strip().lower().split()
+        if len(word) >= 4
+    ][:12]
+    for index, item in enumerate(context.evidence):
+        text = " ".join(filter(None, [item.summary, item.rawText])).lower()
+        if (label and label in text) or any(term in text for term in description_terms):
+            refs.append(_generic_evidence_ref(item, index))
+    for index, item in enumerate(context.learningEvidence):
+        nested_text = " ".join(filter(None, [
+            item.summary,
+            json.dumps(item.evidence, ensure_ascii=False) if item.evidence else "",
+            json.dumps(item.raw, ensure_ascii=False) if item.raw else "",
+            " ".join(item.weakConcepts),
+        ])).lower()
+        if (label and label in nested_text) or any(term in nested_text for term in description_terms):
+            refs.append(_learning_evidence_ref(item, index))
+    return refs[:5]
 
 
 def _fallback_criteria_analysis(context: StudentAiReportContext) -> list[CompetencyAnalysis]:
@@ -403,6 +862,7 @@ def _fallback_criteria_analysis(context: StudentAiReportContext) -> list[Compete
         if not _criteria_supported_by_context(context, criterion):
             results.append(_insufficient_criteria_analysis(criterion))
             continue
+        evidence_refs = _criterion_evidence_refs(context, criterion)
         results.append(CompetencyAnalysis(
             criteriaId=criterion.criteria_id(),
             key=criterion.key or criterion.criteria_id(),
@@ -418,6 +878,7 @@ def _fallback_criteria_analysis(context: StudentAiReportContext) -> list[Compete
                 "보수적으로 추정했습니다."
             ),
             evidence=evidence_used[:3],
+            evidenceRefs=evidence_refs,
             insufficientEvidence=not bool(evidence_used),
         ))
     return results
@@ -438,6 +899,7 @@ def _analysis_schema(criteria_mode: bool = False) -> dict[str, Any]:
                 "confidence": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
                 "analysis": {"type": "string"},
                 "evidence": {"type": "array", "items": {"type": "string"}},
+                "evidenceRefs": {"type": "array", "items": {"type": "string"}},
                 "insufficientEvidence": {"type": "boolean"},
             },
             "required": [
@@ -471,6 +933,7 @@ def _analysis_schema(criteria_mode: bool = False) -> dict[str, Any]:
             "studentId": {"type": ["integer", "null"]},
             "courseId": {"type": ["integer", "null"]},
             "summary": {"type": "string"},
+            "summaryMarkdown": {"type": "string"},
             "strengths": {"type": "array", "items": {"type": "string"}},
             "weaknesses": {"type": "array", "items": {"type": "string"}},
             "competencyAnalysis": {"type": "array", "items": competency_item_schema},
@@ -510,8 +973,12 @@ Do not invent facts that are not present in the student data.
 If reportCriteria is present:
 - Evaluate every criterion in the supplied order.
 - Match each result with criteriaId equal to the criterion id.
-- Include key, label, builtIn, score, level, confidence, analysis, evidence, insufficientEvidence.
+- Include key, label, builtIn, score, level, confidence, analysis, evidence, evidenceRefs, insufficientEvidence.
+- Match reportCriteria against learningEvidence, evidence, assessments, and competencies before assigning a score.
+- evidenceRefs must contain supplied evidenceId/sourceId-style identifiers when available.
 - If evidence is missing, return score=null, level=INSUFFICIENT_DATA, confidence=LOW, evidence=[], insufficientEvidence=true.
+- Never treat missing score data as 0.
+- summaryMarkdown should contain the same report summary in Markdown-compatible Korean text.
 
 Report criteria:
 {json.dumps(criteria, ensure_ascii=False)}
@@ -601,6 +1068,7 @@ def _normalize_criteria_analysis_payload(
             confidence = "LOW"
             evidence = []
             warnings.append(f"insufficient_evidence:{criterion.criteria_id()}")
+        evidence_refs = _criterion_evidence_refs(context, criterion) if not insufficient else []
         normalized.append({
             "criteriaId": criterion.criteria_id(),
             "key": criterion.key or criterion.criteria_id(),
@@ -611,10 +1079,34 @@ def _normalize_criteria_analysis_payload(
             "confidence": confidence or "LOW",
             "analysis": raw.get("analysis") or "제공된 학생 데이터에서 이 기준을 판단할 근거가 충분하지 않습니다.",
             "evidence": evidence,
+            "evidenceRefs": evidence_refs,
             "insufficientEvidence": insufficient,
         })
 
     parsed["competencyAnalysis"] = normalized
+    parsed["warnings"] = list(dict.fromkeys(str(w) for w in warnings))
+    return parsed
+
+
+def _attach_deterministic_report_metrics(
+    parsed: dict[str, Any],
+    context: StudentAiReportContext,
+) -> dict[str, Any]:
+    summary = str(parsed.get("summary") or "")
+    parsed["summaryMarkdown"] = parsed.get("summaryMarkdown") or summary
+    data_coverage = _build_data_coverage(context)
+    quantitative_metrics, initial_signal = _build_quantitative_metrics(context)
+    parsed["dataCoverage"] = data_coverage.model_dump(mode="json")
+    parsed["quantitativeMetrics"] = [
+        metric.model_dump(mode="json")
+        for metric in quantitative_metrics
+    ]
+    parsed["initialSignalScore"] = initial_signal
+    parsed.setdefault("evidenceUsed", _evidence_used(context))
+    warnings = parsed.get("warnings") if isinstance(parsed.get("warnings"), list) else []
+    warnings = [*context.reportWarnings, *warnings]
+    if initial_signal is None:
+        warnings = [*warnings, "initial_signal_insufficient_scored_evidence"]
     parsed["warnings"] = list(dict.fromkeys(str(w) for w in warnings))
     return parsed
 
@@ -636,7 +1128,8 @@ def _normalize_analysis_payload(
     if not isinstance(parsed.get("competencyAnalysis"), list):
         parsed["competencyAnalysis"] = []
     if context.reportCriteria:
-        return _normalize_criteria_analysis_payload(parsed, context)
+        parsed = _normalize_criteria_analysis_payload(parsed, context)
+        return _attach_deterministic_report_metrics(parsed, context)
 
     normalized: list[dict[str, Any]] = []
     context_competencies = context.competencies
@@ -683,7 +1176,7 @@ def _normalize_analysis_payload(
             })
 
     parsed["competencyAnalysis"] = normalized
-    return parsed
+    return _attach_deterministic_report_metrics(parsed, context)
 
 
 @router.post("/student/analyze", response_model=StudentReportAnalysis)
