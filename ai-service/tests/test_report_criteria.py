@@ -394,3 +394,64 @@ def test_quantitative_metrics_include_misconception_recovery_score():
     assert by_key["MISCONCEPTION_RECOVERY_SCORE"].value == 70.0
     assert by_key["MISCONCEPTION_RECOVERY_SCORE"].evidenceRefs == ["ev-fail", "ev-repair", "ev-retest"]
     assert initial_signal is not None
+
+
+def test_builtin_criteria_use_distinct_evidence_based_scores_instead_of_base_average():
+    context = StudentAiReportContext(
+        integratedLearningSummary=AiIntegratedLearningSummary(
+            quizAttemptCount=2,
+            passCount=1,
+            failCount=1,
+            weakConcepts=["CBR"],
+            resolvedConcepts=["CBR"],
+            latestActivityAt="2026-06-04T09:33:00",
+        ),
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-first",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.4,
+                passed=False,
+                pageNumber=6,
+                wrongItems=[{"concepts": ["CBR"]}],
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-repair",
+                eventType="MISCONCEPTION_REPAIR_COMPLETED",
+                weakConcepts=["CBR"],
+                pageNumber=6,
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-retest",
+                eventType="RETEST_GRADED",
+                scoreRatio=0.8,
+                passed=True,
+                pageNumber=6,
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-question",
+                eventType="USER_MESSAGE",
+                pageNumber=6,
+                raw={"message": "왜 CBR과 VBR의 차이가 중요한지 예시로 설명해줘"},
+            ),
+        ],
+        reportCriteria=[
+            criterion("builtin:CONCEPT_UNDERSTANDING", "개념 이해도", True),
+            criterion("builtin:QUIZ_ACCURACY", "퀴즈 정확도", True),
+            criterion("builtin:WRONG_ANSWER_REFLECTION", "오답 성찰력", True),
+            criterion("builtin:LEARNING_PERSISTENCE", "학습 지속성", True),
+            criterion("builtin:GROWTH_MOMENTUM", "성장 모멘텀", True),
+            criterion("builtin:QUESTION_SPECIFICITY", "질문 구체성", True),
+        ],
+    )
+
+    result = _fallback_analysis(context)
+    by_id = {item.criteriaId: item for item in result.competencyAnalysis}
+
+    assert by_id["builtin:QUIZ_ACCURACY"].score == 60.0
+    assert by_id["builtin:CONCEPT_UNDERSTANDING"].score == 72.0
+    assert by_id["builtin:WRONG_ANSWER_REFLECTION"].score == 91.0
+    assert by_id["builtin:GROWTH_MOMENTUM"].score == 83.3
+    assert by_id["builtin:QUESTION_SPECIFICITY"].score != by_id["builtin:QUIZ_ACCURACY"].score
+    assert len({item.score for item in result.competencyAnalysis}) > 3
+    assert "퀴즈 평균" in by_id["builtin:CONCEPT_UNDERSTANDING"].analysis

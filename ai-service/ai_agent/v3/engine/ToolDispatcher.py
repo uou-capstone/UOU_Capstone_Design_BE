@@ -18,6 +18,7 @@ Tool execution mapping:
 from __future__ import annotations
 
 import uuid
+import re
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -189,6 +190,8 @@ class ToolDispatcher:
             "quizType",
             "exam_type",
             "examType",
+            "quiz_id",
+            "quizId",
             "selectedType",
             "accept",
             "decision",
@@ -415,50 +418,96 @@ class ToolDispatcher:
             lecture_content = learning_context.build_quiz_context(page_state.explanation)
             count = _optional_int_param(params, "count", "questionCount", "numQuestions") or 5
             profile = params.get("profile")
+            retest_context = _build_retest_generation_context(state, quiz_type, event_payload)
+            if retest_context:
+                lecture_content = _append_retest_generation_guidance(lecture_content, retest_context)
+                profile = _merge_retest_generation_profile(profile, retest_context)
             context_label = _quiz_context_label(learning_context)
+            if retest_context:
+                context_label = f"{context_label} 재시험"
             if trace := trace_event(
                 "GENERATE_QUIZ context 준비\n"
                 f"- quizType={quiz_type}\n"
                 f"- count={count}\n"
                 f"- contextLabel={context_label}\n"
+                f"- retest={'yes' if retest_context else 'no'}\n"
                 f"- {_trace_context_summary(learning_context)}",
                 agent="quiz",
                 tool="GENERATE_QUIZ",
             ):
                 yield trace
 
-            async for event in self._quiz.run_stream(
-                quiz_type,
-                lecture_content,
-                profile,
-                state.learner.model_dump(),
-                count,
-                context_label=context_label,
-            ):
-                if event.type == NdjsonEventType.DONE and event.data:
-                    quiz_data = event.data.get("quiz")
-                    if quiz_data:
-                        record = QuizRecord(
-                            quiz_id=str(uuid.uuid4()),
-                            page_number=state.current_page,
-                            quiz_type=quiz_type,
-                            questions=quiz_data if isinstance(quiz_data, list) else [],
-                            coverage_start_page=learning_context.coverage_start_page,
-                            coverage_end_page=learning_context.coverage_end_page,
-                            source_request=str(params.get("source_request") or params.get("sourceRequest") or "") or None,
-                        )
-                        state.quiz_history.append(record)
-                        if trace := trace_event(
-                            "GENERATE_QUIZ 결과 저장\n"
-                            f"- quizId={record.quiz_id}\n"
-                            f"- quizType={record.quiz_type}\n"
-                            f"- questions={len(record.questions)}\n"
-                            f"- coverage={record.coverage_start_page or record.page_number}-{record.coverage_end_page or record.page_number}",
-                            agent="quiz",
-                            tool="GENERATE_QUIZ",
-                        ):
-                            yield trace
-                yield event
+            generated = False
+            max_generation_attempts = 2 if retest_context else 1
+            for generation_attempt in range(max_generation_attempts):
+                attempt_lecture_content = lecture_content
+                if retest_context and generation_attempt > 0:
+                    attempt_lecture_content = _append_retest_retry_guidance(lecture_content)
+                retry_retest_generation = False
+                duplicate_retest_generation = False
+
+                async for event in self._quiz.run_stream(
+                    quiz_type,
+                    attempt_lecture_content,
+                    profile,
+                    state.learner.model_dump(),
+                    count,
+                    context_label=context_label,
+                ):
+                    if event.type == NdjsonEventType.DONE and event.data:
+                        quiz_data = event.data.get("quiz")
+                        if retest_context and quiz_data and _quiz_reuses_previous_questions(quiz_data, retest_context):
+                            duplicate_retest_generation = True
+                            retry_retest_generation = generation_attempt < max_generation_attempts - 1
+                            if trace := trace_event(
+                                "GENERATE_QUIZ 재시험 중복 문항 감지\n"
+                                f"- attempt={generation_attempt + 1}\n"
+                                f"- retry={'yes' if retry_retest_generation else 'no'}",
+                                agent="quiz",
+                                tool="GENERATE_QUIZ",
+                            ):
+                                yield trace
+                            break
+
+                        if quiz_data:
+                            record = QuizRecord(
+                                quiz_id=str(uuid.uuid4()),
+                                page_number=state.current_page,
+                                quiz_type=quiz_type,
+                                questions=quiz_data if isinstance(quiz_data, list) else [],
+                                coverage_start_page=learning_context.coverage_start_page,
+                                coverage_end_page=learning_context.coverage_end_page,
+                                source_request=str(params.get("source_request") or params.get("sourceRequest") or "") or None,
+                            )
+                            state.quiz_history.append(record)
+                            if trace := trace_event(
+                                "GENERATE_QUIZ 결과 저장\n"
+                                f"- quizId={record.quiz_id}\n"
+                                f"- quizType={record.quiz_type}\n"
+                                f"- questions={len(record.questions)}\n"
+                                f"- coverage={record.coverage_start_page or record.page_number}-{record.coverage_end_page or record.page_number}",
+                                agent="quiz",
+                                tool="GENERATE_QUIZ",
+                            ):
+                                yield trace
+                    yield event
+
+                if duplicate_retest_generation and retry_retest_generation:
+                    continue
+                if duplicate_retest_generation:
+                    break
+                generated = True
+                break
+
+            if retest_context and not generated:
+                yield NdjsonEvent(
+                    type=NdjsonEventType.ERROR,
+                    agent="quiz",
+                    code="RETEST_QUIZ_DUPLICATE_GENERATION_FAILED",
+                    message="재시험 문항이 기존 문항과 반복되어 생성에 실패했습니다. 다시 시도해 주세요.",
+                    details=[{"reason": "DUPLICATE_RETEST_QUESTIONS"}],
+                )
+                return
 
             page_state.status = PageStatus.QUIZ_IN_PROGRESS
             state.pending_quiz_request = None
@@ -467,8 +516,13 @@ class ToolDispatcher:
         # AUTO_GRADE_MCQ_OX
         # ----------------------------------------------------------------
         elif tool == ToolName.AUTO_GRADE_MCQ_OX:
-            quiz_record = self._get_latest_quiz_record(state)
             user_answers = params.get("answers", [])
+            requested_quiz_type = _params_quiz_type(params, "")
+            quiz_record = self._get_latest_quiz_record(
+                state,
+                quiz_type=requested_quiz_type,
+                event_payload=event_payload,
+            )
             quiz_type = _params_quiz_type(params, quiz_record.quiz_type if quiz_record else "Five_Choice")
 
             if quiz_record:
@@ -540,8 +594,13 @@ class ToolDispatcher:
         # GRADE_SHORT_OR_ESSAY
         # ----------------------------------------------------------------
         elif tool == ToolName.GRADE_SHORT_OR_ESSAY:
-            quiz_record = self._get_latest_quiz_record(state)
             user_answers = params.get("answers", [])
+            requested_quiz_type = _params_quiz_type(params, "")
+            quiz_record = self._get_latest_quiz_record(
+                state,
+                quiz_type=requested_quiz_type,
+                event_payload=event_payload,
+            )
             quiz_type = _params_quiz_type(params, quiz_record.quiz_type if quiz_record else "Short_Answer")
             learning_context = self._context_collector.collect(state, page_state)
             lecture_content = learning_context.build_quiz_context(page_state.explanation)
@@ -739,12 +798,44 @@ class ToolDispatcher:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_latest_quiz_record(self, state: SessionState) -> Optional[QuizRecord]:
-        page_records = [
-            r for r in reversed(state.quiz_history)
-            if r.page_number == state.current_page
-        ]
-        return page_records[0] if page_records else None
+    def _get_latest_quiz_record(
+        self,
+        state: SessionState,
+        *,
+        quiz_type: str | None = None,
+        event_payload: Dict[str, Any] | None = None,
+    ) -> Optional[QuizRecord]:
+        records = list(reversed(state.quiz_history))
+        if not records:
+            return None
+
+        target_quiz_id = _payload_quiz_id(event_payload or {})
+        if target_quiz_id:
+            for record in records:
+                if str(record.quiz_id) == target_quiz_id:
+                    return record
+
+        normalized_type = normalize_exam_type_string(str(quiz_type or "").strip())
+
+        def type_matches(record: QuizRecord) -> bool:
+            return not normalized_type or normalize_exam_type_string(record.quiz_type) == normalized_type
+
+        for record in records:
+            if record.page_number == state.current_page and record.score is None and type_matches(record):
+                return record
+        for record in records:
+            if record.score is None and type_matches(record):
+                return record
+        for record in records:
+            if record.page_number == state.current_page and type_matches(record):
+                return record
+        for record in records:
+            if type_matches(record):
+                return record
+        for record in records:
+            if record.page_number == state.current_page:
+                return record
+        return records[0]
 
     def _apply_grading_to_record(
         self,
@@ -869,6 +960,17 @@ def _params_quiz_type(params: Dict[str, Any], default: str) -> str:
             params.get("quizType", params.get("exam_type", params.get("examType", params.get("selectedType", default)))),
         )
     )
+
+
+def _payload_quiz_id(payload: Dict[str, Any]) -> str:
+    for key in ("quiz_id", "quizId", "id"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def _default_quiz_type_for_tool(tool: ToolName | None) -> str:
@@ -1056,6 +1158,248 @@ def _build_repair_learning_evidence(
         },
         "createdAt": intervention.get("completedAt") or intervention.get("updatedAt") or intervention.get("createdAt"),
     }
+
+
+def _build_retest_generation_context(
+    state: SessionState,
+    quiz_type: str,
+    event_payload: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    if not _is_retest_generation_request(state, event_payload):
+        return None
+
+    intervention = state.active_intervention if isinstance(state.active_intervention, dict) else {}
+    source_quiz_id = str(intervention.get("sourceQuizId") or "").strip()
+    source_record = _find_quiz_record(state, source_quiz_id)
+    source_assessment = _find_quiz_assessment(
+        state,
+        str(intervention.get("sourceArtifactId") or ""),
+        source_quiz_id,
+    )
+    focus_concepts = _string_list(intervention.get("focusConcepts"))
+    if not focus_concepts and intervention.get("focusConcept"):
+        focus_concepts = [str(intervention.get("focusConcept")).strip()]
+    if not focus_concepts and source_assessment:
+        focus_concepts = _string_list(source_assessment.get("focusConcepts"))
+
+    avoid_questions = _question_texts(source_record.questions if source_record else [])
+    missed_questions = _missed_question_texts(source_assessment.get("missedQuestions") if source_assessment else [])
+    avoid_questions = [item for item in dict.fromkeys([*missed_questions, *avoid_questions]) if item]
+
+    return {
+        "mode": "RETEST",
+        "quizType": quiz_type,
+        "sourceQuizId": source_quiz_id or None,
+        "focusConcepts": focus_concepts[:8],
+        "repairGoal": str(intervention.get("repairGoal") or "").strip() or None,
+        "repairSummary": str(intervention.get("repairSummary") or "").strip() or None,
+        "previousQuestions": avoid_questions[:10],
+    }
+
+
+def _is_retest_generation_request(
+    state: SessionState,
+    event_payload: Dict[str, Any] | None,
+) -> bool:
+    payload = event_payload or {}
+    mode = str(
+        payload.get("mode")
+        or payload.get("quizMode")
+        or payload.get("generationMode")
+        or payload.get("reason")
+        or ""
+    ).strip().upper()
+    if "RETEST" in mode:
+        return True
+
+    intervention = state.active_intervention if isinstance(state.active_intervention, dict) else None
+    if not intervention:
+        return False
+    status = str(intervention.get("status") or "").strip().upper()
+    if status in {"RESOLVED_BY_RETEST", "CANCELLED"}:
+        return False
+    if status not in {"COMPLETED", "REPAIR_COMPLETED", "READY_FOR_RETEST"}:
+        return False
+    page_number = int(intervention.get("pageNumber") or 0)
+    return page_number == 0 or page_number == int(state.current_page or 1)
+
+
+def _append_retest_generation_guidance(
+    lecture_content: str,
+    retest_context: Dict[str, Any],
+) -> str:
+    focus = ", ".join(_string_list(retest_context.get("focusConcepts"))) or "이번 오답 핵심 개념"
+    previous_questions = _string_list(retest_context.get("previousQuestions"))
+    avoid_block = "\n".join(f"- {item}" for item in previous_questions[:10]) or "- 이전 문항 없음"
+    repair_goal = str(retest_context.get("repairGoal") or "").strip()
+    repair_summary = str(retest_context.get("repairSummary") or "").strip()
+
+    guidance = (
+        "\n\n[재시험 출제 지시 - 사실 근거가 아니라 생성 제약]\n"
+        "- 이 생성은 오개념 교정 이후의 재시험입니다.\n"
+        "- 기존 시험보다 한 단계 쉬운 난이도로, 같은 개념을 더 직접적인 단서와 짧은 문장으로 다시 확인하세요.\n"
+        "- 아래 기존 문항과 동일하거나 거의 같은 발문, OX 문장, 선택지 조합을 절대 재사용하지 마세요.\n"
+        "- 정답 근거는 반드시 위 강의 자료에만 두고, 이 재시험 지시는 출제 방식 조절에만 사용하세요.\n"
+        f"- 집중 개념: {focus}\n"
+    )
+    if repair_goal:
+        guidance += f"- 교정 목표: {repair_goal}\n"
+    if repair_summary:
+        guidance += f"- 직전 교정 요약: {repair_summary[:500]}\n"
+    guidance += "[기존 문항 재사용 금지 목록]\n" + avoid_block
+    return f"{lecture_content}{guidance}"
+
+
+def _append_retest_retry_guidance(lecture_content: str) -> str:
+    return (
+        f"{lecture_content}\n\n"
+        "[재시험 재생성 지시]\n"
+        "- 직전 생성 결과가 기존 문항과 너무 유사했습니다.\n"
+        "- 같은 정답을 확인하더라도 발문 구조, 예시, 선택지/문장 표현을 완전히 바꾸세요.\n"
+        "- 더 쉬운 확인 문제로 만들되, 기존 문항의 문장을 복사하거나 일부 단어만 바꾸지 마세요."
+    )
+
+
+def _quiz_reuses_previous_questions(
+    quiz_data: Any,
+    retest_context: Dict[str, Any],
+) -> bool:
+    previous = [_compact_question_text(item) for item in _string_list(retest_context.get("previousQuestions"))]
+    previous = [item for item in previous if item]
+    if not previous:
+        return False
+
+    generated = [_compact_question_text(item) for item in _question_texts(quiz_data)]
+    generated = [item for item in generated if item]
+    for new_item in generated:
+        for old_item in previous:
+            if new_item == old_item:
+                return True
+            if len(new_item) >= 24 and len(old_item) >= 24 and (new_item in old_item or old_item in new_item):
+                return True
+    return False
+
+
+_QUESTION_COMPACT_RE = re.compile(r"[\s`'\".,!?…:;()\[\]{}<>·ㆍ|/\\_-]+")
+
+
+def _compact_question_text(text: str) -> str:
+    return _QUESTION_COMPACT_RE.sub("", str(text or "").strip()).lower()
+
+
+def _merge_retest_generation_profile(
+    profile: Any,
+    retest_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    profile_data = dict(profile) if isinstance(profile, dict) else {}
+    learning_goal = dict(profile_data.get("learning_goal") or {})
+    user_status = dict(profile_data.get("user_status") or {})
+    feedback = dict(profile_data.get("feedback_preference") or {})
+
+    focus_areas = _string_list(learning_goal.get("focus_areas"))
+    for concept in _string_list(retest_context.get("focusConcepts")):
+        if concept not in focus_areas:
+            focus_areas.append(concept)
+
+    learning_goal["focus_areas"] = focus_areas[:10]
+    learning_goal["target_depth"] = "Concept"
+    learning_goal["question_modality"] = learning_goal.get("question_modality") or "Theoretical"
+    user_status["weakness_focus"] = True
+    user_status["proficiency_level"] = _lower_retest_proficiency(user_status.get("proficiency_level"))
+    feedback["strictness"] = "Lenient"
+    feedback["explanation_depth"] = "Brief"
+
+    profile_data["learning_goal"] = learning_goal
+    profile_data["user_status"] = user_status
+    profile_data["feedback_preference"] = feedback
+    return profile_data
+
+
+def _lower_retest_proficiency(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"advanced", "고급", "advance"}:
+        return "Intermediate"
+    return "Beginner"
+
+
+def _find_quiz_record(state: SessionState, quiz_id: str) -> QuizRecord | None:
+    if quiz_id:
+        for record in reversed(state.quiz_history):
+            if str(record.quiz_id) == quiz_id:
+                return record
+    intervention = state.active_intervention if isinstance(state.active_intervention, dict) else {}
+    page_number = int(intervention.get("pageNumber") or state.current_page or 1)
+    for record in reversed(state.quiz_history):
+        if record.page_number == page_number and record.score is not None and record.passed is False:
+            return record
+    for record in reversed(state.quiz_history):
+        if record.page_number == page_number:
+            return record
+    return None
+
+
+def _find_quiz_assessment(
+    state: SessionState,
+    artifact_id: str,
+    quiz_id: str,
+) -> Dict[str, Any] | None:
+    for item in reversed(state.quiz_assessments):
+        if artifact_id and str(item.get("artifactId") or "") == artifact_id:
+            return item
+        if quiz_id and str(item.get("quizId") or "") == quiz_id:
+            return item
+    return None
+
+
+def _question_texts(questions: Any) -> List[str]:
+    if not isinstance(questions, list):
+        return []
+    return [_question_text(item) for item in questions if _question_text(item)]
+
+
+def _missed_question_texts(items: Any) -> List[str]:
+    if not isinstance(items, list):
+        return []
+    out: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = _question_text(item)
+        if text:
+            out.append(text)
+    return out
+
+
+def _question_text(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in (
+        "question",
+        "prompt",
+        "question_content",
+        "questionContent",
+        "statement",
+        "front",
+        "frontContent",
+        "content",
+    ):
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text[:500]
+    return ""
+
+
+def _string_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
 
 
 def _normalize_wrong_items(raw: Any) -> List[Dict[str, Any]]:
