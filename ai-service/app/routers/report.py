@@ -438,6 +438,12 @@ def _generic_evidence_ref(item: AiEvidenceItem, index: int) -> str:
     return f"{item.type or 'evidence'}:{index}"
 
 
+def _assessment_ref(item: AiAssessmentItem, index: int) -> str:
+    if item.assessmentId is not None:
+        return f"assessment:{item.assessmentId}"
+    return f"assessment:{index}"
+
+
 def _score_ratio_from_learning_evidence(item: AiLearningEvidenceItem) -> float | None:
     score = _as_float(item.scoreRatio)
     if score is None:
@@ -468,6 +474,23 @@ def _graded_learning_evidence(context: StudentAiReportContext) -> list[tuple[AiL
             continue
         graded.append((item, _learning_evidence_ref(item, index), score))
     return graded
+
+
+def _scored_assessments(context: StudentAiReportContext) -> list[tuple[AiAssessmentItem, str, float]]:
+    scored: list[tuple[AiAssessmentItem, str, float]] = []
+    for index, item in enumerate(context.assessments):
+        score = _as_float(item.scoreRatio)
+        if score is None:
+            raw_score = _as_float(item.score)
+            max_score = _as_float(item.maxScore)
+            if raw_score is not None and max_score and max_score > 0:
+                score = raw_score / max_score
+        if score is None:
+            continue
+        if score > 1.0:
+            score = score / 100.0
+        scored.append((item, _assessment_ref(item, index), max(0.0, min(1.0, score))))
+    return scored
 
 
 def _confidence_for_evidence(scored_count: int, total_count: int) -> Literal["LOW", "MEDIUM", "HIGH"]:
@@ -629,6 +652,329 @@ def _misconception_recovery_score(context: StudentAiReportContext) -> float | No
     improvement = max(0.0, latest - first_failed)
     repair_bonus = 0.1 if repair_completed else 0.0
     return round(min(1.0, improvement + repair_bonus) * 100.0, 1)
+
+
+def _level_for_score(score: float | None) -> str:
+    if score is None:
+        return "INSUFFICIENT_DATA"
+    if score >= 90:
+        return "EXCELLENT"
+    if score >= 75:
+        return "GOOD"
+    if score >= 60:
+        return "WATCH"
+    return "NEEDS_IMPROVEMENT"
+
+
+def _confidence_from_refs(refs: list[str]) -> Literal["LOW", "MEDIUM", "HIGH"]:
+    if len(refs) >= 8:
+        return "HIGH"
+    if len(refs) >= 3:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _extract_session_ids(context: StudentAiReportContext) -> set[str]:
+    session_ids: set[str] = set()
+    for item in context.learningEvidence:
+        for source in (item.evidence, item.raw):
+            raw = source.get("sessionId") or source.get("session_id") or source.get("learningSessionId")
+            if raw is not None and str(raw).strip():
+                session_ids.add(str(raw).strip())
+    return session_ids
+
+
+def _extract_question_text(item: AiLearningEvidenceItem) -> str | None:
+    if (item.eventType or "").upper() not in {
+        "USER_MESSAGE",
+        "ANSWER_QUESTION",
+        "QUESTION_ANSWERED",
+        "QA_ANSWERED",
+    }:
+        return None
+    value = _first_string(
+        item.evidence.get("question"),
+        item.evidence.get("questionText"),
+        item.evidence.get("message"),
+        item.evidence.get("text"),
+        item.raw.get("question"),
+        item.raw.get("questionText"),
+        item.raw.get("message"),
+        item.raw.get("text"),
+        item.summary,
+    )
+    if not value:
+        return None
+    return value.strip()
+
+
+def _question_records(context: StudentAiReportContext) -> list[tuple[str, str]]:
+    records: list[tuple[str, str]] = []
+    for index, item in enumerate(context.learningEvidence):
+        question = _extract_question_text(item)
+        if question:
+            records.append((_learning_evidence_ref(item, index), question))
+    for index, item in enumerate(context.evidence):
+        if (item.type or "").lower() not in {"question", "qa", "discussion"}:
+            continue
+        question = _first_string(item.summary, item.rawText)
+        if question:
+            records.append((_generic_evidence_ref(item, index), question))
+    return records
+
+
+def _quiz_accuracy_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    graded = _graded_learning_evidence(context)
+    if graded:
+        refs = [ref for _item, ref, _score in graded]
+        score = _ratio_to_percent(_mean([score for _item, _ref, score in graded]))
+        return score, refs[:10], "퀴즈 정확도는 통합학습 퀴즈/재시험 채점 점수 평균으로 계산했습니다."
+
+    assessments = _scored_assessments(context)
+    if assessments:
+        refs = [ref for _item, ref, _score in assessments]
+        score = _ratio_to_percent(_mean([score for _item, _ref, score in assessments]))
+        return score, refs[:10], "퀴즈 정확도는 저장된 시험/평가 점수 평균으로 계산했습니다."
+
+    return None, [], "채점 가능한 퀴즈 또는 평가 점수 근거가 없습니다."
+
+
+def _reflection_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    graded = _graded_learning_evidence(context)
+    failed = [
+        (item, ref, score)
+        for item, ref, score in graded
+        if item.passed is False or score < 0.6 or bool(item.wrongItems)
+    ]
+    repair_items = [
+        (item, _learning_evidence_ref(item, index))
+        for index, item in enumerate(context.learningEvidence)
+        if (item.eventType or "").upper() in {"MISCONCEPTION_REPAIR_COMPLETED", "REVIEW_DECISION", "RETEST_DECISION"}
+    ]
+    retests = [
+        (item, ref, score)
+        for item, ref, score in graded
+        if (item.eventType or "").upper() == "RETEST_GRADED"
+    ]
+
+    if not failed:
+        if graded:
+            refs = [ref for _item, ref, _score in graded]
+            return 80.0, refs[:10], "오답 교정이 필요한 실패 기록은 없고, 채점 근거는 존재합니다."
+        return None, [], "오답 후 교정/재시험 참여 여부를 판단할 채점 근거가 없습니다."
+
+    first_failed = failed[0][2]
+    latest_retest = retests[-1][2] if retests else None
+    repair_score = 35.0
+    if repair_items:
+        repair_score += 25.0
+    if retests:
+        repair_score += 25.0
+    if latest_retest is not None:
+        repair_score += max(0.0, latest_retest - first_failed) * 15.0
+    refs = [
+        *(ref for _item, ref, _score in failed),
+        *(ref for _item, ref in repair_items),
+        *(ref for _item, ref, _score in retests),
+    ]
+    return round(min(100.0, repair_score), 1), refs[:10], "오답 발생 후 교정 설명 확인, 재시험 참여, 재시험 향상도를 함께 반영했습니다."
+
+
+def _persistence_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    refs = [
+        _learning_evidence_ref(item, index)
+        for index, item in enumerate(context.learningEvidence)
+    ][:10]
+    if not refs and not context.activitySummary.submittedCount and not context.integratedLearningSummary.quizAttemptCount:
+        return None, [], "세션, 페이지 진행, 최근 활동 근거가 부족합니다."
+
+    session_count = max(1 if context.learningEvidence else 0, len(_extract_session_ids(context)))
+    page_count = len({item.pageNumber for item in context.learningEvidence if item.pageNumber is not None})
+    quiz_count = context.integratedLearningSummary.quizAttemptCount or sum(
+        1 for item in context.learningEvidence
+        if (item.eventType or "").upper() in {"QUIZ_GRADED", "RETEST_GRADED"}
+    )
+    submitted = context.activitySummary.submittedCount
+    recent_bonus = 10.0 if context.integratedLearningSummary.latestActivityAt or context.activitySummary.latestSubmittedAt else 0.0
+    score = min(100.0, session_count * 18.0 + page_count * 8.0 + quiz_count * 6.0 + submitted * 5.0 + recent_bonus)
+    return round(score, 1), refs, "학습 지속성은 세션 수, 페이지 진행 흔적, 퀴즈 시도, 최근 활동 여부를 합산했습니다."
+
+
+def _question_specificity_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    questions = _question_records(context)
+    if not questions:
+        return None, [], "질문 기록이 없어 질문 구체성을 판단할 수 없습니다."
+
+    lengths = [len(question) for _ref, question in questions]
+    detail_hits = sum(
+        1
+        for _ref, question in questions
+        if any(token in question for token in ["왜", "어떻게", "차이", "예시", "페이지", "개념", "설명", "근거"])
+    )
+    count_component = min(35.0, len(questions) * 10.0)
+    length_component = min(35.0, (_mean(lengths) or 0.0) / 2.0)
+    detail_component = min(30.0, detail_hits * 10.0)
+    score = count_component + length_component + detail_component
+    return round(min(100.0, score), 1), [ref for ref, _question in questions[:10]], "질문 구체성은 질문 수, 평균 길이, 구체화 표현 포함 여부로 계산했습니다."
+
+
+def _concept_understanding_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    quiz_score, quiz_refs, _reason = _quiz_accuracy_estimate(context)
+    target_count = len({
+        *[c for c in context.integratedLearningSummary.weakConcepts if c.strip()],
+        *[c for c in context.integratedLearningSummary.resolvedConcepts if c.strip()],
+    })
+    resolved_count = len({c for c in context.integratedLearningSummary.resolvedConcepts if c.strip()})
+    concept_score = round((resolved_count / target_count) * 100.0, 1) if target_count else None
+
+    if quiz_score is None and concept_score is None:
+        return None, [], "개념 이해도를 계산할 퀴즈 점수나 해결된 개념 근거가 없습니다."
+    if quiz_score is not None and concept_score is not None:
+        score = round((quiz_score * 0.7) + (concept_score * 0.3), 1)
+        return score, quiz_refs, "개념 이해도는 퀴즈 평균 70%와 해결된 개념 비율 30%를 합산했습니다."
+    if quiz_score is not None:
+        return quiz_score, quiz_refs, "개념 이해도는 현재 퀴즈 평균 점수를 기준으로 계산했습니다."
+    refs = [
+        _learning_evidence_ref(item, index)
+        for index, item in enumerate(context.learningEvidence)
+        if item.weakConcepts or item.wrongItems
+    ][:10]
+    return concept_score, refs, "개념 이해도는 약점 개념 대비 해결된 개념 비율로 계산했습니다."
+
+
+def _growth_momentum_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    graded = _graded_learning_evidence(context)
+    if len(graded) >= 2:
+        gain = _normalized_gain(graded[0][2], graded[-1][2])
+        if gain is not None:
+            score = round(max(0.0, min(100.0, 50.0 + gain / 2.0)), 1)
+            return score, [ref for _item, ref, _score in graded[:10]], "성장 모멘텀은 첫 퀴즈 대비 최근 퀴즈의 정규화 향상도를 50점 기준으로 환산했습니다."
+
+    trend = [value for value in context.scoreSummary.recentTrend if isinstance(value, (int, float))]
+    if len(trend) >= 2:
+        first = trend[0] / 100.0 if trend[0] > 1 else trend[0]
+        latest = trend[-1] / 100.0 if trend[-1] > 1 else trend[-1]
+        gain = _normalized_gain(first, latest)
+        if gain is not None:
+            score = round(max(0.0, min(100.0, 50.0 + gain / 2.0)), 1)
+            return score, [], "성장 모멘텀은 최근 점수 추세의 정규화 향상도로 계산했습니다."
+
+    return None, [], "첫 점수와 최근 점수를 비교할 충분한 시계열 근거가 없습니다."
+
+
+def _problem_solving_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    graded = _graded_learning_evidence(context)
+    score = _difficulty_adjusted_score(graded)
+    if score is not None:
+        return score, [ref for _item, ref, _score in graded[:10]], "문제 해결력은 문항 난이도와 퀴즈 유형을 반영한 보정 점수로 계산했습니다."
+    return _quiz_accuracy_estimate(context)
+
+
+def _transfer_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    advanced = [
+        (item, ref, score)
+        for item, ref, score in _graded_learning_evidence(context)
+        if _difficulty_weight_for_evidence(item) >= 1.0
+    ]
+    if advanced:
+        score = _ratio_to_percent(_mean([score for _item, _ref, score in advanced]))
+        return score, [ref for _item, ref, _score in advanced[:10]], "응용전이력은 단답/서술형 또는 중상 난이도 문항의 점수 평균으로 계산했습니다."
+    return None, [], "응용 문항, 단답/서술형, 중상 난이도 근거가 부족합니다."
+
+
+def _participation_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    refs = [
+        _learning_evidence_ref(item, index)
+        for index, item in enumerate(context.learningEvidence)
+    ][:10]
+    total = context.activitySummary.totalAssessments
+    submitted = context.activitySummary.submittedCount
+    question_count = len(_question_records(context))
+    quiz_count = context.integratedLearningSummary.quizAttemptCount
+    if total <= 0 and submitted <= 0 and question_count == 0 and quiz_count == 0 and not refs:
+        return None, [], "수업 참여도를 계산할 제출, 질문, 퀴즈, 세션 활동 근거가 없습니다."
+    submit_ratio = (submitted / total * 100.0) if total > 0 else None
+    activity_score = min(100.0, question_count * 12.0 + quiz_count * 10.0 + len(refs) * 3.0)
+    if submit_ratio is not None:
+        score = round((submit_ratio * 0.55) + (activity_score * 0.45), 1)
+    else:
+        score = round(activity_score, 1)
+    return score, refs, "수업 참여도는 제출률과 질문/퀴즈/세션 활동량을 함께 반영했습니다."
+
+
+def _confidence_estimate(context: StudentAiReportContext) -> tuple[float | None, list[str], str]:
+    persistence, persistence_refs, _ = _persistence_estimate(context)
+    quiz_score, quiz_refs, _ = _quiz_accuracy_estimate(context)
+    values = [value for value in [persistence, quiz_score] if value is not None]
+    if not values:
+        return None, [], "학습 자신감을 추정할 활동 지속성과 성공 경험 근거가 부족합니다."
+    score = round(sum(values) / len(values), 1)
+    return score, [*persistence_refs, *quiz_refs][:10], "학습 자신감은 활동 지속성과 퀴즈 성공 경험을 보수적으로 결합한 간접 지표입니다."
+
+
+def _criterion_kind(criterion: ReportCriterion) -> str | None:
+    text = " ".join(
+        str(value or "").lower()
+        for value in [criterion.key, criterion.id, criterion.label, criterion.description]
+    )
+    compact = text.replace("_", "").replace("-", "").replace(" ", "")
+    mappings: list[tuple[str, tuple[str, ...]]] = [
+        ("CONCEPT_UNDERSTANDING", ("conceptunderstanding", "concept", "개념이해", "개념 이해")),
+        ("QUESTION_SPECIFICITY", ("questionspecificity", "question", "질문구체", "질문 구체")),
+        ("PROBLEM_SOLVING", ("problemsolving", "문제해결", "문제 해결")),
+        ("APPLICATION_TRANSFER", ("applicationtransfer", "transfer", "응용전이", "응용 전이", "적용")),
+        ("QUIZ_ACCURACY", ("quizaccuracy", "quiz", "퀴즈정확", "퀴즈 정확")),
+        ("LEARNING_PERSISTENCE", ("learningpersistence", "persistence", "지속성", "학습지속", "학습 지속")),
+        ("WRONG_ANSWER_REFLECTION", ("wronganswerreflection", "reflection", "오답성찰", "오답 성찰", "피드백반영")),
+        ("CLASS_PARTICIPATION", ("classparticipation", "participation", "수업참여", "수업 참여")),
+        ("LEARNING_CONFIDENCE", ("learningconfidence", "confidence", "학습자신감", "학습 자신감")),
+        ("GROWTH_MOMENTUM", ("growthmomentum", "momentum", "성장모멘텀", "성장 모멘텀")),
+    ]
+    for kind, tokens in mappings:
+        if any(token.replace(" ", "") in compact for token in tokens):
+            return kind
+    return None
+
+
+def _estimate_builtin_criterion(
+    context: StudentAiReportContext,
+    criterion: ReportCriterion,
+) -> CompetencyAnalysis | None:
+    if not criterion.is_built_in():
+        return None
+    kind = _criterion_kind(criterion)
+    estimators = {
+        "CONCEPT_UNDERSTANDING": _concept_understanding_estimate,
+        "QUESTION_SPECIFICITY": _question_specificity_estimate,
+        "PROBLEM_SOLVING": _problem_solving_estimate,
+        "APPLICATION_TRANSFER": _transfer_estimate,
+        "QUIZ_ACCURACY": _quiz_accuracy_estimate,
+        "LEARNING_PERSISTENCE": _persistence_estimate,
+        "WRONG_ANSWER_REFLECTION": _reflection_estimate,
+        "CLASS_PARTICIPATION": _participation_estimate,
+        "LEARNING_CONFIDENCE": _confidence_estimate,
+        "GROWTH_MOMENTUM": _growth_momentum_estimate,
+    }
+    estimator = estimators.get(kind or "")
+    if estimator is None:
+        return None
+
+    score, refs, analysis = estimator(context)
+    if score is None:
+        return _insufficient_criteria_analysis(criterion, analysis)
+    return CompetencyAnalysis(
+        criteriaId=criterion.criteria_id(),
+        key=criterion.key or criterion.criteria_id(),
+        label=criterion.label or kind or criterion.criteria_id(),
+        builtIn=True,
+        score=round(max(0.0, min(100.0, score)), 1),
+        level=_level_for_score(score),
+        confidence=_confidence_from_refs(refs),
+        analysis=analysis,
+        evidence=_evidence_used(context)[:3],
+        evidenceRefs=refs[:10],
+        insufficientEvidence=False,
+    )
 
 
 def _build_quantitative_metrics(context: StudentAiReportContext) -> tuple[list[QuantitativeMetric], float | None]:
@@ -859,6 +1205,10 @@ def _fallback_criteria_analysis(context: StudentAiReportContext) -> list[Compete
     evidence_used = _evidence_used(context)
     base_score = context.scoreSummary.averageScore
     for criterion in context.reportCriteria:
+        deterministic = _estimate_builtin_criterion(context, criterion)
+        if deterministic is not None:
+            results.append(deterministic)
+            continue
         if not _criteria_supported_by_context(context, criterion):
             results.append(_insufficient_criteria_analysis(criterion))
             continue
@@ -1049,6 +1399,11 @@ def _normalize_criteria_analysis_payload(
 
     normalized: list[dict[str, Any]] = []
     for criterion in supplied:
+        deterministic = _estimate_builtin_criterion(context, criterion)
+        if deterministic is not None:
+            normalized.append(deterministic.model_dump(mode="json"))
+            continue
+
         raw = raw_by_criteria_id.get(criterion.criteria_id())
         if raw is None:
             item = _insufficient_criteria_analysis(criterion).model_dump(mode="json")

@@ -644,6 +644,62 @@ async def test_orchestration_engine_fast_paths_mcq_ox_grading_without_planner():
 
 
 @pytest.mark.asyncio
+async def test_orchestration_engine_grades_latest_unsubmitted_quiz_when_page_payload_mismatches():
+    class FakeStore:
+        def __init__(self, state):
+            self.state = state
+
+        async def get_or_create(self, session_id: int, lecture_id: int):
+            return self.state
+
+        async def set(self, state):
+            self.state = state
+
+    class ExplodingBridge:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("planner should not be called for MCQ/OX fast path")
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-older",
+        page_number=5,
+        quiz_type="OX_Problem",
+        questions=[{"answer": {"value": "O"}}],
+        score=1.0,
+        passed=True,
+    ))
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-pending",
+        page_number=6,
+        quiz_type="OX_Problem",
+        questions=[{"answer": {"value": "O"}}, {"answer": {"value": "X"}}],
+    ))
+
+    engine = OrchestrationEngine(FakeStore(state), bridge=ExplodingBridge())  # type: ignore[arg-type]
+    events = [
+        event async for event in engine.handle_event_stream(
+            1,
+            1,
+            AppEvent(
+                type=AppEventType.QUIZ_SUBMITTED,
+                payload={
+                    "currentPage": 5,
+                    "quizType": "OX",
+                    "answers": [{"answer": "X"}, {"answer": "O"}],
+                },
+            ),
+        )
+    ]
+
+    done = [event for event in events if event.type == NdjsonEventType.DONE][-1]
+    assert done.data["passed"] is False
+    assert done.data["ui"] == {"widget": "REVIEW_DECISION"}
+    assert done.data["activeIntervention"]["sourceQuizId"] == "quiz-pending"
+    assert state.quiz_history[-1].score == 0.0
+    assert state.active_intervention["status"] == "AWAITING_USER_RESPONSE"
+
+
+@pytest.mark.asyncio
 async def test_orchestration_engine_emits_verbose_thought_trace_when_enabled(monkeypatch):
     monkeypatch.setenv("AI_SERVICE_TRACE_THOUGHTS", "true")
 
@@ -3192,6 +3248,115 @@ async def test_tool_dispatcher_uses_page_range_context_for_quiz_generation():
     assert state.quiz_history[-1].coverage_start_page == 15
     assert state.quiz_history[-1].coverage_end_page == 20
     assert state.quiz_history[-1].source_request == "페이지 15~20 기반 퀴즈"
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatcher_marks_retest_generation_and_avoids_prior_questions():
+    class FakeBridge:
+        pass
+
+    class FakeLearningContext:
+        page_number = 5
+        coverage_start_page = None
+        coverage_end_page = None
+        has_page_text = True
+
+        def build_quiz_context(self, explanation=None):
+            return "[현재 페이지]\n비디오 코딩은 중복성을 줄여 전송 비트 수를 줄인다."
+
+    class FakeCollector:
+        def collect_for_quiz(self, state, page_state, *, coverage_start_page=None, coverage_end_page=None):
+            return FakeLearningContext()
+
+    class FakeQuiz:
+        def __init__(self):
+            self.calls = []
+
+        async def run_stream(self, quiz_type, lecture_content, profile, learner_hint, count, context_label="현재 페이지"):
+            self.calls.append((quiz_type, lecture_content, profile, learner_hint, count, context_label))
+            if len(self.calls) == 1:
+                prompt = "비디오 코딩의 주된 목적은 이미지 간 또는 이미지 내 중복성을 활용하여 화질을 향상시키는 것이다."
+            else:
+                prompt = "비디오 코딩은 중복성을 줄이는 데 목적이 있다."
+            yield NdjsonEvent(
+                type=NdjsonEventType.DONE,
+                agent="quiz",
+                tool="GENERATE_QUIZ",
+                final=True,
+                data={
+                    "quiz": [{"prompt": prompt, "answer": {"value": "O"}}],
+                    "quiz_type": quiz_type,
+                },
+            )
+
+    dispatcher = ToolDispatcher(FakeBridge())  # type: ignore[arg-type]
+    collector = FakeCollector()
+    quiz = FakeQuiz()
+    dispatcher._context_collector = collector  # type: ignore[assignment]
+    dispatcher._quiz = quiz  # type: ignore[assignment]
+
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    state.active_intervention = {
+        "interventionId": "repair-1",
+        "sourceArtifactId": "assessment-1",
+        "sourceQuizId": "quiz-initial",
+        "pageNumber": 5,
+        "status": "COMPLETED",
+        "focusConcepts": ["비디오 코딩", "공간 코딩"],
+        "repairGoal": "비디오 코딩의 목적과 공간 코딩의 예시를 구분한다.",
+        "repairSummary": "비디오 코딩은 화질 향상이 아니라 중복성 제거와 비트 수 절감이 핵심입니다.",
+    }
+    state.quiz_history.append(QuizRecord(
+        quiz_id="quiz-initial",
+        page_number=5,
+        quiz_type="OX_Problem",
+        questions=[
+            {
+                "prompt": "비디오 코딩의 주된 목적은 이미지 간 또는 이미지 내 중복성을 활용하여 화질을 향상시키는 것이다.",
+                "answer": {"value": "X"},
+            }
+        ],
+        score=0.2,
+        passed=False,
+    ))
+    state.quiz_assessments.append({
+        "artifactId": "assessment-1",
+        "quizId": "quiz-initial",
+        "pageNumber": 5,
+        "status": "REPAIR_COMPLETED",
+        "focusConcepts": ["비디오 코딩"],
+        "missedQuestions": [
+            {
+                "question": "비디오 코딩의 주된 목적은 이미지 간 또는 이미지 내 중복성을 활용하여 화질을 향상시키는 것이다.",
+                "userAnswer": "O",
+                "correctAnswer": "X",
+            }
+        ],
+    })
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.GENERATE_QUIZ_OX,
+            params={"quiz_type": "OX_Problem"},
+        )
+    ])
+
+    events = [event async for event in dispatcher.dispatch(plan, state, {"mode": "RETEST"})]
+
+    assert events[-1].data["quiz"][0]["prompt"] == "비디오 코딩은 중복성을 줄이는 데 목적이 있다."
+    assert len(quiz.calls) == 2
+    _quiz_type, lecture_content, profile, _learner_hint, _count, context_label = quiz.calls[0]
+    retry_lecture_content = quiz.calls[1][1]
+    assert "재시험 출제 지시" in lecture_content
+    assert "동일하거나 거의 같은 발문" in lecture_content
+    assert "화질을 향상시키는 것이다" in lecture_content
+    assert "재시험 재생성 지시" in retry_lecture_content
+    assert "비디오 코딩" in profile["learning_goal"]["focus_areas"]
+    assert profile["learning_goal"]["target_depth"] == "Concept"
+    assert profile["user_status"]["proficiency_level"] == "Beginner"
+    assert profile["feedback_preference"]["strictness"] == "Lenient"
+    assert "재시험" in context_label
+    assert state.quiz_history[-1].questions[0]["prompt"] == "비디오 코딩은 중복성을 줄이는 데 목적이 있다."
 
 
 @pytest.mark.asyncio

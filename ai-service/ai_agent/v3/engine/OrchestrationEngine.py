@@ -397,12 +397,15 @@ class OrchestrationEngine:
 
         if event.type != AppEventType.QUIZ_SUBMITTED:
             return None
-        latest = self._latest_page_quiz(state)
-        if not latest:
-            return None
-        quiz_type = _normalize_quiz_type_text(
-            event.get("quiz_type", event.get("quizType", event.get("exam_type", latest.quiz_type)))
+        submitted_type = _normalize_quiz_type_text(
+            event.get("quiz_type", event.get("quizType", event.get("exam_type", event.get("examType", ""))))
         )
+        latest = self._latest_submittable_quiz(state, submitted_type)
+        quiz_type = _normalize_quiz_type_text(
+            event.get("quiz_type", event.get("quizType", event.get("exam_type", latest.quiz_type if latest else "")))
+        )
+        if not quiz_type and latest:
+            quiz_type = latest.quiz_type
         if quiz_type not in {"Five_Choice", "OX_Problem"}:
             return None
         return OrchestratorPlan(actions=[
@@ -527,6 +530,30 @@ class OrchestrationEngine:
             if record.page_number == state.current_page:
                 return record
         return None
+
+    @staticmethod
+    def _latest_submittable_quiz(state: SessionState, quiz_type: str | None = None):
+        normalized_type = _normalize_quiz_type_text(quiz_type or "")
+        records = list(reversed(state.quiz_history))
+        if not records:
+            return None
+
+        def type_matches(record) -> bool:
+            return not normalized_type or _normalize_quiz_type_text(record.quiz_type) == normalized_type
+
+        for record in records:
+            if record.page_number == state.current_page and record.score is None and type_matches(record):
+                return record
+        for record in records:
+            if record.score is None and type_matches(record):
+                return record
+        for record in records:
+            if record.page_number == state.current_page and type_matches(record):
+                return record
+        for record in records:
+            if type_matches(record):
+                return record
+        return records[0]
 
 
 def _event_accepts(event: AppEvent) -> bool:
