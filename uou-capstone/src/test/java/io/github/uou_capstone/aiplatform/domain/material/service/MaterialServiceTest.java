@@ -124,7 +124,7 @@ class MaterialServiceTest {
     void uploadFile_replacesPdfAndCleansLearningSessions() throws IOException {
         MockMultipartFile file = new MockMultipartFile(
                 "file", "new.pdf", MediaType.APPLICATION_PDF_VALUE, "pdf".getBytes());
-        when(lectureRepository.findById(LECTURE_ID)).thenReturn(Optional.of(lecture));
+        when(lectureRepository.findByIdWithCourse(LECTURE_ID)).thenReturn(Optional.of(lecture));
         when(currentUserResolver.getUser()).thenReturn(user);
         when(currentUserResolver.getTeacher()).thenReturn(teacher);
         when(materialRepository.save(any(Material.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -140,6 +140,8 @@ class MaterialServiceTest {
         deleteOrder.verify(examSessionRepository).clearMaterialReferencesByLectureAndType(LECTURE_ID, "PDF");
         deleteOrder.verify(materialRepository).deleteByLecture_IdAndMaterialType(LECTURE_ID, "PDF");
         verify(materialRepository).save(any(Material.class));
+        verify(lectureRepository).findByIdWithCourse(LECTURE_ID);
+        verify(lectureRepository, never()).findById(LECTURE_ID);
         verify(fastApiSessionClient).deleteSession(300L);
         verify(fastApiSessionClient).deleteSession(301L);
         verify(learningChatPersistenceService).endActiveSessionsByLecture(LECTURE_ID);

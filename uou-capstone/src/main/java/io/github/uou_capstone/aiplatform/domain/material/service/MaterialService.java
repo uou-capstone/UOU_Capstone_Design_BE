@@ -138,7 +138,7 @@ public class MaterialService {
 
         // 1. 강의 정보 조회 + 권한 확인 (트랜잭션 밖에서 읽기만)
 
-        Lecture lecture = lectureRepository.findById(lectureId)
+        Lecture lecture = lectureRepository.findByIdWithCourse(lectureId)
 
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.LECTURE_NOT_FOUND));
 
