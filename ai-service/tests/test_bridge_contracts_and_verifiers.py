@@ -2928,7 +2928,6 @@ async def test_explain_page_stream_emits_single_final_done_with_next_widget():
             ]),
             state,
             {},
-            event_type=AppEventType.START_EXPLANATION_DECISION.value,
         )
     ]
 
