@@ -105,6 +105,7 @@ class CourseJoinRequestServiceTest {
         primeLockAndTransactionToRunInline();
         when(currentUserResolver.getStudent()).thenReturn(student);
         when(courseRepository.findByInvitationCode(INVITATION_CODE)).thenReturn(Optional.of(course));
+        when(courseRepository.findByIdWithTeacherUser(50L)).thenReturn(Optional.of(course));
         when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(false);
         when(joinRequestRepository.existsByStudentAndCourseAndStatus(
                 student, course, CourseJoinRequestStatus.BLOCKED)).thenReturn(false);
@@ -128,6 +129,7 @@ class CourseJoinRequestServiceTest {
         primeLockAndTransactionToRunInline();
         when(currentUserResolver.getStudent()).thenReturn(student);
         when(courseRepository.findByInvitationCode(INVITATION_CODE)).thenReturn(Optional.of(course));
+        when(courseRepository.findByIdWithTeacherUser(50L)).thenReturn(Optional.of(course));
         when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(true);
 
         assertThatThrownBy(() -> service.createJoinRequest(new CourseJoinRequestCreateDto(INVITATION_CODE)))
@@ -141,6 +143,7 @@ class CourseJoinRequestServiceTest {
         primeLockAndTransactionToRunInline();
         when(currentUserResolver.getStudent()).thenReturn(student);
         when(courseRepository.findByInvitationCode(INVITATION_CODE)).thenReturn(Optional.of(course));
+        when(courseRepository.findByIdWithTeacherUser(50L)).thenReturn(Optional.of(course));
         when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(false);
         when(joinRequestRepository.existsByStudentAndCourseAndStatus(
                 student, course, CourseJoinRequestStatus.BLOCKED)).thenReturn(true);
@@ -156,6 +159,7 @@ class CourseJoinRequestServiceTest {
         primeLockAndTransactionToRunInline();
         when(currentUserResolver.getStudent()).thenReturn(student);
         when(courseRepository.findByInvitationCode(INVITATION_CODE)).thenReturn(Optional.of(course));
+        when(courseRepository.findByIdWithTeacherUser(50L)).thenReturn(Optional.of(course));
         when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(false);
         when(joinRequestRepository.existsByStudentAndCourseAndStatus(
                 student, course, CourseJoinRequestStatus.BLOCKED)).thenReturn(false);
@@ -174,6 +178,7 @@ class CourseJoinRequestServiceTest {
         primeLockAndTransactionToRunInline();
         when(currentUserResolver.getStudent()).thenReturn(student);
         when(courseRepository.findByInvitationCode(INVITATION_CODE)).thenReturn(Optional.of(course));
+        when(courseRepository.findByIdWithTeacherUser(50L)).thenReturn(Optional.of(course));
         when(enrollmentRepository.existsByStudentAndCourse(student, course)).thenReturn(false);
         when(joinRequestRepository.existsByStudentAndCourseAndStatus(
                 student, course, CourseJoinRequestStatus.BLOCKED)).thenReturn(false);

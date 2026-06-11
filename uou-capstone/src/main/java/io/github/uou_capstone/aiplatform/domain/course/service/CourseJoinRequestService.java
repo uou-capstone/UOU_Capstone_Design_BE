@@ -64,9 +64,14 @@ public class CourseJoinRequestService {
         Course course = courseRepository.findByInvitationCode(dto.getInvitationCode())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.INVALID_INVITATION_CODE));
 
-        String lockKey = "course-join-request:" + student.getId() + ":" + course.getId();
+        Long courseId = course.getId();
+        String lockKey = "course-join-request:" + student.getId() + ":" + courseId;
         return distributedLockService.executeWithLock(lockKey, 3, 5, () ->
-                transactionTemplate.execute(status -> persistPendingJoinRequest(student, course))
+                transactionTemplate.execute(status -> {
+                    Course managedCourse = courseRepository.findByIdWithTeacherUser(courseId)
+                            .orElseThrow(() -> new BusinessException(CommonErrorCode.COURSE_NOT_FOUND));
+                    return persistPendingJoinRequest(student, managedCourse);
+                })
         );
     }
 
