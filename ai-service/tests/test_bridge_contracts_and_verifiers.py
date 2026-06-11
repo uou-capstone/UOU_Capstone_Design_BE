@@ -223,6 +223,34 @@ def test_plan_verifier_keeps_quiz_decision_for_concept_page():
     assert result.plan.actions[0].params["next_widget"] == "QUIZ_DECISION"
 
 
+def test_plan_verifier_patches_next_page_to_quiz_for_concept_page():
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    state.pages[5] = PageState(
+        page_number=5,
+        explanation=(
+            "등속 직선 운동은 물체의 속도가 일정하고 운동 방향이 변하지 않는 운동입니다. "
+            "속도-시간 그래프에서 면적은 이동 거리를 의미하며, 위치-시간 그래프의 기울기는 속도를 뜻합니다."
+        ),
+    )
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL", "next_widget": "NEXT_PAGE_DECISION"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.PAGE_CHANGED.value,
+        event_payload={"page": 5},
+    )
+
+    assert result.plan.actions[0].params["next_widget"] == "QUIZ_DECISION"
+    assert result.warnings[-1]["code"] == "EXPLAIN_PAGE_FOLLOWUP_WIDGET_PATCHED"
+
+
 def test_plan_verifier_patches_decision_send_message_with_widget():
     state = SessionState(session_id=1, lecture_id=1)
     plan = OrchestratorPlan(actions=[
@@ -2900,7 +2928,6 @@ async def test_explain_page_stream_emits_single_final_done_with_next_widget():
             ]),
             state,
             {},
-            event_type=AppEventType.START_EXPLANATION_DECISION.value,
         )
     ]
 
