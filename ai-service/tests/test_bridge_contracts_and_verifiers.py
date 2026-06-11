@@ -12,6 +12,7 @@ from ai_agent.types.domain import (
     NdjsonEventType,
     OrchestratorAction,
     OrchestratorPlan,
+    PageState,
     PedagogyPolicy,
     SessionState,
     QuizRecord,
@@ -134,6 +135,92 @@ def test_plan_verifier_patches_explain_followup_widget_for_event_flow():
         event_payload={"accept": True},
     )
     assert start_decision.plan.actions[0].params["next_widget"] == "QUIZ_DECISION"
+
+
+def test_plan_verifier_uses_next_page_for_intro_or_cover_page():
+    state = SessionState(session_id=1, lecture_id=1, current_page=1)
+    state.pages[1] = PageState(
+        page_number=1,
+        explanation="수능특강\n과학탐구영역 | 물리학 I",
+    )
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL", "next_widget": "QUIZ_DECISION"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.START_EXPLANATION_DECISION.value,
+        event_payload={"accept": True},
+    )
+
+    assert result.plan.actions[0].params["next_widget"] == "NEXT_PAGE_DECISION"
+    assert result.warnings[-1]["code"] == "EXPLAIN_PAGE_FOLLOWUP_WIDGET_PATCHED"
+
+
+def test_plan_verifier_uses_next_page_for_short_outline_page():
+    state = SessionState(session_id=1, lecture_id=1, current_page=2)
+    state.pages[2] = PageState(
+        page_number=2,
+        explanation=(
+            "Transport Layer\n"
+            "\uf06f Understand principles behind transport layer services\n"
+            "▪ multiplexing/demultiplexing\n"
+            "▪ reliable data transfer\n"
+            "▪ flow control\n"
+            "▪ congestion control\n"
+            "\uf06f Transport layer protocol\n"
+            "▪ TCP\n"
+            "▪ UDP"
+        ),
+    )
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL", "next_widget": "QUIZ_DECISION"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.PAGE_CHANGED.value,
+        event_payload={"page": 2},
+    )
+
+    assert result.plan.actions[0].params["next_widget"] == "NEXT_PAGE_DECISION"
+
+
+def test_plan_verifier_keeps_quiz_decision_for_concept_page():
+    state = SessionState(session_id=1, lecture_id=1, current_page=5)
+    state.pages[5] = PageState(
+        page_number=5,
+        explanation=(
+            "등속 직선 운동은 물체의 속도가 일정하고 운동 방향이 변하지 않는 운동입니다. "
+            "속도-시간 그래프에서 면적은 이동 거리를 의미하며, 위치-시간 그래프의 기울기는 속도를 뜻합니다."
+        ),
+    )
+    plan = OrchestratorPlan(actions=[
+        OrchestratorAction(
+            type=ActionType.CALL_TOOL,
+            tool=ToolName.EXPLAIN_PAGE,
+            params={"detail": "NORMAL"},
+        ),
+    ])
+
+    result = PlanVerifier().verify(
+        plan,
+        state,
+        event_type=AppEventType.PAGE_CHANGED.value,
+        event_payload={"page": 5},
+    )
+
+    assert result.plan.actions[0].params["next_widget"] == "QUIZ_DECISION"
 
 
 def test_plan_verifier_patches_decision_send_message_with_widget():

@@ -455,3 +455,34 @@ def test_builtin_criteria_use_distinct_evidence_based_scores_instead_of_base_ave
     assert by_id["builtin:QUESTION_SPECIFICITY"].score != by_id["builtin:QUIZ_ACCURACY"].score
     assert len({item.score for item in result.competencyAnalysis}) > 3
     assert "퀴즈 평균" in by_id["builtin:CONCEPT_UNDERSTANDING"].analysis
+
+
+def test_builtin_criteria_labels_use_estimators_even_without_built_in_flag():
+    context = StudentAiReportContext(
+        learningEvidence=[
+            AiLearningEvidenceItem(
+                evidenceId="ev-first",
+                eventType="QUIZ_GRADED",
+                scoreRatio=0.4,
+                passed=False,
+            ),
+            AiLearningEvidenceItem(
+                evidenceId="ev-retest",
+                eventType="RETEST_GRADED",
+                scoreRatio=0.8,
+                passed=True,
+            ),
+        ],
+        reportCriteria=[
+            ReportCriterion(id="criterion-quiz", label="퀴즈 정확도", builtIn=False, isBuiltIn=None),
+        ],
+    )
+
+    result = _fallback_analysis(context)
+    item = result.competencyAnalysis[0]
+
+    assert item.criteriaId == "criterion-quiz"
+    assert item.builtIn is True
+    assert item.score == 60.0
+    assert "퀴즈/재시험 채점 점수 평균" in item.analysis
+    assert "보수적으로 추정" not in item.analysis
