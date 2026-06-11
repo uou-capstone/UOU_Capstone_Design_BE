@@ -425,9 +425,6 @@ class PlanVerifier:
                 patched.append(action)
                 continue
             params = dict(action.params or {})
-            if params.get("next_widget") and default_widget != "NEXT_PAGE_DECISION":
-                patched.append(action)
-                continue
             if params.get("next_widget") == default_widget:
                 patched.append(action)
                 continue
