@@ -14,6 +14,7 @@ from ai_agent.types.domain import (
     ToolName,
 )
 from ai_agent.v3.exam_type_aliases import normalize_exam_type_string
+from app.services.pdf_context_service import pdf_context_service
 
 
 ACTION_HARD_CAP = 8
@@ -120,6 +121,23 @@ _PAGE_RANGE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _SINGLE_PAGE_QUIZ_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(\d{1,4})\s*(?:페이지|쪽|page|p\b).{0,24}(퀴즈|quiz|시험|테스트|문제|문항)", re.IGNORECASE),
     re.compile(r"(퀴즈|quiz|시험|테스트|문제|문항).{0,24}(\d{1,4})\s*(?:페이지|쪽|page|p\b)", re.IGNORECASE),
+)
+_PAGE_TOKEN_RE = re.compile(r"[A-Za-z가-힣0-9]+")
+_NON_QUIZ_PAGE_MARKER_RE = re.compile(
+    r"(표지|목차|차례|contents|table\s+of\s+contents|overview|개요|인트로|introduction|"
+    r"intro|학습\s*목표|로드맵|roadmap|수능특강|과학탐구영역|chapter\s*\d*\s*:?\s*$)",
+    re.IGNORECASE,
+)
+_QUIZ_WORTHY_SIGNAL_RE = re.compile(
+    r"(정의|공식|법칙|원리|특징|조건|비교|차이|과정|단계|계산|예시|문제|그래프|실험|"
+    r"증명|분류|관계|작용|속도|가속도|힘|에너지|운동량|전류|전압|저항|파동|주파수|"
+    r"통신|프로토콜|tcp|udp|ack|buffer|jitter|delay|coding|flow\s*control|congestion|"
+    r"multiplexing|demultiplexing|reliable)",
+    re.IGNORECASE,
+)
+_EXPLANATORY_SENTENCE_RE = re.compile(
+    r"(이다|합니다|한다|된다|됩니다|때문|의미|역할|사용|통해|따라|비해|because|means|is|are|used|provides)",
+    re.IGNORECASE,
 )
 
 
@@ -407,7 +425,10 @@ class PlanVerifier:
                 patched.append(action)
                 continue
             params = dict(action.params or {})
-            if params.get("next_widget"):
+            if params.get("next_widget") and default_widget != "NEXT_PAGE_DECISION":
+                patched.append(action)
+                continue
+            if params.get("next_widget") == default_widget:
                 patched.append(action)
                 continue
             params["next_widget"] = default_widget
@@ -504,7 +525,7 @@ def _decision_widget_from_message(message: str) -> str | None:
     return None
 
 
-def _followup_widget_after_explanation(
+def followup_widget_after_explanation(
     state: SessionState,
     event_type: str | None,
     event_payload: dict[str, Any] | None = None,
@@ -512,14 +533,106 @@ def _followup_widget_after_explanation(
     current_page = _event_page_number(event_payload or {}) or max(int(state.current_page or 1), 1)
     if _page_has_quiz_activity(state, current_page):
         return "NEXT_PAGE_DECISION"
+    if not _is_quiz_worthy_page(state, current_page, event_payload or {}):
+        return "NEXT_PAGE_DECISION"
 
     return "QUIZ_DECISION"
+
+
+def _followup_widget_after_explanation(
+    state: SessionState,
+    event_type: str | None,
+    event_payload: dict[str, Any] | None = None,
+) -> str:
+    return followup_widget_after_explanation(state, event_type, event_payload)
 
 
 def _page_has_quiz_activity(state: SessionState, page_number: int) -> bool:
     if state.learner.quiz_attempt_counts.get(str(page_number), 0) > 0:
         return True
     return any(record.page_number == page_number for record in state.quiz_history)
+
+
+def _is_quiz_worthy_page(
+    state: SessionState,
+    page_number: int,
+    event_payload: dict[str, Any],
+) -> bool:
+    page_text = _page_text_for_quiz_policy(state, page_number, event_payload)
+    if not page_text.strip():
+        return True
+    return _is_quiz_worthy_page_text(page_text)
+
+
+def _page_text_for_quiz_policy(
+    state: SessionState,
+    page_number: int,
+    event_payload: dict[str, Any],
+) -> str:
+    for key in ("pageText", "currentPageText", "pdfPageText"):
+        value = event_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    page_state = state.pages.get(page_number)
+    pdf_path = None
+    if page_state is not None:
+        pdf_path = page_state.pdf_path
+    pdf_path = pdf_path or state.pdf_path
+
+    context = pdf_context_service.read_page_context(pdf_path, page_number)
+    if context and context.has_page_text:
+        return context.page_text
+
+    if page_state and page_state.explanation:
+        return page_state.explanation
+    return ""
+
+
+def _is_quiz_worthy_page_text(page_text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", page_text).strip()
+    tokens = _PAGE_TOKEN_RE.findall(normalized)
+    if len(tokens) < 12 or len(normalized) < 70:
+        return False
+
+    lines = [line.strip() for line in page_text.splitlines() if line.strip()]
+    if _looks_like_cover_or_outline_page(normalized, lines, tokens):
+        return False
+
+    return bool(_QUIZ_WORTHY_SIGNAL_RE.search(normalized)) or len(tokens) >= 45
+
+
+def _looks_like_cover_or_outline_page(
+    normalized: str,
+    lines: list[str],
+    tokens: list[str],
+) -> bool:
+    has_non_quiz_marker = bool(_NON_QUIZ_PAGE_MARKER_RE.search(normalized))
+    if has_non_quiz_marker and len(tokens) < 45:
+        return True
+
+    if not lines:
+        return True
+
+    explanatory_lines = [
+        line for line in lines
+        if len(_PAGE_TOKEN_RE.findall(line)) >= 8 and _EXPLANATORY_SENTENCE_RE.search(line)
+    ]
+    bulletish_lines = [
+        line for line in lines
+        if re.match(r"^(\d+[\).\s]|[IVX]+[\).\s]|[•▪□○\-\uf06f\uf0a7]+|chapter\s+\d+|[가-힣A-Za-z ]+\s*\d+$)", line, re.IGNORECASE)
+    ]
+    outline_marker = bool(re.search(r"(목차|차례|contents|overview|개요|학습\s*목표|roadmap)", normalized, re.IGNORECASE))
+    mostly_outline = len(lines) >= 3 and len(bulletish_lines) >= max(2, len(lines) // 2)
+    short_bullet_lines = [
+        line for line in bulletish_lines
+        if len(_PAGE_TOKEN_RE.findall(line)) <= 6
+    ]
+    short_outline = bool(bulletish_lines) and len(short_bullet_lines) / len(bulletish_lines) >= 0.7
+
+    if (outline_marker or (mostly_outline and short_outline)) and len(explanatory_lines) <= 1:
+        return True
+    return False
 
 
 def _is_quiz_request_message(message: str) -> bool:

@@ -919,14 +919,14 @@ def _criterion_kind(criterion: ReportCriterion) -> str | None:
     )
     compact = text.replace("_", "").replace("-", "").replace(" ", "")
     mappings: list[tuple[str, tuple[str, ...]]] = [
-        ("CONCEPT_UNDERSTANDING", ("conceptunderstanding", "concept", "개념이해", "개념 이해")),
-        ("QUESTION_SPECIFICITY", ("questionspecificity", "question", "질문구체", "질문 구체")),
-        ("PROBLEM_SOLVING", ("problemsolving", "문제해결", "문제 해결")),
-        ("APPLICATION_TRANSFER", ("applicationtransfer", "transfer", "응용전이", "응용 전이", "적용")),
-        ("QUIZ_ACCURACY", ("quizaccuracy", "quiz", "퀴즈정확", "퀴즈 정확")),
-        ("LEARNING_PERSISTENCE", ("learningpersistence", "persistence", "지속성", "학습지속", "학습 지속")),
-        ("WRONG_ANSWER_REFLECTION", ("wronganswerreflection", "reflection", "오답성찰", "오답 성찰", "피드백반영")),
-        ("CLASS_PARTICIPATION", ("classparticipation", "participation", "수업참여", "수업 참여")),
+        ("CONCEPT_UNDERSTANDING", ("conceptunderstanding", "concept", "개념이해", "개념 이해", "개념이해도")),
+        ("QUESTION_SPECIFICITY", ("questionspecificity", "question", "질문구체", "질문 구체", "질문구체성")),
+        ("PROBLEM_SOLVING", ("problemsolving", "문제해결", "문제 해결", "문제해결력")),
+        ("APPLICATION_TRANSFER", ("applicationtransfer", "transfer", "응용전이", "응용 전이", "응용전이력", "적용")),
+        ("QUIZ_ACCURACY", ("quizaccuracy", "quiz", "퀴즈정확", "퀴즈 정확", "퀴즈정확도")),
+        ("LEARNING_PERSISTENCE", ("learningpersistence", "persistence", "지속성", "학습지속", "학습 지속", "학습지속성")),
+        ("WRONG_ANSWER_REFLECTION", ("wronganswerreflection", "reflection", "오답성찰", "오답 성찰", "오답성찰력", "피드백반영")),
+        ("CLASS_PARTICIPATION", ("classparticipation", "participation", "수업참여", "수업 참여", "수업참여도")),
         ("LEARNING_CONFIDENCE", ("learningconfidence", "confidence", "학습자신감", "학습 자신감")),
         ("GROWTH_MOMENTUM", ("growthmomentum", "momentum", "성장모멘텀", "성장 모멘텀")),
     ]
@@ -936,13 +936,17 @@ def _criterion_kind(criterion: ReportCriterion) -> str | None:
     return None
 
 
+def _is_builtin_like_criterion(criterion: ReportCriterion) -> bool:
+    return criterion.is_built_in() or _criterion_kind(criterion) is not None
+
+
 def _estimate_builtin_criterion(
     context: StudentAiReportContext,
     criterion: ReportCriterion,
 ) -> CompetencyAnalysis | None:
-    if not criterion.is_built_in():
-        return None
     kind = _criterion_kind(criterion)
+    if not criterion.is_built_in() and kind is None:
+        return None
     estimators = {
         "CONCEPT_UNDERSTANDING": _concept_understanding_estimate,
         "QUESTION_SPECIFICITY": _question_specificity_estimate,
@@ -1132,7 +1136,7 @@ def _compact_criteria(criteria: list[ReportCriterion]) -> list[dict[str, Any]]:
             "key": item.key,
             "label": _truncate_text(item.label, MAX_CRITERION_LABEL_LEN),
             "description": _truncate_text(item.description, MAX_CRITERION_DESCRIPTION_LEN),
-            "builtIn": item.is_built_in(),
+            "builtIn": _is_builtin_like_criterion(item),
             "weight": item.weight,
             "dataSourceHint": item.dataSourceHint[:8],
             "fallbackPolicy": item.fallbackPolicy,
@@ -1141,7 +1145,7 @@ def _compact_criteria(criteria: list[ReportCriterion]) -> list[dict[str, Any]]:
 
 
 def _criteria_supported_by_context(context: StudentAiReportContext, criterion: ReportCriterion) -> bool:
-    if criterion.is_built_in():
+    if _is_builtin_like_criterion(criterion):
         return bool(context.evidence or context.learningEvidence or context.assessments or context.competencies)
     label = (criterion.label or "").strip().lower()
     description = (criterion.description or "").strip().lower()
@@ -1160,7 +1164,7 @@ def _insufficient_criteria_analysis(
         criteriaId=criterion.criteria_id(),
         key=criterion.key or criterion.criteria_id(),
         label=criterion.label,
-        builtIn=criterion.is_built_in(),
+        builtIn=_is_builtin_like_criterion(criterion),
         score=None,
         level="INSUFFICIENT_DATA",
         confidence="LOW",
@@ -1173,7 +1177,7 @@ def _insufficient_criteria_analysis(
 
 def _criterion_evidence_refs(context: StudentAiReportContext, criterion: ReportCriterion) -> list[str]:
     refs: list[str] = []
-    if criterion.is_built_in():
+    if _is_builtin_like_criterion(criterion):
         refs.extend(_generic_evidence_ref(item, index) for index, item in enumerate(context.evidence))
         refs.extend(_learning_evidence_ref(item, index) for index, item in enumerate(context.learningEvidence))
         return refs[:5]
@@ -1217,7 +1221,7 @@ def _fallback_criteria_analysis(context: StudentAiReportContext) -> list[Compete
             criteriaId=criterion.criteria_id(),
             key=criterion.key or criterion.criteria_id(),
             label=criterion.label,
-            builtIn=criterion.is_built_in(),
+            builtIn=_is_builtin_like_criterion(criterion),
             score=base_score,
             level="INSUFFICIENT_DATA" if base_score is None else (
                 "EXCELLENT" if base_score >= 90 else "GOOD" if base_score >= 75 else "WATCH" if base_score >= 60 else "NEEDS_IMPROVEMENT"

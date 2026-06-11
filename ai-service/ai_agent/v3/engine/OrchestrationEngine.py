@@ -22,6 +22,7 @@ from ai_agent.v3.engine.NavigationIntentService import (
     navigation_intent_service,
 )
 from ai_agent.v3.engine.Orchestrator import Orchestrator
+from ai_agent.v3.engine.PlanVerifier import followup_widget_after_explanation
 from ai_agent.v3.engine.QuizDiagnosisService import quiz_diagnosis_service
 from ai_agent.v3.engine.StateReducer import StateReducer
 from ai_agent.v3.engine.ThoughtTrace import (
@@ -306,7 +307,7 @@ class OrchestrationEngine:
                     OrchestratorAction(
                         type=ActionType.CALL_TOOL,
                         tool=ToolName.EXPLAIN_PAGE,
-                        params=_explain_page_params(state, event.type.value),
+                        params=_explain_page_params(state, event.type.value, event_payload=event.payload),
                     )
                 ])
             if _is_clear_quiz_request_message(message):
@@ -451,7 +452,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params=_explain_page_params(state, event.type.value),
+                    params=_explain_page_params(state, event.type.value, event_payload=event.payload),
                 )
             ])
         if event.type == AppEventType.PAGE_CHANGED:
@@ -459,7 +460,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params=_explain_page_params(state, event.type.value),
+                    params=_explain_page_params(state, event.type.value, event_payload=event.payload),
                 )
             ])
         if event.type == AppEventType.USER_MESSAGE:
@@ -477,7 +478,7 @@ class OrchestrationEngine:
                 OrchestratorAction(
                     type=ActionType.CALL_TOOL,
                     tool=ToolName.EXPLAIN_PAGE,
-                    params=_explain_page_params(state, event.type.value),
+                    params=_explain_page_params(state, event.type.value, event_payload=event.payload),
                 )
             ])
         if event.type == AppEventType.QUIZ_DECISION and _event_accepts(event):
@@ -570,16 +571,18 @@ def _explain_page_params(
     event_type: str | None,
     *,
     detail: str = "NORMAL",
+    event_payload: dict | None = None,
 ) -> dict[str, str]:
     return {
         "detail": detail,
-        "next_widget": _followup_widget_after_explanation(state, event_type),
+        "next_widget": _followup_widget_after_explanation(state, event_type, event_payload),
     }
 
 
 def _followup_widget_after_explanation(
     state: SessionState | None,
     event_type: str | None,
+    event_payload: dict | None = None,
 ) -> str:
     """
     Reference-style post-explanation flow:
@@ -590,11 +593,7 @@ def _followup_widget_after_explanation(
     if state is None:
         return "QUIZ_DECISION"
 
-    current_page = max(int(state.current_page or 1), 1)
-    if _page_has_quiz_activity(state, current_page):
-        return "NEXT_PAGE_DECISION"
-
-    return "QUIZ_DECISION"
+    return followup_widget_after_explanation(state, event_type, event_payload)
 
 
 def _page_has_quiz_activity(state: SessionState, page_number: int) -> bool:

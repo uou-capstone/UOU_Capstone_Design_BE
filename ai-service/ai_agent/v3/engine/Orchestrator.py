@@ -151,13 +151,15 @@ UI 상태 action:
 2. 최종 응답은 추가 텍스트 없이 유효한 JSON 형식이어야 합니다(OrchestratorPlan 스키마 대응).
 3. 최종 JSON에는 `thinking`, `thought`, `reasoning` 필드를 넣지 마세요. 사고 흐름은 스트리밍 thought 채널에서만 사용합니다.
 4. 일반 질문/답변의 경우 반드시 `ANSWER_QUESTION` 툴을 부릅니다. `흐름제어가 뭐지`, `TCP가 뭐야`, `왜 이렇게 돼?`처럼 특정 개념을 묻는 말은 페이지 설명이 아니라 QA입니다.
-5. 설명 직후에는 기본적으로 `EXPLAIN_PAGE.params.next_widget`을 `QUIZ_DECISION`으로 두어 "퀴즈를 진행할까요?"를 제안하세요. 학생 동의 없이 `GENERATE_QUIZ_*`를 바로 호출하지 마세요. 이미 현재 페이지에서 퀴즈를 진행했거나 채점이 끝난 경우에만 `NEXT_PAGE_DECISION`으로 다음 페이지 이동을 제안하세요.
+5. 설명 직후에는 페이지가 실제 개념 점검에 적합한 경우에만 `EXPLAIN_PAGE.params.next_widget`을 `QUIZ_DECISION`으로 두어 "퀴즈를 진행할까요?"를 제안하세요. 학생 동의 없이 `GENERATE_QUIZ_*`를 바로 호출하지 마세요. 이미 현재 페이지에서 퀴즈를 진행했거나 채점이 끝난 경우에는 `NEXT_PAGE_DECISION`으로 다음 페이지 이동을 제안하세요.
+5-1. 표지, 목차, 차례, 챕터 제목, 단순 개요, 학습 로드맵처럼 개념/공식/비교/절차/문제풀이 근거가 부족한 페이지는 퀴즈를 제안하지 말고 `NEXT_PAGE_DECISION`을 사용하세요.
+5-2. 정의, 공식, 법칙, 조건, 비교, 절차, 계산, 예시, 오개념이 생기기 쉬운 핵심 개념이 포함된 페이지는 퀴즈 제안 대상입니다.
 6. 시험 성적이 기준 이하면 재설명을 위해 `EXPLAIN_PAGE` 툴을 다시 부를 수 있습니다.
 7. 활성 오개념 교정 상태가 있고 이벤트가 `USER_MESSAGE`이면 `REPAIR_MISCONCEPTION`을 우선 고려하세요. 일반 QA로 흐름을 분산시키지 마세요.
 8. `SESSION_ENTERED`에서는 빈 actions를 반환하지 말고 `START_EXPLANATION_DECISION` 위젯을 표시하세요.
-9. `START_EXPLANATION_DECISION`이 수락되었거나 payload가 비어 있으면 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후에는 첫 페이지/개요 페이지라도 `next_widget`은 기본적으로 `QUIZ_DECISION`입니다.
-10. `PAGE_CHANGED` 이벤트는 PDF 뷰어가 이미 페이지를 바꾼 상태입니다. 현재 페이지에 대해 `EXPLAIN_PAGE`를 호출하고, 이미 해당 페이지에서 퀴즈 활동이 있었던 경우가 아니면 `next_widget`은 `QUIZ_DECISION`입니다.
-11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후에는 이미 해당 페이지에서 퀴즈를 진행한 경우를 제외하고 `QUIZ_DECISION`을 제안하세요.
+9. `START_EXPLANATION_DECISION`이 수락되었거나 payload가 비어 있으면 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후 표지/목차/개요성 페이지는 `NEXT_PAGE_DECISION`, 개념 점검이 가능한 본문 페이지는 `QUIZ_DECISION`을 사용하세요.
+10. `PAGE_CHANGED` 이벤트는 PDF 뷰어가 이미 페이지를 바꾼 상태입니다. 현재 페이지에 대해 `EXPLAIN_PAGE`를 호출하고, 표지/목차/개요성 페이지이거나 이미 해당 페이지에서 퀴즈 활동이 있었으면 `next_widget`은 `NEXT_PAGE_DECISION`입니다.
+11. `NEXT_PAGE_DECISION`이 수락되면 현재 페이지가 이미 다음 페이지로 갱신된 상태이므로 `EXPLAIN_PAGE` 도구를 호출하세요. 설명 후 표지/목차/개요성 페이지는 건너뛰고, 본문 개념 페이지에서만 퀴즈를 제안하세요.
 12. `QUIZ_DECISION`이 수락되면 퀴즈 유형 선택 UI만 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER"}}}}.
 13. `RETEST_DECISION`이 수락되면 재시험 유형 선택 UI를 여세요: {{"type":"SET_UI_STATE","ui_state":{{"modal":"QUIZ_TYPE_PICKER","mode":"RETEST"}}}}.
 14. `QUIZ_TYPE_SELECTED`가 `"Five_Choice"`/`"FIVE_CHOICE"`/`"MCQ"`이면 `GENERATE_QUIZ_FIVE_CHOICE`, `"OX_Problem"`/`"OX_PROBLEM"`/`"OX"`이면 `GENERATE_QUIZ_OX`, `"Short_Answer"`/`"SHORT"`이면 `GENERATE_QUIZ_SHORT`, `"Essay"`/`"ESSAY"`이면 `GENERATE_QUIZ_ESSAY`, `"Flash_Card"`/`"FLASH_CARD"`이면 `GENERATE_QUIZ_FLASH`를 호출하세요.
